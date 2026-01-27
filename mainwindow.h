@@ -10,6 +10,7 @@
 #include <QMatrix4x4>
 #include <QTimer>
 #include <QPushButton>
+#include "weldingprocessdialog.h"
 
 class RenderArea;
 class usercoordinatemanager;
@@ -44,9 +45,14 @@ private slots:
 
     // 路径规划
     void onPathPlanningTriggered();
+
+    // 管理焊接工艺
+    void onManageWeldingProcess();
 private:
     void loadDrawingData(const QString &filePath);      // 核心数据加载函数
     void setupUi();                                     // UI初始化函数
+
+    void loadWeldingProcesses();                        // 从 JSON文件加载焊接工艺
 
     QVector<Hole> allHoles;                             // 所有圆（含主体圆+焊接管孔）
     QVector<Hole> weldHoles;                            // 仅焊接管孔（不含主体圆）
@@ -76,6 +82,9 @@ private:
     QMenu* m_operationMenu;
 
     QAction* m_pathPlanningAction;                      // 路径规划菜单项
+
+    QVector<WeldingProcess> m_weldingProcesses;         // 存储所有的焊接工艺数据
+    QAction* m_manageProcessAction;                     // 菜单动作
 };
 
 #endif // MAINWINDOW_H

@@ -25,7 +25,8 @@
 
 MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
 {
-    setupUi();                                                          // 调用新的 UI初始化函数
+    setupUi();                                                                                  // 调用新的 UI初始化函数
+    loadWeldingProcesses();                                                                     // 启动时自动加载焊接工艺数据
 }
 
 MainWindow::~MainWindow() {
@@ -94,21 +95,30 @@ void MainWindow::setupUi()
     fileMenu->addAction(loadAction);
 
     // 5. 创建工具栏
-    toolBar = addToolBar("Main Toolbar");
+    toolBar = addToolBar("工具栏");
     toolBar->setIconSize(QSize(32, 32));                                                        // 设置工具栏图标统一大小
     toolBar->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);                                   // 设置工具栏按钮样式为文字在图标下方
     // 操作菜单 (用户坐标系向导入口)
     m_operationMenu = menuBar()->addMenu("操作");
+    // 旋转矩阵
     rotateAction = new QAction("应用旋转矩阵", this);
     m_operationMenu->addAction(rotateAction);
+    // 用户坐标系
     m_setupCoordAction = new QAction("建立用户坐标系", this);
     m_setupCoordAction->setIcon(QIcon(":/img/images/icons1.png"));
     m_operationMenu->addAction(m_setupCoordAction);
+    // 焊接路径规划
     m_pathPlanningAction = new QAction("自动焊接路径规划", this);
     m_pathPlanningAction->setIcon(QIcon(":/img/images/icons3.png"));
     m_operationMenu->addAction(m_pathPlanningAction);
+    // 工艺管理
+    m_manageProcessAction = new QAction("焊接工艺管理", this);
+    m_manageProcessAction->setIcon(QIcon(":/img/images/icons4.png"));
+    m_operationMenu->addAction(m_manageProcessAction);
+    // 在toolbar添加图标按键
     toolBar->addAction(m_setupCoordAction);
     toolBar->addAction(m_pathPlanningAction);
+    toolBar->addAction(m_manageProcessAction);
     toolBar->addSeparator();                                                                    // 加分隔符，和原有工具栏内容区分
 
     // 6. 状态标签
@@ -123,7 +133,11 @@ void MainWindow::setupUi()
     labelLayout->setAlignment(Qt::AlignCenter);                                                 // 标签在容器中居中对齐
     mainPlateRadiusLabel = new QLabel("管板半径：--", this);
     weldHoleCountLabel = new QLabel("焊接管孔数：0", this);
-    mainPlateRadiusLabel->setMinimumWidth(120);
+    QFont statusFont = mainPlateRadiusLabel->font();                                            // 设置字体
+    statusFont.setPointSize(11);
+    mainPlateRadiusLabel->setFont(statusFont);
+    weldHoleCountLabel->setFont(statusFont);
+    mainPlateRadiusLabel->setMinimumWidth(120);                                                 // 设置最小宽度，防止字体显示不全
     weldHoleCountLabel->setMinimumWidth(120);
     labelLayout->addWidget(mainPlateRadiusLabel);
     labelLayout->addWidget(weldHoleCountLabel);
@@ -157,6 +171,9 @@ void MainWindow::setupUi()
 
     // 路径规划
     connect(m_pathPlanningAction, &QAction::triggered, this, &MainWindow::onPathPlanningTriggered);
+
+    // 焊接工艺
+    connect(m_manageProcessAction, &QAction::triggered, this, &MainWindow::onManageWeldingProcess);
 
     resize(1200, 700);
 }
@@ -344,12 +361,15 @@ void MainWindow::loadDrawingData(const QString &filePath)
         QString centerStr = QString("(%1, %2)")                                                         // 二维圆心坐标
                                 .arg(weldHoles[i].center.x(), 0, 'f', 2)
                                 .arg(weldHoles[i].center.y(), 0, 'f', 2);
+        dataTable->setItem(i, 2, new QTableWidgetItem(centerStr));
         QString center3DStr = QString("(%1, %2, %3)")                                                   // 三维坐标
                                   .arg(weldHoles[i].center3D.x(), 0, 'f', 2)
                                   .arg(weldHoles[i].center3D.y(), 0, 'f', 2)
                                   .arg(weldHoles[i].center3D.z(), 0, 'f', 2);
-        dataTable->setItem(i, 2, new QTableWidgetItem(centerStr));
-        dataTable->setItem(i, 3, new QTableWidgetItem(center3DStr));
+        QTableWidgetItem* item3D = new QTableWidgetItem(center3DStr);
+        item3D->setFlags(item3D->flags() & ~Qt::ItemIsEditable);                                        // 初始加载时，禁止编辑三维坐标
+        item3D->setBackground(QBrush(QColor(245, 245, 245)));                                           // 设置浅灰色背景提示用户不可编辑
+        dataTable->setItem(i, 3, item3D);
     }
     // 更新表格后重新连接信号
     connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
@@ -575,6 +595,12 @@ void MainWindow::applyRotationMatrix()
 // ----------------------------------------------------
 void MainWindow::setupCoordinateWizard()
 {
+    // 如果没有管孔数据，弹窗提示并返回
+    if (weldHoles.isEmpty()) {
+        QMessageBox::warning(this, "操作提示", "当前没有管孔数据，无法建立坐标系。\n请先点击“文件 -> 导入DXF”加载图纸。");
+        return;
+    }
+
     QDialog* dialog = new QDialog(this);
     // 添加自动销毁属性，避免内存泄漏
     dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -744,5 +770,45 @@ void MainWindow::onPathPlanningTriggered()
         QMessageBox::information(this, "保存成功", "文件已保存至: " + savePath);
     } else {
         QMessageBox::critical(this, "错误", "无法写入文件");
+    }
+}
+
+// ----------------------------------------------------
+// 功能：打开焊接工艺管理对话框
+// ----------------------------------------------------
+void MainWindow::onManageWeldingProcess()
+{
+    // 创建对话框，并传入当前工艺列表的指针
+    WeldingProcessDialog dialog(&m_weldingProcesses, this);
+    dialog.exec(); // 模态显示
+}
+
+// ----------------------------------------------------
+// 功能：启动自动加载数据
+// ----------------------------------------------------
+void MainWindow::loadWeldingProcesses()
+{
+    // 路径：exe 同级目录下的 welding_processes.json
+    QString path = QCoreApplication::applicationDirPath() + "/welding_processes.json";
+    QFile file(path);
+
+    if (!file.open(QIODevice::ReadOnly)) {
+        return;                                             // 文件不存在（第一次运行），直接返回，不做任何事
+    }
+
+    QByteArray data = file.readAll();
+    QJsonDocument doc = QJsonDocument::fromJson(data);
+    if (!doc.isArray()) return;
+
+    m_weldingProcesses.clear(); // 清空默认值
+    const QJsonArray arr = doc.array();
+
+    for (const auto& val : arr) {
+        QJsonObject obj = val.toObject();
+        WeldingProcess p;
+        p.id = obj["id"].toString();
+        p.strategy = obj["strategy"].toString();
+        p.remark = obj["remark"].toString();
+        m_weldingProcesses.append(p);
     }
 }
