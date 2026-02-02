@@ -40,39 +40,38 @@ void MainWindow::setupUi()
     QSplitter *splitter = new QSplitter(Qt::Horizontal, this);                                  // 水平分割器
     setCentralWidget(splitter);
 
-    // 创建左侧容器 +布局，包裹 RenderArea和按钮
-    QWidget* leftContainer = new QWidget(this);                                                 // 创建左侧容器 widget
-    QVBoxLayout* leftLayout = new QVBoxLayout(leftContainer);                                   // 创建垂直布局，上→RenderArea，下→按钮
-    leftLayout->setContentsMargins(0, 0, 0, 0);                                                 // 去掉布局外边距，贴合边缘
-    leftLayout->setSpacing(5);                                                                  // 绘图区和按钮之间留5px间距
-
     // 1. 先创建左侧：渲染区域 (RenderArea)
     renderArea = new RenderArea(this);
-    renderArea->setMinimumSize(400, 300);
+    renderArea->setMinimumSize(800, 400);
     renderArea->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    leftLayout->addWidget(renderArea);                                                          // 添加到分割器左侧
+    splitter->addWidget(renderArea);
 
     // 显示/隐藏用户坐标系
-    m_toggleCoordBtn = new QPushButton("显示用户坐标系", this);
+    m_toggleCoordBtn = new QPushButton("显示用户坐标系", renderArea);
     m_toggleCoordBtn->setCheckable(true);
     m_toggleCoordBtn->setChecked(true);                                                         // 默认显示
     m_toggleCoordBtn->setVisible(false);                                                        // 初始不可见
     m_toggleCoordBtn->setMinimumWidth(120);                                                     // 按钮最小宽度，避免文字挤压
+    m_toggleCoordBtn->setCursor(Qt::ArrowCursor);
     m_toggleCoordBtn->setStyleSheet(R"(
-        QPushButton { padding: 6px 12px; margin: 5px; border: 1px solid #ccc; border-radius: 4px; }
-        QPushButton:checked { background-color: #2196F3; color: white; border-color: #2196F3; }
+        QPushButton { padding: 6px 12px; background-color: rgba(255, 255, 255, 0.95); border: 1px solid #ccc; border-radius: 4px;}
+        QPushButton:checked { background-color: #2196F3; color: white; border-color: #2196F3;}
+        QPushButton:hover {border-color: #2196F3; }
     )");
 
-    QHBoxLayout* btnLayout = new QHBoxLayout();
-    btnLayout->setAlignment(Qt::AlignLeft);                                                     // 按钮左对齐（核心：实现左下方）
-    btnLayout->addWidget(m_toggleCoordBtn);                                                     // 加按钮
-    btnLayout->addStretch();                                                                    // 右侧拉伸，按钮固定在左侧
-    leftLayout->addLayout(btnLayout);                                                           // 把按钮布局加入垂直布局（下方）
+    QVBoxLayout* overlayLayout = new QVBoxLayout(renderArea);
+    overlayLayout->setContentsMargins(15, 15, 15, 15);
+    overlayLayout->addStretch();
 
-    splitter->addWidget(leftContainer);                                                         // 把左侧容器加入分割器
+    QHBoxLayout* bottomBtnLayout = new QHBoxLayout();
+    bottomBtnLayout->addWidget(m_toggleCoordBtn);
+    bottomBtnLayout->addStretch();
+
+    overlayLayout->addLayout(bottomBtnLayout);
 
     // 2. 后创建右侧：数据表格 (TableWidget)
     dataTable = new QTableWidget(this);
+    dataTable->setMinimumSize(200,400);
     dataTable->setColumnCount(4);
     dataTable->setHorizontalHeaderLabels({"ID", "半径", "二维坐标", "三维坐标"});
     dataTable->verticalHeader()->setVisible(false);                                             // 关闭表格行头
@@ -85,8 +84,8 @@ void MainWindow::setupUi()
 
     // 3. 设置初始比例：左侧占 3份，右侧占 1份
     splitter->setCollapsible(0, false);
-    splitter->setStretchFactor(0, 2);
-    splitter->setStretchFactor(1, 2);
+    splitter->setStretchFactor(0, 3);
+    splitter->setStretchFactor(1, 1);
 
     // 4. 创建菜单栏
     fileMenu = menuBar()->addMenu("文件");

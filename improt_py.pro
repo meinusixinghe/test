@@ -1,4 +1,6 @@
 QT       += core gui
+# Modbus TCP
+QT += serialbus serialport
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
@@ -11,6 +13,7 @@ CONFIG += c++17
 SOURCES += \
     main.cpp \
     mainwindow.cpp \
+    modbusmanager.cpp \
     pathplanner.cpp \
     pathplanningdialog.cpp \
     renderarea.cpp \
@@ -20,6 +23,7 @@ SOURCES += \
 
 HEADERS += \
     mainwindow.h \
+    modbusmanager.h \
     pathplanner.h \
     pathplanningdialog.h \
     renderarea.h \
