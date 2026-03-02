@@ -5,32 +5,37 @@
 
 ModbusManager::ModbusManager(QObject *parent) : QObject(parent)
 {
-    m_modbus = new QModbusTcpClient(this);
-    m_modbus->setTimeout(1000);
-    m_modbus->setNumberOfRetries(2);
+    m_modbus = new QModbusTcpClient(this);                                                                  // 初始化Modbus TCP客户端
+    m_modbus->setTimeout(1000);                                                                             // 设置通信超时1s
+    m_modbus->setNumberOfRetries(2);                                                                        // 设置重试次数2次
 
+    // 连接 Modbus状态变化、错误信号
     connect(m_modbus, &QModbusClient::stateChanged, this, &ModbusManager::onStateChanged);
     connect(m_modbus, &QModbusClient::errorOccurred, this, [this](QModbusDevice::Error){
         emit errorOccurred(m_modbus->errorString());
     });
 
-    // 状态监控定时器 (100ms 轮询一次)
-    // 用于监控机器人是否发来 "焊接完成" 信号，以及握手状态检查
+    // 用于监控机器人是否发来焊接完成信号，以及握手状态检查
     m_monitorTimer = new QTimer(this);
     connect(m_monitorTimer, &QTimer::timeout, this, &ModbusManager::monitorRobotStatus);
 }
 
 ModbusManager::~ModbusManager()
 {
+    // 析构时断开连接，释放资源
     if (m_modbus->state() == QModbusDevice::ConnectedState)
         m_modbus->disconnectDevice();
 }
 
+// ----------------------------------------------------
+// 功能：实现上位机与机器人的 Modbus TCP 连接
+// ----------------------------------------------------
 void ModbusManager::connectToRobot(const QString &ip, int port)
 {
     if (m_modbus->state() != QModbusDevice::UnconnectedState)
-        m_modbus->disconnectDevice();
+        m_modbus->disconnectDevice();                                                                       // 先断开原有连接，避免冲突
 
+    // 设置机器人IP和端口，发起连接
     m_modbus->setConnectionParameter(QModbusDevice::NetworkPortParameter, port);
     m_modbus->setConnectionParameter(QModbusDevice::NetworkAddressParameter, ip);
 
@@ -41,31 +46,107 @@ void ModbusManager::connectToRobot(const QString &ip, int port)
     }
 }
 
+// ----------------------------------------------------
+// 功能：Modbus 连接状态变化时的回调函数
+// 连接成功启动轮询、断开连接停止轮询并复位状态
+// ----------------------------------------------------
 void ModbusManager::onStateChanged(QModbusDevice::State state)
 {
     if (state == QModbusDevice::ConnectedState) {
         emit connectionStateChanged(true);
         emit logMessage("已连接到机器人");
-        m_monitorTimer->start(200); // 启动轮询
+        m_monitorTimer->start(200);                                                 // 启动轮询
     } else if (state == QModbusDevice::UnconnectedState) {
         emit connectionStateChanged(false);
-        m_monitorTimer->stop();
-        m_sendState = Idle; // 重置状态
+        m_monitorTimer->stop();                                                     // 断开连接，停止轮询
+        m_sendState = Idle;                                                         // 重置状态
         m_compState = Monitoring;
     }
 }
 
 // ============================================================
-//  功能1: 启动机器人 (触发 40129.9)
+//  功能: 一键启动 (准备阶段 + 触发启动)
+//  对应描述: 上位机下发配置 -> 伺服上电/预约使能 -> 触发确认预约
 // ============================================================
-void ModbusManager::triggerRobotStart()
+void ModbusManager::prepareAndStart()
 {
-    // 逻辑: 先置1，延时后置0 (模拟按钮点动)
-    emit logMessage("发送: 确认预约程序 (Start)...");
+    if (m_modbus->state() != QModbusDevice::ConnectedState) {
+        emit errorOccurred("未连接机器人");
+        return;
+    }
+
+    emit logMessage("正在配置机器人参数并启动...");
+
+    // 1. 设置预约程序号 = 1 (地址 40139 / Offset 138)
+    // 对应您的需求：设置预约程序号=1
+    writeRegister(Addr::PC_RESERVE_PROG, 1);
+
+    // 2. 设置控制字：伺服上电(Bit0=1) + 预约功能启动(Bit1=1)
+    // 此时先不触发 Bit9，只是准备状态
+    // m_controlRegisterValue 是本地缓存
+    m_controlRegisterValue |= (1 << ControlBits::SERVO_ON);   // Bit 0
+    m_controlRegisterValue |= (1 << ControlBits::RESERVE_EN); // Bit 1
+    m_controlRegisterValue &= ~(1 << ControlBits::CONFIRM_RESERVE); // 确保 Bit 9 先是 0
+    m_controlRegisterValue &= ~(1 << ControlBits::PAUSE);
+
+    writeRegister(Addr::PC_CONTROL_BITS, m_controlRegisterValue);
+
+    // 3. 延时一小会儿，触发“确认预约程序” (Bit 9 置 1)
+    // 模拟人手按下的操作
+    QTimer::singleShot(200, this,[this](){
+        triggerConfirmSignal();
+    });
+}
+
+// ============================================================
+//  功能: 触发确认预约信号 (脉冲)
+//  场景: 用于首次启动，或暂停后的恢复
+// ============================================================
+void ModbusManager::triggerConfirmSignal()
+{
+    emit logMessage("触发: 确认预约程序 (Pulse)...");
+
+    // 置 1
     setControlBit(ControlBits::CONFIRM_RESERVE, true);
 
-    QTimer::singleShot(500, [this](){
+    // 500ms 后置 0
+    QTimer::singleShot(500, this,[this](){
         setControlBit(ControlBits::CONFIRM_RESERVE, false);
+        emit logMessage("启动信号已发送");
+    });
+}
+
+// 暂停功能
+void ModbusManager::setPause(bool paused)
+{
+    if (paused) {
+        // --- 暂停逻辑 ---
+        emit logMessage("发送: 暂停程序...");
+        setControlBit(ControlBits::PAUSE, true); // 40129.2 置 1
+    } else {
+        // --- 继续逻辑 ---
+        emit logMessage("发送: 继续运行...");
+
+        // 1. 先清除暂停信号
+        setControlBit(ControlBits::PAUSE, false); // 40129.2 置 0
+
+        // 2. 再次触发 "确认预约程序" 以恢复运行
+        // 稍作延时确保暂停位已清除
+        QTimer::singleShot(100, this,[this](){
+            triggerConfirmSignal();
+        });
+    }
+}
+
+// 复位报警功能
+void ModbusManager::resetAlarm()
+{
+    emit logMessage("发送: 复位报警...");
+    setControlBit(ControlBits::RESET_ALARM, true);
+
+    // 点动复位
+    QTimer::singleShot(500, this,[this](){
+        setControlBit(ControlBits::RESET_ALARM, false);
     });
 }
 
@@ -81,26 +162,6 @@ void ModbusManager::setControlBit(int bitIndex, bool value)
 
     writeRegister(Addr::PC_CONTROL_BITS, m_controlRegisterValue);
 }
-
-// ============================================================
-//  功能2: 发送焊接任务 (带 CMD 握手)
-// ============================================================
-// void ModbusManager::sendWeldingJob(const WeldingData &data, int cmdType)
-// {
-//     if (m_modbus->state() != QModbusDevice::ConnectedState) return;
-//     if (m_sendState != Idle) {
-//         emit errorOccurred("系统忙: 上一个任务未完成");
-//         return;
-//     }
-
-//     m_currentData = data;
-//     m_currentCmdType = cmdType; // e.g., 51
-//     m_sendState = CheckingIdle;
-
-//     emit logMessage("准备发送任务，检查机器人状态...");
-//     // 立即触发一次读取，检查机器人 CMD_RESP (40014) 是否为 0
-//     // 状态机流转在 onReadReady 中处理
-// }
 
 // ============================================================
 //  核心: 状态机与轮询
@@ -183,7 +244,7 @@ void ModbusManager::onReadReady()
                         // 为了逻辑统一，我们让状态机流转一下
                         m_sendState = WritingCmd;
                         // 可以在这里加个极短的延时或直接触发
-                        QTimer::singleShot(10, [this](){
+                        QTimer::singleShot(10, this,[this](){
                             // 重新触发读取以进入 WritingCmd 分支，或者直接调用写函数
                             // 这里简单处理：直接调用写 CMD 逻辑，不等待下一次轮询
                             emit logMessage(QString("发送命令 CMD=%1...").arg(m_currentCmdType));

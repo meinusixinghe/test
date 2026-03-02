@@ -4,6 +4,7 @@
 #include "rotationmatrixdialog.h"
 #include "pathplanner.h"
 #include "pathplanningdialog.h"
+#include "connectiondialog.h"
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QJsonArray>
@@ -22,9 +23,21 @@
 #include <QVBoxLayout>
 #include <QDialog>
 #include <QStatusBar>
+#include <QInputDialog>
 
 MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
 {
+    // 初始化 Modbus 管理器
+    m_modbusManager = new ModbusManager(this);
+    connect(m_modbusManager, &ModbusManager::connectionStateChanged, this, &MainWindow::onModbusStateChanged);
+    connect(m_modbusManager, &ModbusManager::errorOccurred, this, [this](QString msg){
+        m_statusLabel->setText("错误: " + msg);
+        QMessageBox::warning(this, "通讯错误", msg);
+    });
+    connect(m_modbusManager, &ModbusManager::logMessage, this, [this](QString msg){
+        m_statusLabel->setText(msg);
+    });
+
     setupUi();                                                                                  // 调用新的 UI初始化函数
     loadWeldingProcesses();                                                                     // 启动时自动加载焊接工艺数据
 }
@@ -47,26 +60,46 @@ void MainWindow::setupUi()
     splitter->addWidget(renderArea);
 
     // 显示/隐藏用户坐标系
+    QVBoxLayout* overlayLayout = new QVBoxLayout(renderArea);
+    overlayLayout->setContentsMargins(15, 15, 15, 15);
+    overlayLayout->addStretch();
+    QHBoxLayout* bottomBtnLayout = new QHBoxLayout();
+
     m_toggleCoordBtn = new QPushButton("显示用户坐标系", renderArea);
     m_toggleCoordBtn->setCheckable(true);
     m_toggleCoordBtn->setChecked(true);                                                         // 默认显示
     m_toggleCoordBtn->setVisible(false);                                                        // 初始不可见
     m_toggleCoordBtn->setMinimumWidth(120);                                                     // 按钮最小宽度，避免文字挤压
     m_toggleCoordBtn->setCursor(Qt::ArrowCursor);
-    m_toggleCoordBtn->setStyleSheet(R"(
+    QString btnStyle = R"(
         QPushButton { padding: 6px 12px; background-color: rgba(255, 255, 255, 0.95); border: 1px solid #ccc; border-radius: 4px;}
         QPushButton:checked { background-color: #2196F3; color: white; border-color: #2196F3;}
         QPushButton:hover {border-color: #2196F3; }
-    )");
+    )";
+    m_toggleCoordBtn->setStyleSheet(btnStyle);
 
-    QVBoxLayout* overlayLayout = new QVBoxLayout(renderArea);
-    overlayLayout->setContentsMargins(15, 15, 15, 15);
-    overlayLayout->addStretch();
-
-    QHBoxLayout* bottomBtnLayout = new QHBoxLayout();
     bottomBtnLayout->addWidget(m_toggleCoordBtn);
-    bottomBtnLayout->addStretch();
 
+    m_startBtn = new QPushButton("启动", renderArea);
+    m_startBtn->setStyleSheet("QPushButton { background-color: rgba(76, 175, 80, 0.95); color: white; border-radius: 4px; padding: 6px 12px; } QPushButton:hover { background-color: #45a049; }");
+    m_startBtn->setCursor(Qt::ArrowCursor);
+    m_startBtn->setVisible(false);
+
+    m_pauseBtn = new QPushButton("暂停", renderArea);
+    m_pauseBtn->setCheckable(true); // 可切换暂停/继续
+    m_pauseBtn->setStyleSheet("QPushButton { background-color: rgba(255, 152, 0, 0.95); color: white; border-radius: 4px; padding: 6px 12px; } QPushButton:checked { background-color: #e65100; text-decoration: underline; }");
+    m_pauseBtn->setCursor(Qt::ArrowCursor);
+    m_pauseBtn->setVisible(false);
+
+    m_resetBtn = new QPushButton("复位", renderArea);
+    m_resetBtn->setStyleSheet("QPushButton { background-color: rgba(244, 67, 54, 0.95); color: white; border-radius: 4px; padding: 6px 12px; } QPushButton:hover { background-color: #d32f2f; }");
+    m_resetBtn->setCursor(Qt::ArrowCursor);
+    m_resetBtn->setVisible(false);
+
+    bottomBtnLayout->addWidget(m_startBtn);
+    bottomBtnLayout->addWidget(m_pauseBtn);
+    bottomBtnLayout->addWidget(m_resetBtn);
+    bottomBtnLayout->addStretch();
     overlayLayout->addLayout(bottomBtnLayout);
 
     // 2. 后创建右侧：数据表格 (TableWidget)
@@ -93,28 +126,31 @@ void MainWindow::setupUi()
     loadAction->setIcon(QIcon(":/img/images/dxf.jpg"));
     fileMenu->addAction(loadAction);
 
+    m_operationMenu = menuBar()->addMenu("操作");
+    rotateAction = new QAction("应用旋转矩阵", this);
+    m_operationMenu->addAction(rotateAction);
+    m_setupCoordAction = new QAction("建立用户坐标系", this);
+    m_setupCoordAction->setIcon(QIcon(":/img/images/icons1.png"));
+    m_operationMenu->addAction(m_setupCoordAction);
+    m_pathPlanningAction = new QAction("自动焊接路径规划", this);
+    m_pathPlanningAction->setIcon(QIcon(":/img/images/icons3.png"));
+    m_operationMenu->addAction(m_pathPlanningAction);
+    m_manageProcessAction = new QAction("焊接工艺管理", this);
+    m_manageProcessAction->setIcon(QIcon(":/img/images/icons4.png"));
+    m_operationMenu->addAction(m_manageProcessAction);
+    m_posMethodAction = new QAction("选择定位方式", this);
+    m_posMethodAction->setIcon(QIcon(":/img/images/icons5.png"));
+    m_operationMenu->addAction(m_posMethodAction);
+
+    m_connectMenu = menuBar()->addMenu("连接");
+    m_connectAction = new QAction("建立连接", this);
+    m_connectAction->setIcon(QIcon(":/img/images/icons6.png"));
+    m_connectMenu->addAction(m_connectAction);
+
     // 5. 创建工具栏
     toolBar = addToolBar("工具栏");
     toolBar->setIconSize(QSize(32, 32));                                                        // 设置工具栏图标统一大小
     toolBar->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);                                   // 设置工具栏按钮样式为文字在图标下方
-    // 操作菜单 (用户坐标系向导入口)
-    m_operationMenu = menuBar()->addMenu("操作");
-    // 旋转矩阵
-    rotateAction = new QAction("应用旋转矩阵", this);
-    m_operationMenu->addAction(rotateAction);
-    // 用户坐标系
-    m_setupCoordAction = new QAction("建立用户坐标系", this);
-    m_setupCoordAction->setIcon(QIcon(":/img/images/icons1.png"));
-    m_operationMenu->addAction(m_setupCoordAction);
-    // 焊接路径规划
-    m_pathPlanningAction = new QAction("自动焊接路径规划", this);
-    m_pathPlanningAction->setIcon(QIcon(":/img/images/icons3.png"));
-    m_operationMenu->addAction(m_pathPlanningAction);
-    // 工艺管理
-    m_manageProcessAction = new QAction("焊接工艺管理", this);
-    m_manageProcessAction->setIcon(QIcon(":/img/images/icons4.png"));
-    m_operationMenu->addAction(m_manageProcessAction);
-    // 在toolbar添加图标按键
     toolBar->addAction(m_setupCoordAction);
     toolBar->addAction(m_pathPlanningAction);
     toolBar->addAction(m_manageProcessAction);
@@ -154,25 +190,26 @@ void MainWindow::setupUi()
     connect(dataTable, &QTableWidget::cellChanged,
             this, &MainWindow::handleTableCellChanged);                                     // 表格单元格修改 → 同步更新管孔数据
     connect(rotateAction, &QAction::triggered, this, &MainWindow::applyRotationMatrix);     // 应用旋转矩阵 → 触发applyRotationMatrix函数
-
     // 连接 Manager的更新信号到表格刷新
     connect(m_coordManager, &usercoordinatemanager::update3DCoordinates,
             this, &MainWindow::updateTableFromData);
-
     // 建立用户坐标系的流程逻辑
     connect(m_setupCoordAction, &QAction::triggered, this, &MainWindow::setupCoordinateWizard);
-
     // 显示/隐藏坐标系按钮连接
     connect(m_toggleCoordBtn, &QPushButton::clicked, this, [this](bool checked) {
         m_coordManager->toggleCoordinateDisplay(checked);
         m_toggleCoordBtn->setText(checked ? "隐藏用户坐标系" : "显示用户坐标系");
     });
-
     // 路径规划
     connect(m_pathPlanningAction, &QAction::triggered, this, &MainWindow::onPathPlanningTriggered);
-
     // 焊接工艺
     connect(m_manageProcessAction, &QAction::triggered, this, &MainWindow::onManageWeldingProcess);
+    // 通信
+    connect(m_connectAction, &QAction::triggered, this, &MainWindow::onConnectTriggered);
+    connect(m_posMethodAction, &QAction::triggered, this, &MainWindow::onSelectPositioningMethod);
+    connect(m_startBtn, &QPushButton::clicked, this, &MainWindow::onStartClicked);
+    connect(m_pauseBtn, &QPushButton::clicked, this, &MainWindow::onPauseClicked);
+    connect(m_resetBtn, &QPushButton::clicked, this, &MainWindow::onResetClicked);
 
     resize(1200, 700);
 }
@@ -809,5 +846,103 @@ void MainWindow::loadWeldingProcesses()
         p.strategy = obj["strategy"].toString();
         p.remark = obj["remark"].toString();
         m_weldingProcesses.append(p);
+    }
+}
+
+// =============================================================================
+// [新增] 连接设置与逻辑
+// =============================================================================
+void MainWindow::onConnectTriggered()
+{
+    ConnectionDialog dlg(this);
+    dlg.setIp(m_lastIp);
+    dlg.setPort(m_lastPort);
+
+    if (dlg.exec() == QDialog::Accepted) {
+        m_lastIp = dlg.getIp();
+        m_lastPort = dlg.getPort();
+        m_modbusManager->connectToRobot(m_lastIp, m_lastPort);
+    }
+}
+
+void MainWindow::onModbusStateChanged(bool connected)
+{
+    if (connected) {
+        m_statusLabel->setText(QString("已连接到机器人: %1:%2").arg(m_lastIp).arg(m_lastPort));
+        // 显示控制按钮
+        m_startBtn->setVisible(true);
+        m_pauseBtn->setVisible(true);
+        m_resetBtn->setVisible(true);
+    } else {
+        m_statusLabel->setText("未连接 / 连接断开");
+        // 隐藏控制按钮
+        m_startBtn->setVisible(false);
+        m_pauseBtn->setVisible(false);
+        m_resetBtn->setVisible(false);
+    }
+}
+
+// =============================================================================
+// 机器人控制逻辑
+// =============================================================================
+void MainWindow::onStartClicked()
+{
+    // 触发启动信号 (40129.9)
+    m_modbusManager->prepareAndStart();
+}
+
+// ----------------------------------------------------
+// 暂停按钮：处理暂停和恢复
+// ----------------------------------------------------
+void MainWindow::onPauseClicked()
+{
+    bool isPaused = m_pauseBtn->isChecked(); // 按钮按下状态为 true (暂停中)
+
+    if (isPaused) {
+        m_pauseBtn->setText("继续");
+        m_modbusManager->setPause(true); // 发送暂停信号
+    } else {
+        m_pauseBtn->setText("暂停");
+        m_modbusManager->setPause(false); // 清除暂停并触发启动信号
+    }
+}
+
+// ----------------------------------------------------
+// 复位按钮
+// ----------------------------------------------------
+void MainWindow::onResetClicked()
+{
+    m_modbusManager->resetAlarm();
+}
+
+// =============================================================================
+// 选择定位方式
+// =============================================================================
+void MainWindow::onSelectPositioningMethod()
+{
+    // 检查连接
+    // if (!m_modbusManager->isConnected()) ... (可以加判断，或者由ModbusManager内部处理)
+
+    QStringList items;
+    items << "10 - 无定位方式启动"
+          << "20 - 机械定位方式启动"
+          << "30 - 点激光定位方式启动"
+          << "40 - 线激光定位方式启动"
+          << "50 - 3D相机定位方式扫描启动"
+          << "51 - 3D相机定位方式管焊接启动"; // 默认
+
+    bool ok;
+    QString item = QInputDialog::getItem(this, "选择定位方式",
+                                         "请选择机器人启动模式 (CMD):", items, 0, false, &ok);
+    if (ok && !item.isEmpty()) {
+        // 解析选项中的数字
+        int cmdVal = item.split(" - ").first().toInt();
+
+        // 转换为枚举并执行
+        ModbusManager::RobotCmd cmd = static_cast<ModbusManager::RobotCmd>(cmdVal);
+
+        // 执行命令 (nullptr 表示不带焊接数据，仅切换模式/启动)
+        // 如果你需要特定模式带数据，可以在这里加逻辑判断
+        m_modbusManager->executeCommand(cmd, nullptr);
     }
 }

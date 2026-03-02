@@ -40,7 +40,6 @@ public:
         static const int PC_PROCESS_ID   = 140; // 40141 (工艺序号)
         static const int PC_CMD          = 141; // 40142 (命令字)
         static const int PC_WELD_ACK     = 142; // 40143 (焊接完成响应)
-
         static const int PC_DATA_X       = 148; // 40149 (坐标 X)
         static const int PC_DATA_Y       = 150; // 40151 (坐标 Y)
         static const int PC_DATA_Z       = 152; // 40153 (坐标 Z)
@@ -54,28 +53,30 @@ public:
 
     // 40129 寄存器的位定义
     struct ControlBits {
-        static const int SERVO_ON        = 0; // 40129.0
-        static const int RESERVE_EN      = 1; // 40129.1
-        static const int PAUSE           = 2; // 40129.2
-        static const int RESET_ALARM     = 3; // 40129.3
+        static const int SERVO_ON        = 0; // 40129.0 伺服上电
+        static const int RESERVE_EN      = 1; // 40129.1 预约启停(使能)
+        static const int PAUSE           = 2; // 40129.2 暂停
+        static const int RESET_ALARM     = 3; // 40129.3 复位报警
         static const int CONFIRM_RESERVE = 9; // 40129.9 (启动主程序触发)
     };
 
     explicit ModbusManager(QObject *parent = nullptr);
     ~ModbusManager();
 
-    void connectToRobot(const QString &ip, int port = 502);
+    void connectToRobot(const QString &ip, int port = 502);                 // 连接机器人
 
     // 核心功能接口
-    void triggerRobotStart();                                               // 触发 40129.9
-    void executeCommand(RobotCmd cmd, const WeldingData *data = nullptr);
-    //void sendWeldingJob(const WeldingData &data, int cmdType = 51);
+    void prepareAndStart();                                                 // 完整启动流程：设参 -> 上电 -> 触发
+    void triggerConfirmSignal();                                               // 仅触发 40129.9 (用于暂停后的恢复)
+    void setPause(bool paused);                                             // 暂停/继续
+    void resetAlarm();                                                      // 复位报警
+
+    void executeCommand(RobotCmd cmd, const WeldingData *data = nullptr);   // 执行焊接指令
 
 signals:
-    void connectionStateChanged(bool connected);
-    void errorOccurred(QString msg);
-    void logMessage(QString msg);
-
+    void connectionStateChanged(bool connected);                            // 连接状态变化
+    void errorOccurred(QString msg);                                        // 错误信息
+    void logMessage(QString msg);                                           // 运行日志
     void jobSentSuccess();                                                  // 任务发送并握手成功
     void robotWeldCompleted();                                              // 机器人焊接完成信号
 

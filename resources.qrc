@@ -5,6 +5,8 @@
         <file>images/icons1.png</file>
         <file>images/icons3.png</file>
         <file>images/icons4.png</file>
+        <file>images/icons5.png</file>
+        <file>images/icons6.png</file>
     </qresource>
     <qresource prefix="/icon">
         <file>icons/ball_blue.ico</file>

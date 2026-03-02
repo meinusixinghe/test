@@ -11,6 +11,7 @@
 #include <QTimer>
 #include <QPushButton>
 #include "weldingprocessdialog.h"
+#include "modbusmanager.h"
 
 class RenderArea;
 class usercoordinatemanager;
@@ -48,6 +49,16 @@ private slots:
 
     // 管理焊接工艺
     void onManageWeldingProcess();
+
+    // Modbus
+    void onConnectTriggered();
+    void onModbusStateChanged(bool connected);
+    void onStartClicked();
+    void onPauseClicked();
+    void onResetClicked();
+
+    // 定位方式选择
+    void onSelectPositioningMethod();
 private:
     void loadDrawingData(const QString &filePath);      // 核心数据加载函数
     void setupUi();                                     // UI初始化函数
@@ -85,6 +96,18 @@ private:
 
     QVector<WeldingProcess> m_weldingProcesses;         // 存储所有的焊接工艺数据
     QAction* m_manageProcessAction;                     // 菜单动作
+
+    ModbusManager* m_modbusManager;
+    QMenu* m_connectMenu;
+    QAction* m_connectAction;
+    QAction* m_posMethodAction; // 选择定位方式
+
+    QPushButton* m_startBtn;
+    QPushButton* m_pauseBtn;
+    QPushButton* m_resetBtn;
+
+    QString m_lastIp = "192.168.1.10"; // 记住上次IP
+    int m_lastPort = 502;
 };
 
 #endif // MAINWINDOW_H
