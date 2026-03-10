@@ -12,6 +12,8 @@
 #include <QPushButton>
 #include "weldingprocessdialog.h"
 #include "modbusmanager.h"
+#include <QCloseEvent>
+#include <QSettings>
 
 class RenderArea;
 class usercoordinatemanager;
@@ -22,6 +24,10 @@ struct Contour { QVector<QPointF> points; };                                    
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
+
+protected:
+    // 拦截窗口关闭事件，确保安全断开连接
+    void closeEvent(QCloseEvent *event) override;
 
 public:
     explicit MainWindow(QWidget *parent = nullptr);
@@ -52,7 +58,7 @@ private slots:
 
     // Modbus
     void onConnectTriggered();
-    void onModbusStateChanged(bool connected);
+    void onModbusStateChanged(int state);
     void onStartClicked();
     void onPauseClicked();
     void onResetClicked();
@@ -100,14 +106,16 @@ private:
     ModbusManager* m_modbusManager;
     QMenu* m_connectMenu;
     QAction* m_connectAction;
-    QAction* m_posMethodAction; // 选择定位方式
+    QAction* m_posMethodAction;                         // 选择定位方式
 
     QPushButton* m_startBtn;
     QPushButton* m_pauseBtn;
     QPushButton* m_resetBtn;
 
-    QString m_lastIp = "192.168.1.10"; // 记住上次IP
+    QString m_lastIp = "192.168.1.10";                  // 记住上次IP
     int m_lastPort = 502;
+    QLabel* m_statusIconLabel;                          // 连接状态指示灯
+    QLabel* m_statusTextLabel;                          // 文字标签
 };
 
 #endif // MAINWINDOW_H

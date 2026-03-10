@@ -24,6 +24,8 @@
 #include <QDialog>
 #include <QStatusBar>
 #include <QInputDialog>
+#include <QSettings>
+#include <QCloseEvent>
 
 MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
 {
@@ -40,6 +42,19 @@ MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
 
     setupUi();                                                                                  // 调用新的 UI初始化函数
     loadWeldingProcesses();                                                                     // 启动时自动加载焊接工艺数据
+
+    // 读取本地保存的 IP 和 端口配置，并尝试自动连接
+    QSettings settings(QCoreApplication::applicationDirPath() + "/config.ini", QSettings::IniFormat);
+    m_lastIp = settings.value("RobotIP", "").toString();
+    m_lastPort = settings.value("RobotPort", 502).toInt();
+    if (!m_lastIp.isEmpty()) {
+        // 如果之前存过 IP，软件打开直接自动连接
+        m_modbusManager->connectToRobot(m_lastIp, m_lastPort);
+    } else {
+        // 如果是第一次运行，给个默认值，等用户手动去点“建立连接”
+        m_lastIp = "192.168.1.10";
+        m_lastPort = 502;
+    }
 }
 
 MainWindow::~MainWindow() {
@@ -178,6 +193,24 @@ void MainWindow::setupUi()
     labelLayout->addWidget(weldHoleCountLabel);
     toolBar->addWidget(labelContainer);
     toolBar->addSeparator();
+
+    // 工具栏上的连接状态指示器 (圆圈 + 文字)
+    QWidget* statusContainer = new QWidget(this);
+    QHBoxLayout* statusLayout = new QHBoxLayout(statusContainer);
+    statusLayout->setContentsMargins(10, 0, 10, 0); // 左右留点边距
+    statusLayout->setSpacing(6);
+    // 圆形指示灯
+    m_statusIconLabel = new QLabel(this);
+    m_statusIconLabel->setFixedSize(16, 16);
+    m_statusIconLabel->setStyleSheet("background-color: #F44336; border-radius: 8px;"); // 默认红色
+    // 状态文字
+    m_statusTextLabel = new QLabel("未连接", this);
+    QFont statusFontObj = m_statusTextLabel->font();
+    statusFontObj.setPointSize(11);
+    m_statusTextLabel->setFont(statusFontObj);
+    statusLayout->addWidget(m_statusIconLabel);
+    statusLayout->addWidget(m_statusTextLabel);
+    toolBar->addWidget(statusContainer);
 
     // 7. 初始化坐标管理器
     m_coordManager = new usercoordinatemanager(this);
@@ -850,7 +883,7 @@ void MainWindow::loadWeldingProcesses()
 }
 
 // =============================================================================
-// [新增] 连接设置与逻辑
+// 连接设置与逻辑
 // =============================================================================
 void MainWindow::onConnectTriggered()
 {
@@ -859,23 +892,54 @@ void MainWindow::onConnectTriggered()
     dlg.setPort(m_lastPort);
 
     if (dlg.exec() == QDialog::Accepted) {
-        m_lastIp = dlg.getIp();
-        m_lastPort = dlg.getPort();
-        m_modbusManager->connectToRobot(m_lastIp, m_lastPort);
+
+        int action = dlg.getAction();
+
+        if (action == 1) {
+            // 点击连接
+            m_lastIp = dlg.getIp();
+            m_lastPort = dlg.getPort();
+
+            // 保存到 config.ini 配置文件
+            QSettings settings(QCoreApplication::applicationDirPath() + "/config.ini", QSettings::IniFormat);
+            settings.setValue("RobotIP", m_lastIp);
+            settings.setValue("RobotPort", m_lastPort);
+
+            // 发起连接
+            m_modbusManager->connectToRobot(m_lastIp, m_lastPort);
+
+        } else if (action == 2) {
+            // 点击断开连接
+            m_modbusManager->disconnectFromRobot();
+        }
     }
 }
 
-void MainWindow::onModbusStateChanged(bool connected)
+void MainWindow::onModbusStateChanged(int state)
 {
-    if (connected) {
+    if (state == 2) { // 已连接 (绿色)
+        m_statusIconLabel->setStyleSheet("background-color: #4CAF50; border-radius: 8px;");
+        m_statusTextLabel->setText("已连接");
         m_statusLabel->setText(QString("已连接到机器人: %1:%2").arg(m_lastIp).arg(m_lastPort));
-        // 显示控制按钮
+
         m_startBtn->setVisible(true);
         m_pauseBtn->setVisible(true);
         m_resetBtn->setVisible(true);
-    } else {
+    }
+    else if (state == 1) { // 正在连接 (黄色)
+        m_statusIconLabel->setStyleSheet("background-color: #FFC107; border-radius: 8px;");
+        m_statusTextLabel->setText("正在连接...");
+        m_statusLabel->setText("尝试连接中...");
+
+        m_startBtn->setVisible(false);
+        m_pauseBtn->setVisible(false);
+        m_resetBtn->setVisible(false);
+    }
+    else { // 未连接 / 断开 (红色)
+        m_statusIconLabel->setStyleSheet("background-color: #F44336; border-radius: 8px;");
+        m_statusTextLabel->setText("未连接");
         m_statusLabel->setText("未连接 / 连接断开");
-        // 隐藏控制按钮
+
         m_startBtn->setVisible(false);
         m_pauseBtn->setVisible(false);
         m_resetBtn->setVisible(false);
@@ -945,4 +1009,18 @@ void MainWindow::onSelectPositioningMethod()
         // 如果你需要特定模式带数据，可以在这里加逻辑判断
         m_modbusManager->executeCommand(cmd, nullptr);
     }
+}
+
+// ----------------------------------------------------
+// 窗口关闭事件，保证安全退出断开 TCP 连接
+// ----------------------------------------------------
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    // 如果存在 Modbus 管理器，强制断开连接，释放端口
+    if (m_modbusManager) {
+        m_modbusManager->disconnectFromRobot();
+    }
+
+    // 接受关闭事件，正常退出软件
+    event->accept();
 }

@@ -64,6 +64,7 @@ public:
     ~ModbusManager();
 
     void connectToRobot(const QString &ip, int port = 502);                 // 连接机器人
+    void disconnectFromRobot();                                             // 显式断开连接的接口（用于安全退出）
 
     // 核心功能接口
     void prepareAndStart();                                                 // 完整启动流程：设参 -> 上电 -> 触发
@@ -74,7 +75,7 @@ public:
     void executeCommand(RobotCmd cmd, const WeldingData *data = nullptr);   // 执行焊接指令
 
 signals:
-    void connectionStateChanged(bool connected);                            // 连接状态变化
+    void connectionStateChanged(int state);                                 // 连接状态变化
     void errorOccurred(QString msg);                                        // 错误信息
     void logMessage(QString msg);                                           // 运行日志
     void jobSentSuccess();                                                  // 任务发送并握手成功

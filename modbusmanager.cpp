@@ -46,6 +46,14 @@ void ModbusManager::connectToRobot(const QString &ip, int port)
     }
 }
 
+// 安全断开接口
+void ModbusManager::disconnectFromRobot()
+{
+    if (m_modbus && m_modbus->state() != QModbusDevice::UnconnectedState) {
+        m_modbus->disconnectDevice();
+    }
+}
+
 // ----------------------------------------------------
 // 功能：Modbus 连接状态变化时的回调函数
 // 连接成功启动轮询、断开连接停止轮询并复位状态
@@ -53,14 +61,16 @@ void ModbusManager::connectToRobot(const QString &ip, int port)
 void ModbusManager::onStateChanged(QModbusDevice::State state)
 {
     if (state == QModbusDevice::ConnectedState) {
-        emit connectionStateChanged(true);
+        emit connectionStateChanged(2);                                             // 2 = 已连接 (绿色)
         emit logMessage("已连接到机器人");
         m_monitorTimer->start(200);                                                 // 启动轮询
     } else if (state == QModbusDevice::UnconnectedState) {
-        emit connectionStateChanged(false);
+        emit connectionStateChanged(0);                                             // 0 = 未连接 (红色)
         m_monitorTimer->stop();                                                     // 断开连接，停止轮询
         m_sendState = Idle;                                                         // 重置状态
         m_compState = Monitoring;
+    }else if (state == QModbusDevice::ConnectingState) {
+        emit connectionStateChanged(1);                                             // 1 = 正在连接 (黄色)
     }
 }
 
