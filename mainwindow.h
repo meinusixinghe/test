@@ -10,6 +10,10 @@
 #include <QMatrix4x4>
 #include <QTimer>
 #include <QPushButton>
+#include "weldingprocessdialog.h"
+#include "modbusmanager.h"
+#include <QCloseEvent>
+#include <QSettings>
 
 class RenderArea;
 class usercoordinatemanager;
@@ -20,6 +24,10 @@ struct Contour { QVector<QPointF> points; };                                    
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
+
+protected:
+    // 拦截窗口关闭事件，确保安全断开连接
+    void closeEvent(QCloseEvent *event) override;
 
 public:
     explicit MainWindow(QWidget *parent = nullptr);
@@ -44,9 +52,24 @@ private slots:
 
     // 路径规划
     void onPathPlanningTriggered();
+
+    // 管理焊接工艺
+    void onManageWeldingProcess();
+
+    // Modbus
+    void onConnectTriggered();
+    void onModbusStateChanged(int state);
+    void onStartClicked();
+    void onPauseClicked();
+    void onResetClicked();
+
+    // 定位方式选择
+    void onSelectPositioningMethod();
 private:
     void loadDrawingData(const QString &filePath);      // 核心数据加载函数
     void setupUi();                                     // UI初始化函数
+
+    void loadWeldingProcesses();                        // 从 JSON文件加载焊接工艺
 
     QVector<Hole> allHoles;                             // 所有圆（含主体圆+焊接管孔）
     QVector<Hole> weldHoles;                            // 仅焊接管孔（不含主体圆）
@@ -76,6 +99,23 @@ private:
     QMenu* m_operationMenu;
 
     QAction* m_pathPlanningAction;                      // 路径规划菜单项
+
+    QVector<WeldingProcess> m_weldingProcesses;         // 存储所有的焊接工艺数据
+    QAction* m_manageProcessAction;                     // 菜单动作
+
+    ModbusManager* m_modbusManager;
+    QMenu* m_connectMenu;
+    QAction* m_connectAction;
+    QAction* m_posMethodAction;                         // 选择定位方式
+
+    QPushButton* m_startBtn;
+    QPushButton* m_pauseBtn;
+    QPushButton* m_resetBtn;
+
+    QString m_lastIp = "192.168.1.10";                  // 记住上次IP
+    int m_lastPort = 502;
+    QLabel* m_statusIconLabel;                          // 连接状态指示灯
+    QLabel* m_statusTextLabel;                          // 文字标签
 };
 
 #endif // MAINWINDOW_H
