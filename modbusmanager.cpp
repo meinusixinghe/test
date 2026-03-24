@@ -13,7 +13,7 @@ ModbusManager::ModbusManager(QObject *parent) : QObject(parent)
         emit errorOccurred(m_modbus->errorString());
     });
 
-    // 循环读取定时器 (200ms 刷新率，完全满足工业响应要求)
+    // 循环读取定时器 (200ms)
     m_monitorTimer = new QTimer(this);
     connect(m_monitorTimer, &QTimer::timeout, this, &ModbusManager::monitorRobotStatus);
 }
@@ -62,12 +62,12 @@ void ModbusManager::onStateChanged(QModbusDevice::State state)
 }
 
 // ==========================================================
-// 循环读取机器人状态 (一次性读取 40001 ~ 40037)
+// 循环读取机器人状态
 // ==========================================================
 void ModbusManager::monitorRobotStatus()
 {
     if (m_modbus->state() != QModbusDevice::ConnectedState) return;
-    readRegisters(0, 37); // Offset 0 到 36，共 37 个寄存器
+    readRegisters(0, 20);
 }
 
 void ModbusManager::onReadReady()
@@ -79,11 +79,11 @@ void ModbusManager::onReadReady()
         const QModbusDataUnit unit = reply->result();
 
         // 确保读到了足够长度的数据
-        if (unit.startAddress() == 0 && unit.valueCount() >= 37) {
+        if (unit.startAddress() == 0 && unit.valueCount() >= 15) {
             quint16 status1    = unit.value(Addr::ROBOT_STATUS);       // 40001
-            quint16 progLoaded = unit.value(Addr::ROBOT_PROG_LOAD);    // 40006
-            quint16 cmdResp    = unit.value(Addr::ROBOT_CMD_RESP);     // 40035
-            quint16 weldDone   = unit.value(Addr::ROBOT_WELD_DONE);    // 40036
+            quint16 progLoaded = unit.value(Addr::ROBOT_PROG_LOAD);    // 40010
+            quint16 cmdResp    = unit.value(Addr::ROBOT_CMD_RESP);     // 40014
+            quint16 weldDone   = unit.value(Addr::ROBOT_WELD_DONE);    // 40015
 
             // 解析 40001 状态位
             bool servoStatus = (status1 & (1 << 3));
@@ -98,8 +98,8 @@ void ModbusManager::onReadReady()
             switch (m_startupState) {
             case CheckSafety:
                 if (!alarm && !estop) {
-                    emit logMessage("步骤1: 无报警急停，发伺服使能脉冲(40101.Bit12)");
-                    pulseControlWord101(ControlBits::SERVO_ENABLE, 300);
+                    emit logMessage("步骤1: 无报警急停，发伺服使能脉冲(40129.Bit12)");
+                    pulseControlWord129(ControlBits::SERVO_ENABLE, 300);
                     m_startupState = WaitServoReady;
                 } else {
                     emit errorOccurred("步骤1失败：存在报警或急停！");
@@ -111,10 +111,10 @@ void ModbusManager::onReadReady()
                 if (servoStatus && servoReady) {
                     emit logMessage("伺服已就绪。");
                     if (!progRunning) {
-                        emit logMessage(QString("步骤2: 设程序号 40104=%1 并发加载脉冲(40101.Bit4)").arg(m_targetProgram));
+                        emit logMessage(QString("步骤2: 设程序号 40144=%1 并发加载脉冲(40129.Bit4)").arg(m_targetProgram));
                         writeRegister(Addr::PC_PROG_NUM, m_targetProgram); // 先写数据
                         QTimer::singleShot(200, this, [this](){
-                            pulseControlWord101(ControlBits::LOAD_PULSE, 300); // 后发加载脉冲
+                            pulseControlWord129(ControlBits::LOAD_PULSE, 300); // 后发加载脉冲
                         });
                         m_startupState = WaitProgramLoaded;
                     } else {
@@ -126,8 +126,8 @@ void ModbusManager::onReadReady()
 
             case WaitProgramLoaded:
                 if (progLoaded == m_targetProgram) {
-                    emit logMessage(QString("程序 %1 已加载，发启动脉冲(40101.Bit1)").arg(m_targetProgram));
-                    pulseControlWord101(ControlBits::RUN_PULSE, 300);
+                    emit logMessage(QString("程序 %1 已加载，发启动脉冲(40129.Bit1)").arg(m_targetProgram));
+                    pulseControlWord129(ControlBits::RUN_PULSE, 300);
                     m_startupState = WaitProgramRunning;
                 }
                 break;
@@ -149,7 +149,7 @@ void ModbusManager::onReadReady()
             case WaitingCmdAck:
                 // 循环读取直到 40035 == 1
                 if (cmdResp == 1) {
-                    emit logMessage("步骤3: 机器人收到命令(40035=1)，上位机释放命令(40141=0)");
+                    emit logMessage("步骤3: 机器人收到命令(40014=1)，上位机释放命令(40142=0)");
                     writeRegister(Addr::PC_CMD, 0);
                     m_jobState = WaitingCmdClear;
                 }
@@ -165,7 +165,7 @@ void ModbusManager::onReadReady()
             case WaitingJobDone:
                 // 循环等待动作结束 40036 == 1
                 if (weldDone == 1) {
-                    emit logMessage("步骤4: 收到动作完成信号(40036=1)，发送应答(40142=1)");
+                    emit logMessage("步骤4: 收到动作完成信号(40015=1)，发送应答(40143=1)");
                     emit robotWeldCompleted();
                     writeRegister(Addr::PC_WELD_ACK, 1);
                     m_jobState = WaitingRobotClear;
@@ -175,7 +175,7 @@ void ModbusManager::onReadReady()
             case WaitingRobotClear:
                 // 机器人收到应答后清零
                 if (weldDone == 0) {
-                    emit logMessage("步骤4结束: 机器人已清零(40036=0)，上位机复位(40142=0)");
+                    emit logMessage("步骤4结束: 机器人已清零(40015=0)，上位机复位(40143=0)");
                     writeRegister(Addr::PC_WELD_ACK, 0);
                     emit jobSentSuccess();
                     m_jobState = JobIdle; // 双方清账
@@ -226,9 +226,9 @@ void ModbusManager::executeCommand(RobotCmd cmd, const WeldingData *data)
         writeRegisters(Addr::PC_DATA_Z, floatToRegisters(data->z));
     }
 
-    // 稍作延时，确保参数全部写入完成后下发动作命令 40141
+    // 稍作延时，确保参数全部写入完成后下发动作命令 40142
     QTimer::singleShot(200, this, [this](){
-        emit logMessage(QString("下发动作命令: 40141 = %1").arg(m_currentCmdType));
+        emit logMessage(QString("下发动作命令: 40142 = %1").arg(m_currentCmdType));
         writeRegister(Addr::PC_CMD, (quint16)m_currentCmdType);
         m_jobState = WaitingCmdAck; // 推入状态机
     });
@@ -239,14 +239,14 @@ void ModbusManager::executeCommand(RobotCmd cmd, const WeldingData *data)
 // ==========================================================
 
 // 发送脉冲指令 (置 1 -> 延时 -> 置 0)
-void ModbusManager::pulseControlWord101(int bitIndex, int durationMs)
+void ModbusManager::pulseControlWord129(int bitIndex, int durationMs)
 {
-    m_ctrlWord101 |= (1 << bitIndex);
-    writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord101);
+    m_ctrlWord129 |= (1 << bitIndex);
+    writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
 
     QTimer::singleShot(durationMs, this, [this, bitIndex](){
-        m_ctrlWord101 &= ~(1 << bitIndex);
-        writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord101);
+        m_ctrlWord129 &= ~(1 << bitIndex);
+        writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
     });
 }
 

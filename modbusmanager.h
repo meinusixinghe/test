@@ -34,23 +34,23 @@ public:
 
     struct Addr {
         // --- PC 写入 ---
-        static const int PC_CONTROL_WORD = 100; // 40101 (位控制: 伺服/运行/加载)
-        static const int PC_PROG_NUM     = 103; // 40104 (程序号)
+        static const int PC_CONTROL_WORD = 128; // 40129 (位控制: 伺服/运行/加载)
+        static const int PC_PROG_NUM     = 143; // 40144 (加载目标程序号）
 
-        static const int PC_PROCESS_ID   = 139; // 40140 (工艺号)
-        static const int PC_CMD          = 140; // 40141 (动作命令 CMD)
-        static const int PC_WELD_ACK     = 141; // 40142 (管焊接完成响应)
+        static const int PC_PROCESS_ID   = 140; // 40141 (工艺号)
+        static const int PC_CMD          = 141; // 40142 (动作命令 CMD)
+        static const int PC_WELD_ACK     = 142; // 40143 (管焊接完成响应)
 
-        static const int PC_DATA_R       = 144; // 40145 (半径 Real)
-        static const int PC_DATA_Y       = 146; // 40147 (Y坐标 Real)
-        static const int PC_DATA_X       = 148; // 40149 (X坐标 Real)
-        static const int PC_DATA_Z       = 150; // 40151 (Z坐标 Real)
+        static const int PC_DATA_R       = 148; // 40149 (半径 Real)
+        static const int PC_DATA_Y       = 150; // 40151 (Y坐标 Real)
+        static const int PC_DATA_X       = 152; // 40153 (X坐标 Real)
+        static const int PC_DATA_Z       = 154; // 40155 (Z坐标 Real)
 
         // --- 机器人 反馈 ---
         static const int ROBOT_STATUS    = 0;   // 40001 (状态位)
-        static const int ROBOT_PROG_LOAD = 5;   // 40006 (已加载的程序号)
-        static const int ROBOT_CMD_RESP  = 34;  // 40035 (命令响应)
-        static const int ROBOT_WELD_DONE = 35;  // 40036 (焊接完成信号)
+        static const int ROBOT_PROG_LOAD = 9;   // 40010 (已加载的程序号)
+        static const int ROBOT_CMD_RESP  = 13;  // 40014 (命令响应)
+        static const int ROBOT_WELD_DONE = 14;  // 40015 (焊接完成信号)
     };
 
     // 40101 控制位定义
@@ -111,14 +111,14 @@ private:
     };
     JobState m_jobState = JobIdle;
 
-    quint16 m_ctrlWord101 = 0;                                              // 缓存 40101 的值
+    quint16 m_ctrlWord129 = 0;                                              // 缓存 40129 的值
     int m_currentCmdType;
 
     // 辅助函数
     void writeRegister(int address, quint16 value);
     void writeRegisters(int address, const QVector<quint16> &values);
     void readRegisters(int address, int count);
-    void pulseControlWord101(int bitIndex, int durationMs);                 // 发送脉冲指令
+    void pulseControlWord129(int bitIndex, int durationMs);                 // 发送脉冲指令
     QVector<quint16> floatToRegisters(float val);
 };
 
