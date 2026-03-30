@@ -65,6 +65,12 @@ private slots:
 
     // 定位方式选择
     void onSelectPositioningMethod();
+
+    // 响应伺服状态变化的槽函数
+    void onServoStateChanged(bool enabled);
+
+    // 响应自动模式变化的槽函数
+    void onAutoStateChanged(bool isAuto);
 private:
     void loadDrawingData(const QString &filePath);      // 核心数据加载函数
     void setupUi();                                     // UI初始化函数
@@ -116,6 +122,11 @@ private:
     int m_lastPort = 502;
     QLabel* m_statusIconLabel;                          // 连接状态指示灯
     QLabel* m_statusTextLabel;                          // 文字标签
+
+    QLabel* m_servoIconLabel;                           // 伺服状态相关的 UI 控件
+    QLabel* m_servoTextLabel;
+
+    QLabel* m_autoTextLabel;                            // 自动/手动状态相关的 UI 控件
 };
 
 #endif // MAINWINDOW_H

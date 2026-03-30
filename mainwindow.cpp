@@ -40,6 +40,11 @@ MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
         m_statusLabel->setText(msg);
     });
 
+    // 绑定伺服状态信号
+    connect(m_modbusManager, &ModbusManager::servoStateChanged, this, &MainWindow::onServoStateChanged);
+    // 绑定手动自动状态信号
+    connect(m_modbusManager, &ModbusManager::autoStateChanged, this, &MainWindow::onAutoStateChanged);
+
     setupUi();                                                                                  // 调用新的 UI初始化函数
     loadWeldingProcesses();                                                                     // 启动时自动加载焊接工艺数据
 
@@ -194,22 +199,52 @@ void MainWindow::setupUi()
     toolBar->addWidget(labelContainer);
     toolBar->addSeparator();
 
-    // 工具栏上的连接状态指示器 (圆圈 + 文字)
+    // 工具栏上的状态指示器容器 (网络 + 伺服)
     QWidget* statusContainer = new QWidget(this);
     QHBoxLayout* statusLayout = new QHBoxLayout(statusContainer);
-    statusLayout->setContentsMargins(10, 0, 10, 0); // 左右留点边距
+    statusLayout->setContentsMargins(10, 0, 10, 0);
     statusLayout->setSpacing(6);
-    // 圆形指示灯
+    // 获取基础字体
+    QFont statusFontObj = font();
+    statusFontObj.setPointSize(11);
+    // 网络连接状态
     m_statusIconLabel = new QLabel(this);
     m_statusIconLabel->setFixedSize(16, 16);
-    m_statusIconLabel->setStyleSheet("background-color: #F44336; border-radius: 8px;"); // 默认红色
-    // 状态文字
+    m_statusIconLabel->setStyleSheet("background-color: #F44336; border-radius: 8px;");
     m_statusTextLabel = new QLabel("未连接", this);
-    QFont statusFontObj = m_statusTextLabel->font();
-    statusFontObj.setPointSize(11);
     m_statusTextLabel->setFont(statusFontObj);
+    m_statusTextLabel->setStyleSheet("color: #333333;");
+    // 分隔符 1
+    QLabel* separator1 = new QLabel(" | ", this);
+    separator1->setStyleSheet("color: #999; font-weight: bold;");
+    // 伺服使能状态
+    m_servoIconLabel = new QLabel(this);
+    m_servoIconLabel->setFixedSize(16, 16);
+    m_servoIconLabel->setStyleSheet("background-color: #9E9E9E; border-radius: 8px;");
+    m_servoTextLabel = new QLabel("伺服断开", this);
+    m_servoTextLabel->setFont(statusFontObj);
+    m_servoTextLabel->setStyleSheet("color: #333333;");
+    // 分隔符 2
+    QLabel* separator2 = new QLabel(" | ", this);
+    separator2->setStyleSheet("color: #999; font-weight: bold;");
+    // 自动/手动模式
+    m_autoTextLabel = new QLabel("手动模式", this);
+    QFont autoFont = statusFontObj;
+    autoFont.setBold(true);
+    m_autoTextLabel->setFont(autoFont);
+    m_autoTextLabel->setStyleSheet("color: #FF9800;");
+    // 按顺序添加到布局
     statusLayout->addWidget(m_statusIconLabel);
     statusLayout->addWidget(m_statusTextLabel);
+    statusLayout->addSpacing(10);
+    statusLayout->addWidget(separator1);
+    statusLayout->addSpacing(10);
+    statusLayout->addWidget(m_servoIconLabel);
+    statusLayout->addWidget(m_servoTextLabel);
+    statusLayout->addSpacing(10);
+    statusLayout->addWidget(separator2);
+    statusLayout->addSpacing(10);
+    statusLayout->addWidget(m_autoTextLabel);
     toolBar->addWidget(statusContainer);
 
     // 7. 初始化坐标管理器
@@ -1023,4 +1058,34 @@ void MainWindow::closeEvent(QCloseEvent *event)
 
     // 接受关闭事件，正常退出软件
     event->accept();
+}
+
+// =============================================================================
+// 更新伺服使能 UI 状态
+// =============================================================================
+void MainWindow::onServoStateChanged(bool enabled)
+{
+    if (enabled) {
+        // 绿色：伺服已上电
+        m_servoIconLabel->setStyleSheet("background-color: #4CAF50; border-radius: 8px;");
+        m_servoTextLabel->setText("伺服使能");
+    } else {
+        // 灰色：伺服未上电/断开
+        m_servoIconLabel->setStyleSheet("background-color: #9E9E9E; border-radius: 8px;");
+        m_servoTextLabel->setText("伺服断开");
+    }
+}
+
+// =============================================================================
+// 更新自动/手动 UI 状态
+// =============================================================================
+void MainWindow::onAutoStateChanged(bool isAuto)
+{
+    if (isAuto) {
+        m_autoTextLabel->setStyleSheet("color: #4CAF50;"); // 绿色文字
+        m_autoTextLabel->setText("自动模式");
+    } else {
+        m_autoTextLabel->setStyleSheet("color: #FF9800;"); // 橙色文字
+        m_autoTextLabel->setText("手动模式");
+    }
 }

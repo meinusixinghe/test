@@ -35,7 +35,7 @@ public:
     struct Addr {
         // --- PC 写入 ---
         static const int PC_CONTROL_WORD = 128; // 40129 (位控制: 伺服/运行/加载)
-        static const int PC_PROG_NUM     = 143; // 40144 (加载目标程序号）
+        static const int PC_PROG_NUM     = 138; // 40139 (设置预约程序号）
 
         static const int PC_PROCESS_ID   = 140; // 40141 (工艺号)
         static const int PC_CMD          = 141; // 40142 (动作命令 CMD)
@@ -53,10 +53,11 @@ public:
         static const int ROBOT_WELD_DONE = 14;  // 40015 (焊接完成信号)
     };
 
-    // 40101 控制位定义
+    // 40129 控制位定义
     struct ControlBits {
         static const int RUN_PULSE       = 1;  // Bit 1: 运行脉冲
-        static const int LOAD_PULSE      = 4;  // Bit 4: 加载脉冲
+        static const int ALARM_RESET     = 3;  // Bit 3: 报警复位
+        static const int PROG_BOOK       = 9;  // Bit 9: 确定程序预约
         static const int SERVO_ENABLE    = 12; // Bit 12: 伺服使能脉冲
     };
 
@@ -70,9 +71,11 @@ public:
     void prepareAndStart();                                                 // 执行步骤1和步骤2 (系统就绪与启动)
     void executeCommand(RobotCmd cmd, const WeldingData *data = nullptr);   // 执行步骤3和4 (业务握手)
 
+    void resetAlarm();                                                      // 解除报警
+
     // 预留接口，避免主窗口调用报错
     void setPause(bool paused) {}
-    void resetAlarm() {}
+
 
 signals:
     void connectionStateChanged(int state);                                 // 连接状态变化
@@ -80,6 +83,8 @@ signals:
     void logMessage(QString msg);                                           // 运行日志
     void jobSentSuccess();                                                  // 任务发送并握手成功
     void robotWeldCompleted();                                              // 机器人焊接完成信号
+    void servoStateChanged(bool enabled);                                   // 伺服使能状态变化信号
+    void autoStateChanged(bool isAuto);                                     // 自动/手动模式变化信号
 
 private slots:
     void onStateChanged(QModbusDevice::State state);
@@ -113,6 +118,9 @@ private:
 
     quint16 m_ctrlWord129 = 0;                                              // 缓存 40129 的值
     int m_currentCmdType;
+    bool m_isAlarmActive = false;                                           // 记录当前是否处于报警/急停状态
+    bool m_lastServoState = false;                                          // 记录上一次的伺服状态
+    bool m_isAutoMode = false;                                              // 记录当前是否处于自动模式
 
     // 辅助函数
     void writeRegister(int address, quint16 value);
