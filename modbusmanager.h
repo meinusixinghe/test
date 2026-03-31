@@ -35,7 +35,7 @@ public:
     struct Addr {
         // --- PC 写入 ---
         static const int PC_CONTROL_WORD = 128; // 40129 (位控制: 伺服/运行/加载)
-        static const int PC_PROG_NUM     = 138; // 40139 (设置预约程序号）
+        static const int PC_RESERVE_PROG = 138; // 40139 (设置预约程序号）
 
         static const int PC_PROCESS_ID   = 140; // 40141 (工艺号)
         static const int PC_CMD          = 141; // 40142 (动作命令 CMD)
@@ -48,7 +48,7 @@ public:
 
         // --- 机器人 反馈 ---
         static const int ROBOT_STATUS    = 0;   // 40001 (状态位)
-        static const int ROBOT_PROG_LOAD = 9;   // 40010 (已加载的程序号)
+        static const int ROBOT_PROG_LOAD = 11;  // 40012 (已加载的程序号)
         static const int ROBOT_CMD_RESP  = 13;  // 40014 (命令响应)
         static const int ROBOT_WELD_DONE = 14;  // 40015 (焊接完成信号)
     };
@@ -56,8 +56,10 @@ public:
     // 40129 控制位定义
     struct ControlBits {
         static const int RUN_PULSE       = 1;  // Bit 1: 运行脉冲
+        static const int PAUSE_PULSE     = 2;  // Bit 2: 暂停脉冲
         static const int ALARM_RESET     = 3;  // Bit 3: 报警复位
-        static const int PROG_BOOK       = 9;  // Bit 9: 确定程序预约
+        static const int RESERVE_CONFIRM = 9;  // Bit 9: 确定程序预约
+        static const int RESERVE_ENABLE  = 11; // Bit 11: 程序启停
         static const int SERVO_ENABLE    = 12; // Bit 12: 伺服使能脉冲
     };
 
@@ -74,7 +76,7 @@ public:
     void resetAlarm();                                                      // 解除报警
 
     // 预留接口，避免主窗口调用报错
-    void setPause(bool paused) {}
+    void setPause(bool paused);
 
 
 signals:

@@ -92,7 +92,7 @@ void ModbusManager::onReadReady()
 
         if (unit.startAddress() == 0 && unit.valueCount() >= 15) {
             quint16 status1    = unit.value(Addr::ROBOT_STATUS);       // 40001
-            quint16 progLoaded = unit.value(Addr::ROBOT_PROG_LOAD);    // 40010
+            quint16 progLoaded = unit.value(Addr::ROBOT_PROG_LOAD);    // 40012
             quint16 cmdResp    = unit.value(Addr::ROBOT_CMD_RESP);     // 40014
             quint16 weldDone   = unit.value(Addr::ROBOT_WELD_DONE);    // 40015
 
@@ -170,11 +170,20 @@ void ModbusManager::onReadReady()
                 if (servoStatus) {
                     emit logMessage("伺服已就绪。");
                     if (!progRunning) {
-                        emit logMessage(QString("步骤2: 设程序号 40139=%1 并发加载脉冲(40129.Bit4)").arg(m_targetProgram));
-                        writeRegister(Addr::PC_PROG_NUM, m_targetProgram); // 写数据
+                        emit logMessage(QString("步骤2: 启预约功能(Bit11), 设预约号40139=%1 并发确认脉冲(Bit9)").arg(m_targetProgram));
+                        // 1. 开启预约功能 (置位 40129.Bit11)
+                        // QTimer::singleShot(200, this, [this](){
+                        //     pulseControlWord129(ControlBits::RESERVE_ENABLE, 300);
+                        // });
+                        m_ctrlWord129 |= (1 << ControlBits::RESERVE_ENABLE);
+                        writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
+                        // 2. 写入预约程序号 (40139)
+                        writeRegister(Addr::PC_RESERVE_PROG, m_targetProgram);
+                        // 3. 延时 200ms 等待数据稳定后，发射确认预约程序脉冲 (40129.Bit9)
                         QTimer::singleShot(200, this, [this](){
-                            pulseControlWord129(ControlBits::PROG_BOOK, 300); // 发加载脉冲
+                            pulseControlWord129(ControlBits::RESERVE_CONFIRM, 300);
                         });
+                        // 预约模式发完确认脉冲后，机器人会直接运行
                         m_startupState = WaitProgramLoaded;
                     } else {
                         emit logMessage("程序已经在运行中。");
@@ -184,9 +193,9 @@ void ModbusManager::onReadReady()
                 break;
 
             case WaitProgramLoaded:
-                if (progLoaded == m_targetProgram) {
+                if (progLoadDone) {
                     emit logMessage(QString("程序 %1 已加载，发启动脉冲(40129.Bit1)").arg(m_targetProgram));
-                    // pulseControlWord129(ControlBits::RUN_PULSE, 300);
+                    pulseControlWord129(ControlBits::RUN_PULSE, 300);
                     m_startupState = WaitProgramRunning;
                 }
                 break;
@@ -204,7 +213,7 @@ void ModbusManager::onReadReady()
             // 步骤 3 & 4: 业务握手状态机
             switch (m_jobState) {
             case WaitingCmdAck:
-                // 循环读取直到 40035 == 1
+                // 循环读取直到 40014 == 1
                 if (cmdResp == 1) {
                     emit logMessage("步骤3: 机器人收到命令(40014=1)，上位机释放命令(40142=0)");
                     writeRegister(Addr::PC_CMD, 0);
@@ -220,7 +229,7 @@ void ModbusManager::onReadReady()
                 break;
 
             case WaitingJobDone:
-                // 循环等待动作结束 40036 == 1
+                // 循环等待动作结束 40014 == 1
                 if (weldDone == 1) {
                     emit logMessage("步骤4: 收到动作完成信号(40015=1)，发送应答(40143=1)");
                     emit robotWeldCompleted();
@@ -374,4 +383,20 @@ QVector<quint16> ModbusManager::floatToRegisters(float val)
     regs.append((quint16)(u.i >> 16));    // Big Endian 高位
     regs.append((quint16)(u.i & 0xFFFF)); // 低位
     return regs;
+}
+
+// ==========================================================
+// 暂停/继续 控制逻辑
+// ==========================================================
+void ModbusManager::setPause(bool paused)
+{
+    if (m_modbus->state() == QModbusDevice::ConnectedState) {
+        if (paused) {
+            emit logMessage("下发暂停脉冲 (40129.Bit2)");
+            pulseControlWord129(ControlBits::PAUSE_PULSE, 300);
+        } else {
+            emit logMessage("下发恢复运行脉冲 (触发确认预约 40129.Bit9)");
+            pulseControlWord129(ControlBits::RESERVE_CONFIRM, 300);
+        }
+    }
 }
