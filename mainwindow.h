@@ -127,6 +127,8 @@ private:
     QLabel* m_servoTextLabel;
 
     QLabel* m_autoTextLabel;                            // 自动/手动状态相关的 UI 控件
+
+    bool m_isShuttingDown = false;                      // 用于标记是否正在执行安全退出
 };
 
 #endif // MAINWINDOW_H

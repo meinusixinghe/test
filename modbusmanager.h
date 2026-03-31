@@ -58,6 +58,7 @@ public:
         static const int RUN_PULSE       = 1;  // Bit 1: 运行脉冲
         static const int PAUSE_PULSE     = 2;  // Bit 2: 暂停脉冲
         static const int ALARM_RESET     = 3;  // Bit 3: 报警复位
+        static const int EXT_ALARM       = 6;  // Bit 6: 外部报警 (用于强制下电)
         static const int RESERVE_CONFIRM = 9;  // Bit 9: 确定程序预约
         static const int RESERVE_ENABLE  = 11; // Bit 11: 程序启停
         static const int SERVO_ENABLE    = 12; // Bit 12: 伺服使能脉冲
@@ -75,9 +76,14 @@ public:
 
     void resetAlarm();                                                      // 解除报警
 
-    // 预留接口，避免主窗口调用报错
+    // 暂停程序
     void setPause(bool paused);
 
+    // 安全关闭机器人 (下伺服、关预约、暂停)
+    void safeShutdown();
+
+    // 查询是否处于连接状态
+    bool isConnected() const { return m_modbus && m_modbus->state() == QModbusDevice::ConnectedState; }
 
 signals:
     void connectionStateChanged(int state);                                 // 连接状态变化
@@ -87,11 +93,14 @@ signals:
     void robotWeldCompleted();                                              // 机器人焊接完成信号
     void servoStateChanged(bool enabled);                                   // 伺服使能状态变化信号
     void autoStateChanged(bool isAuto);                                     // 自动/手动模式变化信号
+    void startButtonTextChanged(QString text);                              // 动态更改主界面启动按钮的文字
+    void shutdownFinished();                                                // 关机序列完成信号
 
 private slots:
     void onStateChanged(QModbusDevice::State state);
     void onReadReady();                                                     // 读取回调
     void monitorRobotStatus();                                              // 定时轮询机器人状态
+    void processShutdownStep();                                             // 处理关机步进动作
 
 private:
     QModbusTcpClient *m_modbus;
@@ -102,6 +111,13 @@ private:
         StartIdle,
         CheckSafety,                                                        // 检查报警/急停并发送伺服脉冲
         WaitServoReady,                                                     // 等待伺服就绪并发送加载脉冲
+        PulseReserve_PullLow,    // 节拍1：发 0
+        PulseReserve_PullHigh,   // 节拍2：发 1
+        PulseReserve_CleanLow,   // 节拍3：发 0
+        WaitReserveReady,
+        Confirm_PullHigh,        // 节拍4：确认预约发 1
+        Confirm_CleanLow,        // 节拍5：确认预约发 0
+        ToggleReservation_PulseHigh,
         WaitProgramLoaded,                                                  // 等待程序加载并发送运行脉冲
         WaitProgramRunning                                                  // 等待程序运行
     };
@@ -123,6 +139,9 @@ private:
     bool m_isAlarmActive = false;                                           // 记录当前是否处于报警/急停状态
     bool m_lastServoState = false;                                          // 记录上一次的伺服状态
     bool m_isAutoMode = false;                                              // 记录当前是否处于自动模式
+    bool m_isReserved = false;                                              // 记录机器人真实的预约状态
+    QTimer* m_shutdownTimer = nullptr;                                      // 关机专用定时器
+    int m_shutdownStep = 0;                                                 // 关机当前步数
 
     // 辅助函数
     void writeRegister(int address, quint16 value);

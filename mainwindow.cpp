@@ -39,7 +39,7 @@ MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
     connect(m_modbusManager, &ModbusManager::logMessage, this, [this](QString msg){
         m_statusLabel->setText(msg);
     });
-
+    connect(m_modbusManager, &ModbusManager::startButtonTextChanged, m_startBtn, &QPushButton::setText);
     // 绑定伺服状态信号
     connect(m_modbusManager, &ModbusManager::servoStateChanged, this, &MainWindow::onServoStateChanged);
     // 绑定手动自动状态信号
@@ -100,7 +100,7 @@ void MainWindow::setupUi()
 
     bottomBtnLayout->addWidget(m_toggleCoordBtn);
 
-    m_startBtn = new QPushButton("启动", renderArea);
+    m_startBtn = new QPushButton("预约", renderArea);
     m_startBtn->setStyleSheet("QPushButton { background-color: rgba(76, 175, 80, 0.95); color: white; border-radius: 4px; padding: 6px 12px; } QPushButton:hover { background-color: #45a049; }");
     m_startBtn->setCursor(Qt::ArrowCursor);
     m_startBtn->setVisible(false);
@@ -1047,17 +1047,29 @@ void MainWindow::onSelectPositioningMethod()
 }
 
 // ----------------------------------------------------
-// 窗口关闭事件，保证安全退出断开 TCP 连接
+// 窗口关闭事件，保证安全退出下发指令并断开 TCP 连接
 // ----------------------------------------------------
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    // 如果存在 Modbus 管理器，强制断开连接，释放端口
-    if (m_modbusManager) {
-        m_modbusManager->disconnectFromRobot();
+    if (m_isShuttingDown || !m_modbusManager || !m_modbusManager->isConnected()) {
+        if (m_modbusManager) {
+            m_modbusManager->disconnectFromRobot();
+        }
+        event->accept();
+        return;
     }
 
-    // 接受关闭事件，正常退出软件
-    event->accept();
+    event->ignore();
+    m_isShuttingDown = true;
+    m_statusLabel->setText("正在安全关闭机器人并清理状态...");
+
+    // 【新增】监听底层的“关机完成”信号。收到信号后，立刻重新触发关闭！
+    connect(m_modbusManager, &ModbusManager::shutdownFinished, this, [this]() {
+        this->close();
+    });
+
+    // 调用底层的安全关闭逻辑
+    m_modbusManager->safeShutdown();
 }
 
 // =============================================================================
