@@ -71,6 +71,9 @@ private slots:
 
     // 响应自动模式变化的槽函数
     void onAutoStateChanged(bool isAuto);
+
+    // 持续发送下一个管孔的函数
+    void sendNextWeldHole();
 private:
     void loadDrawingData(const QString &filePath);      // 核心数据加载函数
     void setupUi();                                     // UI初始化函数
@@ -129,6 +132,9 @@ private:
     QLabel* m_autoTextLabel;                            // 自动/手动状态相关的 UI 控件
 
     bool m_isShuttingDown = false;                      // 用于标记是否正在执行安全退出
+
+    int m_currentWeldIndex = 0;                         // 当前正在焊接的管孔索引
+    bool m_isWeldingProcessRunning = false;             // 是否正在连续焊接中
 };
 
 #endif // MAINWINDOW_H

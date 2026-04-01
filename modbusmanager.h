@@ -130,7 +130,9 @@ private:
         WaitingCmdAck,                                                      // 等待机器人响应 40035=1
         WaitingCmdClear,                                                    // 等待机器人释放 40035=0
         WaitingJobDone,                                                     // 等待动作结束 40036=1
-        WaitingRobotClear                                                   // 等待机器人清零 40036=0
+        WaitingRobotClear,                                                  // 等待机器人清零 40036=0
+        AckJobDone_CleanLow,                                                // 将响应清零 40143=0
+        WaitingRobotClearDone                                               // 等待机器人清零 40015=0
     };
     JobState m_jobState = JobIdle;
 

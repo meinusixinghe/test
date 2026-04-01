@@ -29,24 +29,56 @@
 
 MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
 {
-    // 初始化 Modbus 管理器
+    // 1. 先初始化 UI，确保 m_startBtn 等界面控件被成功创建
+    setupUi();
+
+    // 2. 初始化 Modbus 管理器
     m_modbusManager = new ModbusManager(this);
+
+    // 3. 基础状态与日志信号绑定
     connect(m_modbusManager, &ModbusManager::connectionStateChanged, this, &MainWindow::onModbusStateChanged);
-    connect(m_modbusManager, &ModbusManager::errorOccurred, this, [this](QString msg){
-        m_statusLabel->setText("错误: " + msg);
-        QMessageBox::warning(this, "通讯错误", msg);
-    });
     connect(m_modbusManager, &ModbusManager::logMessage, this, [this](QString msg){
         m_statusLabel->setText(msg);
     });
-    connect(m_modbusManager, &ModbusManager::startButtonTextChanged, m_startBtn, &QPushButton::setText);
-    // 绑定伺服状态信号
     connect(m_modbusManager, &ModbusManager::servoStateChanged, this, &MainWindow::onServoStateChanged);
-    // 绑定手动自动状态信号
     connect(m_modbusManager, &ModbusManager::autoStateChanged, this, &MainWindow::onAutoStateChanged);
 
-    setupUi();                                                                                  // 调用新的 UI初始化函数
-    loadWeldingProcesses();                                                                     // 启动时自动加载焊接工艺数据
+    // 4. 【核心增强】业务逻辑信号绑定 (包含连续焊接控制)
+
+    // 4.1 错误拦截：断网或急停时，除了弹窗，还必须中断连续焊接状态
+    connect(m_modbusManager, &ModbusManager::errorOccurred, this, [this](QString msg){
+        m_statusLabel->setText("错误: " + msg);
+        QMessageBox::warning(this, "通讯错误", msg);
+
+        // 如果正在连续焊接，强制打断并恢复按钮
+        if (m_isWeldingProcessRunning) {
+            m_isWeldingProcessRunning = false;
+            m_startBtn->setText("预约");
+            m_startBtn->setEnabled(true);
+        }
+    });
+
+    // 4.2 动态按钮文字：不仅改字，还要监控底层状态回退
+    connect(m_modbusManager, &ModbusManager::startButtonTextChanged, this, [this](QString text) {
+        m_startBtn->setText(text);
+
+        // 如果底层因为某种原因退回到了"预约"状态，解除连续焊接禁用
+        if (text == "预约") {
+            m_isWeldingProcessRunning = false;
+            m_startBtn->setEnabled(true);
+        }
+    });
+
+    // 4.3 【连续焊接发动机】：单孔闭环完成，自动触发下一个！
+    connect(m_modbusManager, &ModbusManager::jobSentSuccess, this, [this]() {
+        if (m_isWeldingProcessRunning) {
+            m_currentWeldIndex++; // 索引加 1
+            sendNextWeldHole();   // 自动调取下一行数据发送给机器人
+        }
+    });
+
+    // 5. 初始化数据与自动连接
+    loadWeldingProcesses();  // 启动时自动加载焊接工艺数据
 
     // 读取本地保存的 IP 和 端口配置，并尝试自动连接
     QSettings settings(QCoreApplication::applicationDirPath() + "/config.ini", QSettings::IniFormat);
@@ -986,8 +1018,24 @@ void MainWindow::onModbusStateChanged(int state)
 // =============================================================================
 void MainWindow::onStartClicked()
 {
-    // 触发启动信号 (40129.9)
-    m_modbusManager->prepareAndStart();
+    if (m_startBtn->text() == "预约") {
+        // 触发启动信号 (40129.9) - 跑步骤1和2
+        m_modbusManager->prepareAndStart();
+    }
+    else if (m_startBtn->text() == "启动") {
+        // 按照您的要求：到达启动之后，不再跑步骤2，而是持续跑步骤3！
+        if (weldHoles.isEmpty()) {
+            QMessageBox::warning(this, "警告", "没有管孔数据可供焊接！");
+            return;
+        }
+
+        m_currentWeldIndex = 0;
+        m_isWeldingProcessRunning = true;
+        m_startBtn->setText("连续焊接中...");
+        m_startBtn->setEnabled(false); // 防止中途乱点
+
+        sendNextWeldHole(); // 发射第一个孔！
+    }
 }
 
 // ----------------------------------------------------
@@ -1101,3 +1149,38 @@ void MainWindow::onAutoStateChanged(bool isAuto)
         m_autoTextLabel->setText("手动模式");
     }
 }
+
+// ----------------------------------------------------
+// 功能：持续下发步骤三的数据 (从表格里依次取点)
+// ----------------------------------------------------
+void MainWindow::sendNextWeldHole()
+{
+    if (!m_isWeldingProcessRunning) return;
+
+    if (m_currentWeldIndex >= weldHoles.size()) {
+        m_statusLabel->setText("所有管孔焊接完成！");
+        QMessageBox::information(this, "完成", "恭喜，所有管孔已连续焊接完毕！");
+        m_isWeldingProcessRunning = false;
+        m_startBtn->setText("启动");
+        m_startBtn->setEnabled(true);
+        return;
+    }
+
+    // 取出当前孔的数据
+    const Hole& hole = weldHoles[m_currentWeldIndex];
+
+    WeldingData data;
+    data.x = hole.center3D.x();
+    data.y = hole.center3D.y();
+    data.z = hole.center3D.z();
+    data.r = hole.radius;
+    data.processId = 1; // 默认工艺编号，可根据需要扩展
+
+    // 界面同步：高亮右侧表格当前行
+    dataTable->selectRow(m_currentWeldIndex);
+    m_statusLabel->setText(QString("正在下发并焊接第 %1 / %2 个管孔...").arg(m_currentWeldIndex + 1).arg(weldHoles.size()));
+
+    // 调用底层执行步骤三 (发工艺并置位 40142=51)
+    m_modbusManager->executeCommand(ModbusManager::Cmd_Start_3DWeld, &data);
+}
+

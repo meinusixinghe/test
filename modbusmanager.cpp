@@ -213,7 +213,7 @@ void ModbusManager::onReadReady()
 
             case WaitReserveReady:
                 if (m_isReserved) {
-                    emit logMessage(QString("步骤3: 预约就绪！写入程序号 %1").arg(m_targetProgram));
+                    emit logMessage(QString("步骤2: 预约就绪！写入程序号 %1").arg(m_targetProgram));
                     writeRegister(Addr::PC_RESERVE_PROG, m_targetProgram);
                     m_startupState = Confirm_PullHigh;
                 }
@@ -256,9 +256,9 @@ void ModbusManager::onReadReady()
             // 步骤 3 & 4: 业务握手状态机
             switch (m_jobState) {
             case WaitingCmdAck:
-                // 循环读取直到 40014 == 1
+                // 收到 40014=1，将 CMD 40142 清零
                 if (cmdResp == 1) {
-                    emit logMessage("步骤3: 机器人收到命令(40014=1)，上位机释放命令(40142=0)");
+                    emit logMessage("步骤3: 机器人收到命令(40014=1)，上位机清零命令(40142=0)...");
                     writeRegister(Addr::PC_CMD, 0);
                     m_jobState = WaitingCmdClear;
                 }
@@ -266,27 +266,33 @@ void ModbusManager::onReadReady()
 
             case WaitingCmdClear:
                 if (cmdResp == 0) {
-                    emit logMessage("步骤3结束: 握手完成，机器人开始移动。");
+                    emit logMessage("步骤3结束: CMD握手完成(40014=0)，机器人开始移动并焊接...");
                     m_jobState = WaitingJobDone;
                 }
                 break;
 
             case WaitingJobDone:
-                // 循环等待动作结束 40014 == 1
+                // 收到焊接完成 40015=1，回复响应 40143=1
                 if (weldDone == 1) {
-                    emit logMessage("步骤4: 收到动作完成信号(40015=1)，发送应答(40143=1)");
+                    emit logMessage("步骤4: 收到焊接完成(40015=1)，回复响应置位(40143=1)...");
                     emit robotWeldCompleted();
                     writeRegister(Addr::PC_WELD_ACK, 1);
-                    m_jobState = WaitingRobotClear;
+                    m_jobState = AckJobDone_CleanLow;
                 }
                 break;
 
-            case WaitingRobotClear:
-                // 机器人收到应答后清零
+            case AckJobDone_CleanLow:
+                // 继续执行下一个前，将响应信号清零 40143=0
+                emit logMessage("步骤4.1: 将响应清零(40143=0)，等待机器人复位完成信号(40015=0)...");
+                writeRegister(Addr::PC_WELD_ACK, 0);
+                m_jobState = WaitingRobotClearDone;
+                break;
+
+            case WaitingRobotClearDone:
+                // 等待机器人清零 40015=0，完成握手！
                 if (weldDone == 0) {
-                    emit logMessage("步骤4结束: 机器人已清零(40015=0)，上位机复位(40143=0)");
-                    writeRegister(Addr::PC_WELD_ACK, 0);
-                    emit jobSentSuccess();
+                    emit logMessage("步骤4结束: 机器人已清零(40015=0)，单孔焊接流程完美闭环！");
+                    emit jobSentSuccess(); // 发送成功信号，去触发下一个孔！
                     m_jobState = JobIdle;
                 }
                 break;
