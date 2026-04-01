@@ -509,7 +509,8 @@ void ModbusManager::processShutdownStep()
         // 第 3 步：松开复位，洗白系统
         m_ctrlWord129 &= ~(1 << ControlBits::ALARM_RESET);
         writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
-
+        writeRegister(Addr::PC_PROCESS_ID, 0);
+        writeRegister(Addr::PC_CMD, 0);
         if (m_isReserved) {
             m_shutdownStep++;
             m_shutdownTimer->start(300); // 开启预约处理

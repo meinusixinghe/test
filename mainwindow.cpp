@@ -1067,30 +1067,20 @@ void MainWindow::onResetClicked()
 // =============================================================================
 void MainWindow::onSelectPositioningMethod()
 {
-    // 检查连接
-    // if (!m_modbusManager->isConnected()) ... (可以加判断，或者由ModbusManager内部处理)
-
     QStringList items;
     items << "10 - 无定位方式启动"
           << "20 - 机械定位方式启动"
           << "30 - 点激光定位方式启动"
           << "40 - 线激光定位方式启动"
           << "50 - 3D相机定位方式扫描启动"
-          << "51 - 3D相机定位方式管焊接启动"; // 默认
+          << "51 - 3D相机定位方式管焊接启动";
 
     bool ok;
     QString item = QInputDialog::getItem(this, "选择定位方式",
                                          "请选择机器人启动模式 (CMD):", items, 0, false, &ok);
     if (ok && !item.isEmpty()) {
-        // 解析选项中的数字
-        int cmdVal = item.split(" - ").first().toInt();
-
-        // 转换为枚举并执行
-        ModbusManager::RobotCmd cmd = static_cast<ModbusManager::RobotCmd>(cmdVal);
-
-        // 执行命令 (nullptr 表示不带焊接数据，仅切换模式/启动)
-        // 如果你需要特定模式带数据，可以在这里加逻辑判断
-        m_modbusManager->executeCommand(cmd, nullptr);
+        m_positioningMethod = item.split(" - ").first().toInt();
+        m_statusLabel->setText(QString("已成功选择定位方式 CMD: %1").arg(m_positioningMethod));
     }
 }
 
@@ -1156,6 +1146,14 @@ void MainWindow::onAutoStateChanged(bool isAuto)
 void MainWindow::sendNextWeldHole()
 {
     if (!m_isWeldingProcessRunning) return;
+
+    if (m_positioningMethod == 0) {
+        QMessageBox::warning(this, "未选择定位方式", "您还没有选择定位方式！\n请先在顶部菜单中选择定位方式（如 51）后再启动连续焊接。");
+        m_isWeldingProcessRunning = false;
+        m_startBtn->setText("启动");
+        m_startBtn->setEnabled(true);
+        return;
+    }
 
     if (m_currentWeldIndex >= weldHoles.size()) {
         m_statusLabel->setText("所有管孔焊接完成！");

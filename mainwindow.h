@@ -135,6 +135,8 @@ private:
 
     int m_currentWeldIndex = 0;                         // 当前正在焊接的管孔索引
     bool m_isWeldingProcessRunning = false;             // 是否正在连续焊接中
+
+    int m_positioningMethod = 0;                        // 保存用户选择的定位方式号，默认为 0
 };
 
 #endif // MAINWINDOW_H
