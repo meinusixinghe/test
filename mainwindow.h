@@ -137,6 +137,7 @@ private:
     bool m_isWeldingProcessRunning = false;             // 是否正在连续焊接中
 
     int m_positioningMethod = 0;                        // 保存用户选择的定位方式号，默认为 0
+    bool m_isPathPlanned = false;
 };
 
 #endif // MAINWINDOW_H

@@ -256,9 +256,8 @@ void ModbusManager::onReadReady()
             // 步骤 3 & 4: 业务握手状态机
             switch (m_jobState) {
             case WaitingCmdAck:
-                // 收到 40014=1，将 CMD 40142 清零
                 if (cmdResp == 1) {
-                    emit logMessage("步骤3: 机器人收到命令(40014=1)，上位机清零命令(40142=0)...");
+                    emit logMessage("步骤3: 机器人收到启动命令(40014=1)，上位机清零命令(40142=0)...");
                     writeRegister(Addr::PC_CMD, 0);
                     m_jobState = WaitingCmdClear;
                 }
@@ -266,33 +265,27 @@ void ModbusManager::onReadReady()
 
             case WaitingCmdClear:
                 if (cmdResp == 0) {
-                    emit logMessage("步骤3结束: CMD握手完成(40014=0)，机器人开始移动并焊接...");
-                    m_jobState = WaitingJobDone;
+                    emit logMessage("步骤3结束: 总启动握手完成(40014=0)，准备下发数据...");
+                    emit cmdHandshakeCompleted(); // 通知 UI 握手结束，可以开始发第一个孔了！
+                    m_jobState = JobIdle;
                 }
                 break;
 
             case WaitingJobDone:
-                // 收到焊接完成 40015=1，回复响应 40143=1
+                // 收到管子焊接完成 40015=1，将 40143 置 1
                 if (weldDone == 1) {
-                    emit logMessage("步骤4: 收到焊接完成(40015=1)，回复响应置位(40143=1)...");
+                    emit logMessage("步骤4: 当前管孔焊接完成(40015=1)，上位机响应置位(40143=1)...");
                     emit robotWeldCompleted();
                     writeRegister(Addr::PC_WELD_ACK, 1);
-                    m_jobState = AckJobDone_CleanLow;
+                    m_jobState = WaitingRobotClearDone;
                 }
                 break;
 
-            case AckJobDone_CleanLow:
-                // 继续执行下一个前，将响应信号清零 40143=0
-                emit logMessage("步骤4.1: 将响应清零(40143=0)，等待机器人复位完成信号(40015=0)...");
-                writeRegister(Addr::PC_WELD_ACK, 0);
-                m_jobState = WaitingRobotClearDone;
-                break;
-
             case WaitingRobotClearDone:
-                // 等待机器人清零 40015=0，完成握手！
+                // 等待机器人看到 40143=1 后将 40015 清零
                 if (weldDone == 0) {
-                    emit logMessage("步骤4结束: 机器人已清零(40015=0)，单孔焊接流程完美闭环！");
-                    emit jobSentSuccess(); // 发送成功信号，去触发下一个孔！
+                    emit logMessage("步骤4结束: 机器人已清零(40015=0)，单孔握手闭环！");
+                    emit jobSentSuccess(); // 通知 UI 去发下一个孔的数据
                     m_jobState = JobIdle;
                 }
                 break;
@@ -330,46 +323,67 @@ void ModbusManager::prepareAndStart()
 }
 
 // ==========================================================
-// 外部调用：执行步骤3
+// 外部调用：步骤3 - 下发总启动命令 (进行 40014 握手)
 // ==========================================================
-void ModbusManager::executeCommand(RobotCmd cmd, const WeldingData *data)
+void ModbusManager::startWeldingProcess(RobotCmd cmd)
+{
+    if (m_modbus->state() != QModbusDevice::ConnectedState) return;
+    if (m_isAlarmActive || !m_isAutoMode) return;
+    if (m_jobState != JobIdle) return;
+
+    m_currentCmdType = cmd;
+    emit logMessage(QString("开始下发总启动命令 (CMD=%1)").arg(cmd));
+
+    writeRegister(Addr::PC_CMD, (quint16)cmd);
+    m_jobState = WaitingCmdAck;
+}
+
+// ==========================================================
+// 外部调用：步骤4 - 下发管孔数据 (进行 40143/40015 握手)
+// ==========================================================
+void ModbusManager::sendWeldHoleData(const WeldingData &data)
 {
     if (m_modbus->state() != QModbusDevice::ConnectedState) return;
 
-    // 报警状态下禁止下发任务
-    if (m_isAlarmActive) {
-        emit errorOccurred("危险！急停/报警中，禁止下发移动指令！");
-        return;
-    }
+    // 1. 先单独发送工艺号 (占用 1 个寄存器)
+    writeRegister(Addr::PC_PROCESS_ID, (quint16)data.processId);
+    emit logMessage("测试：正在向 40144 写入整数 10...");
+    writeRegister(143, 10);
 
-    // 检查是否为自动模式
-    if (!m_isAutoMode) {
-        emit errorOccurred("机器人处于手动模式，禁止下发任务！");
-        return;
-    }
+    // 2. 将 R, Y, X, Z 连续发
+    QVector<quint16> payload;
+    payload.append(floatToRegisters(data.r)); // 放入 R (占据 148, 149)
+    payload.append(floatToRegisters(data.y)); // 放入 Y (占据 150, 151)
+    payload.append(floatToRegisters(data.x)); // 放入 X (占据 152, 153)
+    payload.append(floatToRegisters(data.z)); // 放入 Z (占据 154, 155)
 
-    if (m_jobState != JobIdle) {
-        emit errorOccurred("系统忙: 机器人正在执行上一个任务");
-        return;
-    }
+    // 3. 仅调用 1 次底层网络发送！
+    writeRegisters(Addr::PC_DATA_R, payload);
 
-    m_currentCmdType = cmd;
-    emit logMessage(QString("开始下发工艺参数与动作指令 (CMD=%1)").arg(cmd));
+    // 数据发完后，按照要求将 40143 置 0，并等待 40015 等于 1
+    QTimer::singleShot(100, this, [this](){
+        writeRegister(Addr::PC_WELD_ACK, 0);
+        m_jobState = WaitingJobDone;
+    });
+}
 
-    if (data != nullptr) {
-        // 下发参数 (按照规定的顺序：R -> Y -> X -> Z -> ID)
-        writeRegister(Addr::PC_PROCESS_ID, (quint16)data->processId);
-        writeRegisters(Addr::PC_DATA_R, floatToRegisters(data->r));
-        writeRegisters(Addr::PC_DATA_Y, floatToRegisters(data->y));
-        writeRegisters(Addr::PC_DATA_X, floatToRegisters(data->x));
-        writeRegisters(Addr::PC_DATA_Z, floatToRegisters(data->z));
-    }
+// ==========================================================
+// 外部调用：结束连续焊接
+// ==========================================================
+void ModbusManager::sendWeldingFinished()
+{
+    if (m_modbus->state() != QModbusDevice::ConnectedState) return;
 
-    // 稍作延时，确保参数全部写入完成后下发动作命令 40142
-    QTimer::singleShot(200, this, [this](){
-        emit logMessage(QString("下发动作命令: 40142 = %1").arg(m_currentCmdType));
-        writeRegister(Addr::PC_CMD, (quint16)m_currentCmdType);
-        m_jobState = WaitingCmdAck; // 推入状态机
+    emit logMessage("所有管孔焊接完成，下发 XYZR 全 0 数据...");
+    writeRegister(Addr::PC_PROCESS_ID, 0);
+    writeRegisters(Addr::PC_DATA_R, floatToRegisters(0.0f));
+    writeRegisters(Addr::PC_DATA_Y, floatToRegisters(0.0f));
+    writeRegisters(Addr::PC_DATA_X, floatToRegisters(0.0f));
+    writeRegisters(Addr::PC_DATA_Z, floatToRegisters(0.0f));
+
+    QTimer::singleShot(100, this, [this](){
+        writeRegister(Addr::PC_WELD_ACK, 0);
+        m_jobState = JobIdle;
     });
 }
 
@@ -429,8 +443,8 @@ QVector<quint16> ModbusManager::floatToRegisters(float val)
     QVector<quint16> regs;
     union { float f; uint32_t i; } u;
     u.f = val;
-    regs.append((quint16)(u.i >> 16));    // Big Endian 高位
     regs.append((quint16)(u.i & 0xFFFF)); // 低位
+    regs.append((quint16)(u.i >> 16));    // 高位
     return regs;
 }
 

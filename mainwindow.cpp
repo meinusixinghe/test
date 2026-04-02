@@ -69,7 +69,14 @@ MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
         }
     });
 
-    // 4.3 【连续焊接发动机】：单孔闭环完成，自动触发下一个！
+    // 4.3 收到总命令握手完成信号，立刻下发第一个孔的数据
+    connect(m_modbusManager, &ModbusManager::cmdHandshakeCompleted, this, [this]() {
+        if (m_isWeldingProcessRunning) {
+            sendNextWeldHole();
+        }
+    });
+
+    // 4.4 单孔闭环完成，自动触发下一个！
     connect(m_modbusManager, &ModbusManager::jobSentSuccess, this, [this]() {
         if (m_isWeldingProcessRunning) {
             m_currentWeldIndex++; // 索引加 1
@@ -519,6 +526,8 @@ void MainWindow::loadDrawingData(const QString &filePath)
     if (m_coordManager) {                                                                               // 判断指针是否有效
         m_coordManager->initialize(renderArea, dataTable, weldHoles, mainPlateHole, m_statusLabel);     // 调用初始化方法
     }
+
+    m_isPathPlanned = false;
 }
 
 // void MainWindow::loadJSONData()
@@ -848,6 +857,7 @@ void MainWindow::onPathPlanningTriggered()
 
     // 4. 更新数据
     weldHoles = sortedHoles;
+    m_isPathPlanned = true;
 
     // 5. 刷新界面 (表格 + 绘图区)
     // 更新表格
@@ -1023,7 +1033,12 @@ void MainWindow::onStartClicked()
         m_modbusManager->prepareAndStart();
     }
     else if (m_startBtn->text() == "启动") {
-        // 按照您的要求：到达启动之后，不再跑步骤2，而是持续跑步骤3！
+        // 如果是点击启动，严格检查是否做过路径规划！
+        if (!m_isPathPlanned) {
+            QMessageBox::warning(this, "操作提示", "启动失败：必须先完成管孔排序！\n请点击上方工具栏或“操作”菜单中的“自动焊接路径规划”。");
+            return;
+        }
+        // 到达启动之后，不再跑步骤2，而是持续跑步骤3！
         if (weldHoles.isEmpty()) {
             QMessageBox::warning(this, "警告", "没有管孔数据可供焊接！");
             return;
@@ -1034,7 +1049,8 @@ void MainWindow::onStartClicked()
         m_startBtn->setText("连续焊接中...");
         m_startBtn->setEnabled(false); // 防止中途乱点
 
-        sendNextWeldHole(); // 发射第一个孔！
+        ModbusManager::RobotCmd cmd = static_cast<ModbusManager::RobotCmd>(m_positioningMethod);
+        m_modbusManager->startWeldingProcess(cmd);
     }
 }
 
@@ -1147,24 +1163,18 @@ void MainWindow::sendNextWeldHole()
 {
     if (!m_isWeldingProcessRunning) return;
 
-    if (m_positioningMethod == 0) {
-        QMessageBox::warning(this, "未选择定位方式", "您还没有选择定位方式！\n请先在顶部菜单中选择定位方式（如 51）后再启动连续焊接。");
-        m_isWeldingProcessRunning = false;
-        m_startBtn->setText("启动");
-        m_startBtn->setEnabled(true);
-        return;
-    }
-
     if (m_currentWeldIndex >= weldHoles.size()) {
-        m_statusLabel->setText("所有管孔焊接完成！");
+        m_statusLabel->setText("所有管孔焊接完成！下发全 0 数据...");
         QMessageBox::information(this, "完成", "恭喜，所有管孔已连续焊接完毕！");
         m_isWeldingProcessRunning = false;
         m_startBtn->setText("启动");
         m_startBtn->setEnabled(true);
+
+        // 【终结】：所有管子完成后下发 XYZR 半径数据全为 0
+        m_modbusManager->sendWeldingFinished();
         return;
     }
 
-    // 取出当前孔的数据
     const Hole& hole = weldHoles[m_currentWeldIndex];
 
     WeldingData data;
@@ -1172,13 +1182,15 @@ void MainWindow::sendNextWeldHole()
     data.y = hole.center3D.y();
     data.z = hole.center3D.z();
     data.r = hole.radius;
-    data.processId = 1; // 默认工艺编号，可根据需要扩展
+    data.processId = 1;
 
-    // 界面同步：高亮右侧表格当前行
     dataTable->selectRow(m_currentWeldIndex);
-    m_statusLabel->setText(QString("正在下发并焊接第 %1 / %2 个管孔...").arg(m_currentWeldIndex + 1).arg(weldHoles.size()));
+    m_statusLabel->setText(QString("正在下发并焊接第 %1 / %2 个管孔 (CMD: %3)...")
+                               .arg(m_currentWeldIndex + 1)
+                               .arg(weldHoles.size())
+                               .arg(m_positioningMethod));
 
-    // 调用底层执行步骤三 (发工艺并置位 40142=51)
-    m_modbusManager->executeCommand(ModbusManager::Cmd_Start_3DWeld, &data);
+    // 调用专属的管孔数据下发函数
+    m_modbusManager->sendWeldHoleData(data);
 }
 
