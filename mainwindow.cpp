@@ -43,7 +43,7 @@ MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
     connect(m_modbusManager, &ModbusManager::servoStateChanged, this, &MainWindow::onServoStateChanged);
     connect(m_modbusManager, &ModbusManager::autoStateChanged, this, &MainWindow::onAutoStateChanged);
 
-    // 4. 【核心增强】业务逻辑信号绑定 (包含连续焊接控制)
+    // 4. 业务逻辑信号绑定
 
     // 4.1 错误拦截：断网或急停时，除了弹窗，还必须中断连续焊接状态
     connect(m_modbusManager, &ModbusManager::errorOccurred, this, [this](QString msg){
@@ -55,6 +55,7 @@ MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
             m_isWeldingProcessRunning = false;
             m_startBtn->setText("预约");
             m_startBtn->setEnabled(true);
+            m_pauseBtn->setVisible(false);
         }
     });
 
@@ -63,9 +64,10 @@ MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
         m_startBtn->setText(text);
 
         // 如果底层因为某种原因退回到了"预约"状态，解除连续焊接禁用
-        if (text == "预约") {
+        if (text == "预约"|| text == "启动") {
             m_isWeldingProcessRunning = false;
             m_startBtn->setEnabled(true);
+            m_pauseBtn->setVisible(false);
         }
     });
 
@@ -79,6 +81,13 @@ MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
     // 4.4 单孔闭环完成，自动触发下一个！
     connect(m_modbusManager, &ModbusManager::jobSentSuccess, this, [this]() {
         if (m_isWeldingProcessRunning) {
+            for (int col = 0; col < dataTable->columnCount(); ++col) {
+                if (QTableWidgetItem* item = dataTable->item(m_currentWeldIndex, col)) {
+                    item->setBackground(QBrush(QColor(144, 238, 144)));
+                    item->setForeground(QBrush(Qt::black));
+                }
+            }
+            renderArea->setHoleCompleted(m_currentWeldIndex);
             m_currentWeldIndex++; // 索引加 1
             sendNextWeldHole();   // 自动调取下一行数据发送给机器人
         }
@@ -1000,7 +1009,7 @@ void MainWindow::onModbusStateChanged(int state)
         m_statusLabel->setText(QString("已连接到机器人: %1:%2").arg(m_lastIp).arg(m_lastPort));
 
         m_startBtn->setVisible(true);
-        m_pauseBtn->setVisible(true);
+        m_pauseBtn->setVisible(false);
         m_resetBtn->setVisible(true);
     }
     else if (state == 1) { // 正在连接 (黄色)
@@ -1048,6 +1057,24 @@ void MainWindow::onStartClicked()
         m_isWeldingProcessRunning = true;
         m_startBtn->setText("连续焊接中...");
         m_startBtn->setEnabled(false); // 防止中途乱点
+
+        m_pauseBtn->setVisible(true);
+        m_pauseBtn->setChecked(false); // 确保按钮处于没被按下的状态
+        m_pauseBtn->setText("暂停");
+
+        renderArea->clearCompletedHoles();
+        for (int r = 0; r < dataTable->rowCount(); ++r) {
+            for (int c = 0; c < dataTable->columnCount(); ++c) {
+                if (QTableWidgetItem* item = dataTable->item(r, c)) {
+                    item->setForeground(QBrush(Qt::black));
+                    if (c == 3) {
+                        item->setBackground(QBrush(QColor(245, 245, 245)));
+                    } else {
+                        item->setBackground(QBrush(Qt::white));
+                    }
+                }
+            }
+        }
 
         ModbusManager::RobotCmd cmd = static_cast<ModbusManager::RobotCmd>(m_positioningMethod);
         m_modbusManager->startWeldingProcess(cmd);
@@ -1169,8 +1196,9 @@ void MainWindow::sendNextWeldHole()
         m_isWeldingProcessRunning = false;
         m_startBtn->setText("启动");
         m_startBtn->setEnabled(true);
+        m_pauseBtn->setVisible(false);
 
-        // 【终结】：所有管子完成后下发 XYZR 半径数据全为 0
+        // 所有管子完成后下发 XYZR 半径数据全为 0
         m_modbusManager->sendWeldingFinished();
         return;
     }

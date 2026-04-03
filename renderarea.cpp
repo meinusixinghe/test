@@ -44,6 +44,7 @@ void RenderArea::setData(const QVector<Hole> &h,const Hole &mPH,const QPolygonF 
     m_panOffsetDXF = QPointF(0.0, 0.0);                 // 用户拖拽产生的平移量
     m_initialContentOffset = QPointF(0.0, 0.0);         // 首次加载时，将内容几何中心移到原点的偏移量（实现居中的核心）
 
+    m_completedHoles.clear();
     // 重置边界
     m_dxfMinBound = QPointF(0.0, 0.0);
     m_dxfMaxBound = QPointF(0.0, 0.0);
@@ -99,6 +100,7 @@ void RenderArea::paintEvent(QPaintEvent *event)
     for (int i = 0; i < weldHoles.size(); ++i) {
         const Hole &hole = weldHoles[i];
         bool isHighlighted = (i == m_highlightIndex);
+        bool isCompleted = m_completedHoles.contains(i);
 
         // 4.1 绘制圆 (几何体：直接画)
         if (isHighlighted) {
@@ -107,7 +109,13 @@ void RenderArea::paintEvent(QPaintEvent *event)
             highlightPen.setWidth(3);
             painter.setPen(highlightPen);
             painter.setBrush(QBrush(Qt::yellow, Qt::Dense6Pattern));
-        } else {
+        }else if (isCompleted) {
+            QPen completePen(Qt::darkGreen, 0);
+            completePen.setCosmetic(true);
+            completePen.setWidth(2);
+            painter.setPen(completePen);
+            painter.setBrush(QBrush(QColor(144, 238, 144))); // 浅绿色 (LightGreen)
+        }else {
             QPen holePen(Qt::blue, 0);
             holePen.setCosmetic(true);
             holePen.setWidth(1);
@@ -404,5 +412,23 @@ void RenderArea::setUserCoordinatePoints(const QPointF& origin, const QPointF& x
 void RenderArea::setShowUserCoordinate(bool show)
 {
     m_showUserCoordinate = show;
+    update();
+}
+
+// ----------------------------------------------------
+// 标记单个孔洞为已完成，并触发重绘
+// ----------------------------------------------------
+void RenderArea::setHoleCompleted(int index)
+{
+    m_completedHoles.insert(index);
+    update();
+}
+
+// ----------------------------------------------------
+// 清空所有孔洞的完成状态
+// ----------------------------------------------------
+void RenderArea::clearCompletedHoles()
+{
+    m_completedHoles.clear();
     update();
 }

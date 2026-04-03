@@ -72,7 +72,6 @@ public:
 
     // 核心功能接口
     void prepareAndStart();                                                 // 执行步骤1和步骤2 (系统就绪与启动)
-    void executeCommand(RobotCmd cmd, const WeldingData *data = nullptr);   // 执行步骤3和4 (业务握手)
     void resetAlarm();                                                      // 解除报警
     void startWeldingProcess(RobotCmd cmd);                                 // 步骤3：仅下发总启动命令
     void sendWeldHoleData(const WeldingData &data);                         // 步骤4：下发管孔数据并置位 40143=0
@@ -113,15 +112,9 @@ private:
         StartIdle,
         CheckSafety,                                                        // 检查报警/急停并发送伺服脉冲
         WaitServoReady,                                                     // 等待伺服就绪并发送加载脉冲
-        PulseReserve_PullLow,                                               // 节拍1：发 0
-        PulseReserve_PullHigh,                                              // 节拍2：发 1
-        PulseReserve_CleanLow,                                              // 节拍3：发 0
         WaitReserveReady,
-        Confirm_PullHigh,                                                   // 节拍4：确认预约发 1
-        Confirm_CleanLow,                                                   // 节拍5：确认预约发 0
-        ToggleReservation_PulseHigh,
         WaitProgramLoaded,                                                  // 等待程序加载并发送运行脉冲
-        WaitProgramRunning                                                  // 等待程序运行
+        WaitProgramRunning,                                                 // 等待程序运行
     };
     StartupState m_startupState = StartIdle;
     int m_targetProgram = 1;
@@ -139,7 +132,6 @@ private:
     JobState m_jobState = JobIdle;
 
     quint16 m_ctrlWord129 = 0;                                              // 缓存 40129 的值
-    int m_currentCmdType;
     bool m_isAlarmActive = false;                                           // 记录当前是否处于报警/急停状态
     bool m_lastServoState = false;                                          // 记录上一次的伺服状态
     bool m_isAutoMode = false;                                              // 记录当前是否处于自动模式
