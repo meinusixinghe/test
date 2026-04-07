@@ -32,22 +32,23 @@ RenderArea::RenderArea(QWidget *parent): QWidget(parent),
 // 讲解：setData，加载孔洞和轮廓数据
 // 核心：接收外部数据后，重置所有变换状态（避免旧数据的缩放/平移影响新数据），并触发重绘
 // ----------------------------------------------------
-void RenderArea::setData(const QVector<Hole> &h,const Hole &mPH,const QPolygonF &platePoly, bool isRect)
+void RenderArea::setData(const QVector<Hole> &h,const Hole &mPH,const QPolygonF &platePoly, bool isRect, bool resetView)
 {
     weldHoles = h;                                      // 管孔数据（不包含主管板圆）
     mainPlateHole = mPH;                                // 管板圆
     m_mainPlatePolygon = platePoly;                     // 存多边形
     m_isRectangular = isRect;                           // 存标志位
 
-    // 每次加载新数据时，重置所有变换（恢复初始状态）
-    m_scaleFactor = 1.0;                                // 缩放因子
-    m_panOffsetDXF = QPointF(0.0, 0.0);                 // 用户拖拽产生的平移量
-    m_initialContentOffset = QPointF(0.0, 0.0);         // 首次加载时，将内容几何中心移到原点的偏移量（实现居中的核心）
+    if (resetView) {
+        m_scaleFactor = 1.0;
+        m_panOffsetDXF = QPointF(0.0, 0.0);
+        m_initialContentOffset = QPointF(0.0, 0.0);
 
-    m_completedHoles.clear();
-    // 重置边界
-    m_dxfMinBound = QPointF(0.0, 0.0);
-    m_dxfMaxBound = QPointF(0.0, 0.0);
+        m_completedHoles.clear(); // 只有这时才清空已完成的列表
+
+        m_dxfMinBound = QPointF(0.0, 0.0);
+        m_dxfMaxBound = QPointF(0.0, 0.0);
+    }
 
     // 触发重绘
     update();

@@ -81,12 +81,14 @@ MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
     // 4.4 单孔闭环完成，自动触发下一个！
     connect(m_modbusManager, &ModbusManager::jobSentSuccess, this, [this]() {
         if (m_isWeldingProcessRunning) {
+            dataTable->blockSignals(true);
             for (int col = 0; col < dataTable->columnCount(); ++col) {
                 if (QTableWidgetItem* item = dataTable->item(m_currentWeldIndex, col)) {
                     item->setBackground(QBrush(QColor(144, 238, 144)));
                     item->setForeground(QBrush(Qt::black));
                 }
             }
+            dataTable->blockSignals(false);
             renderArea->setHoleCompleted(m_currentWeldIndex);
             m_currentWeldIndex++; // 索引加 1
             sendNextWeldHole();   // 自动调取下一行数据发送给机器人
@@ -654,7 +656,7 @@ void MainWindow::handleTableCellChanged(int row, int column)
     }
 
     // 更新绘图区
-    renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate);
+    renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate, false);
 }
 
 // ----------------------------------------------------
@@ -884,7 +886,7 @@ void MainWindow::onPathPlanningTriggered()
     connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
 
     // 更新绘图区
-    renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate);
+    renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate, false);
 
     QMessageBox::information(this, "成功", "路径规划已完成，管孔编号已更新。");
 
@@ -1063,6 +1065,7 @@ void MainWindow::onStartClicked()
         m_pauseBtn->setText("暂停");
 
         renderArea->clearCompletedHoles();
+        dataTable->blockSignals(true);
         for (int r = 0; r < dataTable->rowCount(); ++r) {
             for (int c = 0; c < dataTable->columnCount(); ++c) {
                 if (QTableWidgetItem* item = dataTable->item(r, c)) {
@@ -1075,7 +1078,7 @@ void MainWindow::onStartClicked()
                 }
             }
         }
-
+        dataTable->blockSignals(false);
         ModbusManager::RobotCmd cmd = static_cast<ModbusManager::RobotCmd>(m_positioningMethod);
         m_modbusManager->startWeldingProcess(cmd);
     }
@@ -1191,15 +1194,18 @@ void MainWindow::sendNextWeldHole()
     if (!m_isWeldingProcessRunning) return;
 
     if (m_currentWeldIndex >= weldHoles.size()) {
+
         m_statusLabel->setText("所有管孔焊接完成！下发全 0 数据...");
-        QMessageBox::information(this, "完成", "恭喜，所有管孔已连续焊接完毕！");
+        m_modbusManager->sendWeldingFinished();
+
         m_isWeldingProcessRunning = false;
         m_startBtn->setText("启动");
         m_startBtn->setEnabled(true);
         m_pauseBtn->setVisible(false);
 
-        // 所有管子完成后下发 XYZR 半径数据全为 0
-        m_modbusManager->sendWeldingFinished();
+        QTimer::singleShot(100, this, [this](){
+            QMessageBox::information(this, "完成", "恭喜，所有管孔已连续焊接完毕！");
+        });
         return;
     }
 

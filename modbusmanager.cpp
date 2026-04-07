@@ -359,13 +359,13 @@ void ModbusManager::sendWeldHoleData(const WeldingData &data)
 
     // 2. 将 R, Y, X, Z 连续发
     QVector<quint16> payload;
-    payload.append(floatToRegisters(data.r)); // 放入 R (占据 148, 149)
-    payload.append(floatToRegisters(data.y)); // 放入 Y (占据 150, 151)
-    payload.append(floatToRegisters(data.x)); // 放入 X (占据 152, 153)
-    payload.append(floatToRegisters(data.z)); // 放入 Z (占据 154, 155)
+    payload.append(floatToRegisters(data.x)); // 放入 X
+    payload.append(floatToRegisters(data.y)); // 放入 Y
+    payload.append(floatToRegisters(data.z)); // 放入 Z
+    payload.append(floatToRegisters(data.r)); // 放入 R
 
     // 3. 仅调用 1 次底层网络发送！
-    writeRegisters(Addr::PC_DATA_R, payload);
+    writeRegisters(Addr::PC_DATA_X, payload);
 
     // 数据发完后，按照要求将 40143 置 0，并等待 40015 等于 1
     QTimer::singleShot(100, this, [this](){
@@ -389,7 +389,7 @@ void ModbusManager::sendWeldingFinished()
     zeroPayload.append(floatToRegisters(0.0f));
     zeroPayload.append(floatToRegisters(0.0f));
     zeroPayload.append(floatToRegisters(0.0f));
-    writeRegisters(Addr::PC_DATA_R, zeroPayload);
+    writeRegisters(Addr::PC_DATA_X, zeroPayload);
 
     QTimer::singleShot(100, this, [this](){
         writeRegister(Addr::PC_WELD_ACK, 0);
@@ -551,11 +551,11 @@ void ModbusManager::processShutdownStep()
         // 第 5 步：清零 XYZR 浮点数坐标 (40149 ~ 40156)
         {
             QVector<quint16> zeroPayload;
-            zeroPayload.append(floatToRegisters(0.0f)); // R
-            zeroPayload.append(floatToRegisters(0.0f)); // Y
             zeroPayload.append(floatToRegisters(0.0f)); // X
+            zeroPayload.append(floatToRegisters(0.0f)); // Y
             zeroPayload.append(floatToRegisters(0.0f)); // Z
-            writeRegisters(Addr::PC_DATA_R, zeroPayload);
+            zeroPayload.append(floatToRegisters(0.0f)); // R
+            writeRegisters(Addr::PC_DATA_X, zeroPayload);
         }
         m_shutdownStep++;
         m_shutdownTimer->start(100);

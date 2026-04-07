@@ -41,10 +41,10 @@ public:
         static const int PC_CMD          = 141; // 40142 (动作命令 CMD)
         static const int PC_WELD_ACK     = 142; // 40143 (管焊接完成响应)
 
-        static const int PC_DATA_R       = 148; // 40149 (半径 Real)
+        static const int PC_DATA_X       = 148; // 40149 (X坐标 Real)
         static const int PC_DATA_Y       = 150; // 40151 (Y坐标 Real)
-        static const int PC_DATA_X       = 152; // 40153 (X坐标 Real)
-        static const int PC_DATA_Z       = 154; // 40155 (Z坐标 Real)
+        static const int PC_DATA_Z       = 152; // 40153 (Z坐标 Real)
+        static const int PC_DATA_R       = 154; // 40155 (半径 Real)
 
         // --- 机器人 反馈 ---
         static const int ROBOT_STATUS    = 0;   // 40001 (状态位)

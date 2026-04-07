@@ -18,7 +18,7 @@ class RenderArea : public QWidget
 public:
     explicit RenderArea(QWidget *parent = nullptr);
 
-    void setData(const QVector<Hole> &h,const Hole &mPH,const QPolygonF &platePoly, bool isRect);
+    void setData(const QVector<Hole> &h,const Hole &mPH,const QPolygonF &platePoly, bool isRect, bool resetView = true);
 
     // 设置要高亮显示的孔洞索引
     void setHighlightedIndex(int index);
