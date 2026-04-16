@@ -60,6 +60,7 @@ public:
         static const int ALARM_RESET     = 3;  // Bit 3: 报警复位
         static const int EXT_ALARM       = 6;  // Bit 6: 外部报警 (用于强制下电)
         static const int RESERVE_CONFIRM = 9;  // Bit 9: 确定程序预约
+        static const int RESERVE_CANCEL = 10; // Bit 10: 取消程序预约
         static const int RESERVE_ENABLE  = 11; // Bit 11: 程序启停
         static const int SERVO_ENABLE    = 12; // Bit 12: 伺服使能脉冲
     };
@@ -135,7 +136,9 @@ private:
     bool m_isAlarmActive = false;                                           // 记录当前是否处于报警/急停状态
     bool m_lastServoState = false;                                          // 记录上一次的伺服状态
     bool m_isAutoMode = false;                                              // 记录当前是否处于自动模式
-    bool m_isReserved = false;                                              // 记录机器人真实的预约状态
+    bool m_isReserved = false;                                              // 记录机器人的预约状态
+    int m_timeoutCounter = 0;
+    int m_retryCounter = 0;
     QTimer* m_shutdownTimer = nullptr;                                      // 关机专用定时器
     int m_shutdownStep = 0;                                                 // 关机当前步数
 

@@ -104,7 +104,7 @@ void ModbusManager::onReadReady()
             bool alarm       = (status1 & (1 << 4));
             bool estop       = (status1 & (1 << 5));
             bool progRunning = (status1 & (1 << 6));
-            bool progLoadDone  = (status1 & (1 << 11));
+            // bool progLoadDone  = (status1 & (1 << 11));
             m_isReserved = (status1 & (1 << 13));
 
             // 全局安全拦截机制 (急停/报警)
@@ -159,6 +159,7 @@ void ModbusManager::onReadReady()
             }
 
             // 步骤 1 & 2: 启动状态机 (系统就绪与主程序加载)
+            // 发伺服使能脉冲(40129.Bit12)
             switch (m_startupState) {
             case CheckSafety:
                 if (!alarm && !estop) {
@@ -171,26 +172,27 @@ void ModbusManager::onReadReady()
                 }
                 break;
 
+            // 发送开启程序预约启停脉冲(40129.Bit11)
             case WaitServoReady:
                 if (servoStatus) {
                     if (!progRunning) {
                         if (!m_isReserved) {
-                            emit logMessage("步骤2: 伺服就绪，使用绝对定时器精准发送开启预约(Bit11) 0->1->0 脉冲...");
+                            emit logMessage("步骤2: 伺服就绪，发送开启预约脉冲(40129.Bit11)");
                             m_startupState = WaitProgramLoaded;
-                            // 【节拍 1】：强制拉低 (发0)
+
                             m_ctrlWord129 &= ~(1 << ControlBits::RESERVE_ENABLE);
                             writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
-                            // 【节拍 2】：延时 200ms 后拉高 (发1)
+                            // 延时 200ms 后拉高
                             QTimer::singleShot(200, this, [this](){
-                                if (m_startupState != WaitProgramLoaded) return; // 遇到急停立刻打断！
+                                if (m_startupState != WaitProgramLoaded) return;
                                 m_ctrlWord129 |= (1 << ControlBits::RESERVE_ENABLE);
                                 writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
-                                // 【节拍 3】：延时 200ms 后拉低 (发0)
+                                // 延时 200ms 后拉低
                                 QTimer::singleShot(200, this, [this](){
                                     if (m_startupState != WaitProgramLoaded) return;
                                     m_ctrlWord129 &= ~(1 << ControlBits::RESERVE_ENABLE);
                                     writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
-                                    // 脉冲完美打完，推入下一步死等预约灯亮
+                                    m_timeoutCounter = 0;
                                     m_startupState = WaitReserveReady;
                                 });
                             });
@@ -207,51 +209,65 @@ void ModbusManager::onReadReady()
 
             case WaitReserveReady:
                 if (m_isReserved) {
-                    emit logMessage(QString("步骤2: 预约就绪！写入程序号 %1 并等待系统加载...").arg(m_targetProgram));
+                    emit logMessage(QString("步骤2: 预约就绪，写入程序号 %1 并等待系统加载").arg(m_targetProgram));
                     writeRegister(Addr::PC_RESERVE_PROG, m_targetProgram);
-
                     m_startupState = WaitProgramLoaded;
-
-                    // 等待 600ms 让机器人XPL系统加载程序
-                    QTimer::singleShot(600, this, [this](){
+                    m_retryCounter = 0;
+                    // 确认预约程序 40129.9拉高
+                    QTimer::singleShot(200, this, [this](){
                         if (m_startupState != WaitProgramLoaded) return;
-
-                        emit logMessage(">> 确认脉冲 1/3: 强制拉低 (发 0)...");
-                        m_ctrlWord129 &= ~(1 << ControlBits::RESERVE_CONFIRM);
+                        m_ctrlWord129 |= (1 << ControlBits::RESERVE_CONFIRM);
                         writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
-
-                        // 200ms 后拉高 (发1)
+                        // 200ms后，确认预约程序 40129.9拉低
                         QTimer::singleShot(200, this, [this](){
                             if (m_startupState != WaitProgramLoaded) return;
-
-                            emit logMessage(">> 确认脉冲 2/3: 制造上升沿 (发 1)...");
-                            m_ctrlWord129 |= (1 << ControlBits::RESERVE_CONFIRM);
+                            m_ctrlWord129 &= ~(1 << ControlBits::RESERVE_CONFIRM);
                             writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
-
-                            // 200ms 后拉低 (发0)
-                            QTimer::singleShot(200, this, [this](){
-                                if (m_startupState != WaitProgramLoaded) return;
-
-                                emit logMessage(">> 确认脉冲 3/3: 恢复低电平 (发 0)，等待运行...");
-                                m_ctrlWord129 &= ~(1 << ControlBits::RESERVE_CONFIRM);
-                                writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
-
-                                m_startupState = WaitProgramRunning;
-                            });
+                            m_timeoutCounter = 0;
+                            m_startupState = WaitProgramRunning;
                         });
                     });
+                }else {
+                    m_timeoutCounter++;
+                    if (m_timeoutCounter > 15) {
+                        m_timeoutCounter = 0;
+                        m_retryCounter++;
+                        if (m_retryCounter >= 3) {
+                            emit logMessage(">> 严重超时：程序加载连续 3 次(共9秒)失败！回到 CheckSafety 重新开始...");
+                            m_startupState = CheckSafety;
+                            m_retryCounter = 0;
+                        } else {
+                            emit logMessage(QString(">> 警告：等待程序加载超时(3秒)，进行第 %1 次重新发送确认脉冲...").arg(m_retryCounter));
+                            m_startupState = WaitServoReady;
+                        }
+                    }
+                }
+                break;
+
+            case WaitProgramRunning:
+                if(progLoaded == 1 && progRunning){
+                    emit logMessage("步骤2完成：机器人主程序空跑就绪。");
+                    emit startButtonTextChanged("启动"); // UI 变化
+                    m_startupState = StartIdle; // 启动流程结束
+                    m_retryCounter = 0;
+                }else {
+                    m_timeoutCounter++;
+                    if (m_timeoutCounter > 15) {
+                        m_timeoutCounter = 0;
+                        m_retryCounter++;
+                        if (m_retryCounter >= 3) {
+                            emit logMessage(">> 严重超时：程序加载连续 3 次(共9秒)失败！回到 CheckSafety 重新开始...");
+                            m_startupState = CheckSafety;
+                            m_retryCounter = 0;
+                        } else {
+                            emit logMessage(QString(">> 警告：等待程序加载超时(3秒)，进行第 %1 次重新发送确认脉冲...").arg(m_retryCounter));
+                            m_startupState = WaitReserveReady;
+                        }
+                    }
                 }
                 break;
 
             case WaitProgramLoaded:
-                break;
-
-            case WaitProgramRunning:
-                if (progRunning) {
-                    emit logMessage("步骤2完成：机器人主程序空跑就绪。");
-                    emit startButtonTextChanged("启动"); // UI 变化
-                    m_startupState = StartIdle; // 启动流程结束
-                }
                 break;
 
             default: break;
@@ -270,7 +286,7 @@ void ModbusManager::onReadReady()
             case WaitingCmdClear:
                 if (cmdResp == 0) {
                     emit logMessage("步骤3结束: 总启动握手完成(40014=0)，准备下发数据...");
-                    emit cmdHandshakeCompleted(); // 通知 UI 握手结束，可以开始发第一个孔了！
+                    emit cmdHandshakeCompleted();
                     m_jobState = JobIdle;
                 }
                 break;
@@ -323,6 +339,8 @@ void ModbusManager::prepareAndStart()
     // 拦截重复点击
     if (m_startupState != StartIdle) return;
     emit logMessage("开始系统就绪与启动流程");
+    m_timeoutCounter = 0;
+    m_retryCounter = 0;
     m_startupState = CheckSafety;
 
     m_ctrlWord129 = 0;
@@ -333,7 +351,7 @@ void ModbusManager::prepareAndStart()
 }
 
 // ==========================================================
-// 外部调用：步骤3 - 下发总启动命令 (进行 40014 握手)
+// 外部调用：步骤 3 - 下发总启动命令 (进行 40014 握手)
 // ==========================================================
 void ModbusManager::startWeldingProcess(RobotCmd cmd)
 {
@@ -354,17 +372,17 @@ void ModbusManager::sendWeldHoleData(const WeldingData &data)
 {
     if (m_modbus->state() != QModbusDevice::ConnectedState) return;
 
-    // 1. 先单独发送工艺号 (占用 1 个寄存器)
+    // 1. 先单独发送工艺号
     writeRegister(Addr::PC_PROCESS_ID, (quint16)data.processId);
 
     // 2. 将 R, Y, X, Z 连续发
     QVector<quint16> payload;
-    payload.append(floatToRegisters(data.x)); // 放入 X
-    payload.append(floatToRegisters(data.y)); // 放入 Y
-    payload.append(floatToRegisters(data.z)); // 放入 Z
-    payload.append(floatToRegisters(data.r)); // 放入 R
+    payload.append(floatToRegisters(data.x));
+    payload.append(floatToRegisters(data.y));
+    payload.append(floatToRegisters(data.z));
+    payload.append(floatToRegisters(data.r));
 
-    // 3. 仅调用 1 次底层网络发送！
+    // 3. 仅调用 1 次底层网络发送
     writeRegisters(Addr::PC_DATA_X, payload);
 
     // 数据发完后，按照要求将 40143 置 0，并等待 40015 等于 1
@@ -405,7 +423,7 @@ void ModbusManager::resetAlarm()
 {
     if (m_modbus->state() == QModbusDevice::ConnectedState) {
         emit logMessage("下发系统报警复位脉冲 (40129.Bit3)");
-        pulseControlWord129(ControlBits::ALARM_RESET, 300); // 300ms 脉冲
+        pulseControlWord129(ControlBits::ALARM_RESET, 300);
     }
 }
 
@@ -484,7 +502,6 @@ void ModbusManager::safeShutdown()
         emit shutdownFinished(); // 没连上直接允许退出
         return;
     }
-
     emit logMessage("执行安全退出：启动步进序列...");
 
     // 停止日常轮询，独占网络
@@ -512,20 +529,20 @@ void ModbusManager::processShutdownStep()
 {
     switch (m_shutdownStep) {
     case 0:
-        // 第 1 步：发暂停 (Bit 2) 逼停机械臂
+        // 第 1 步：发暂停 (Bit 2)机械臂
         m_ctrlWord129 |= (1 << ControlBits::PAUSE_PULSE);
         writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
         m_shutdownStep++;
-        m_shutdownTimer->start(200);
+        m_shutdownTimer->start(100);
         break;
 
     case 1:
-        // 第 2 步：发复位 (Bit 3) 彻底打断程序
+        // 第 2 步：发复位 (Bit 3)打断程序
         m_ctrlWord129 &= ~(1 << ControlBits::PAUSE_PULSE);
         m_ctrlWord129 |= (1 << ControlBits::ALARM_RESET);
         writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
         m_shutdownStep++;
-        m_shutdownTimer->start(400);
+        m_shutdownTimer->start(100);
         break;
 
     case 2:
@@ -538,7 +555,7 @@ void ModbusManager::processShutdownStep()
 
     case 3:
         // 第 4 步：清零参数 (40139程序号, 40141工艺号, 40142CMD, 40143响应)
-        writeRegister(Addr::PC_RESERVE_PROG, 0); // 清零 40139
+        writeRegister(Addr::PC_RESERVE_PROG, 0);
         {
             QVector<quint16> cmds(4, 0);
             writeRegisters(Addr::PC_PROCESS_ID, cmds);
@@ -551,10 +568,10 @@ void ModbusManager::processShutdownStep()
         // 第 5 步：清零 XYZR 浮点数坐标 (40149 ~ 40156)
         {
             QVector<quint16> zeroPayload;
-            zeroPayload.append(floatToRegisters(0.0f)); // X
-            zeroPayload.append(floatToRegisters(0.0f)); // Y
-            zeroPayload.append(floatToRegisters(0.0f)); // Z
-            zeroPayload.append(floatToRegisters(0.0f)); // R
+            zeroPayload.append(floatToRegisters(0.0f));
+            zeroPayload.append(floatToRegisters(0.0f));
+            zeroPayload.append(floatToRegisters(0.0f));
+            zeroPayload.append(floatToRegisters(0.0f));
             writeRegisters(Addr::PC_DATA_X, zeroPayload);
         }
         m_shutdownStep++;
@@ -567,38 +584,36 @@ void ModbusManager::processShutdownStep()
             m_shutdownStep++;
             processShutdownStep();
         } else {
-            m_shutdownStep = 9;
+            m_shutdownStep=9;
             processShutdownStep();
         }
         break;
 
     case 6:
-        // 第 7 步：关预约 -> 先拉低 (0)
+        // 第 7 步：关预约 -> 先拉低
         m_ctrlWord129 &= ~(1 << ControlBits::RESERVE_ENABLE);
         writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
         m_shutdownStep++;
-        m_shutdownTimer->start(300);
+        m_shutdownTimer->start(200);
         break;
 
     case 7:
-        // 第 8 步：关预约 -> 再拉高 (1) 制造上升沿
+        // 第 8 步：关预约 -> 再拉高
         m_ctrlWord129 |= (1 << ControlBits::RESERVE_ENABLE);
         writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
         m_shutdownStep++;
-        m_shutdownTimer->start(300);
+        m_shutdownTimer->start(200);
         break;
 
     case 8:
-        // 第 9 步：关预约 -> 彻底拉低 (0) 洗白状态
+        // 第 9 步：关预约 -> 再拉低
         m_ctrlWord129 &= ~(1 << ControlBits::RESERVE_ENABLE);
         writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
         m_shutdownStep++;
-        m_shutdownTimer->start(300);
+        m_shutdownTimer->start(200);
         break;
 
     case 9:
-        // 全部结束！
-        emit logMessage("安全关机序列执行完毕，底层寄存器已全部清零，断开连接。");
         emit shutdownFinished();
         break;
 

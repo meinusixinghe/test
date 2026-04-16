@@ -29,7 +29,7 @@
 
 MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
 {
-    // 1. 先初始化 UI，确保 m_startBtn 等界面控件被成功创建
+    // 1. 初始化 UI
     setupUi();
 
     // 2. 初始化 Modbus 管理器
@@ -90,6 +90,8 @@ MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
             }
             dataTable->blockSignals(false);
             renderArea->setHoleCompleted(m_currentWeldIndex);
+            dataTable->viewport()->update();
+            QApplication::processEvents();
             m_currentWeldIndex++; // 索引加 1
             sendNextWeldHole();   // 自动调取下一行数据发送给机器人
         }
@@ -757,6 +759,19 @@ void MainWindow::setupCoordinateWizard()
         return;
     }
 
+    if (m_coordManager && m_coordManager->isSetupComplete()) {
+        QMessageBox::StandardButton reply;
+        reply = QMessageBox::question(this,
+                                      "重新建立",
+                                      "检测到当前已建立用户坐标系，是否重新建立？\n（重新建立将覆盖原有坐标系数据）",
+                                      QMessageBox::Yes | QMessageBox::Cancel,
+                                      QMessageBox::Cancel);
+
+        if (reply == QMessageBox::Cancel) {
+            return;
+        }
+    }
+
     QDialog* dialog = new QDialog(this);
     // 添加自动销毁属性，避免内存泄漏
     dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -1147,7 +1162,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
     m_isShuttingDown = true;
     m_statusLabel->setText("正在安全关闭机器人并清理状态...");
 
-    // 【新增】监听底层的“关机完成”信号。收到信号后，立刻重新触发关闭！
+    // 监听底层的“关机完成”信号。收到信号后，立刻重新触发关闭
     connect(m_modbusManager, &ModbusManager::shutdownFinished, this, [this]() {
         this->close();
     });
@@ -1203,7 +1218,7 @@ void MainWindow::sendNextWeldHole()
         m_startBtn->setEnabled(true);
         m_pauseBtn->setVisible(false);
 
-        QTimer::singleShot(100, this, [this](){
+        QTimer::singleShot(500, this, [this](){
             QMessageBox::information(this, "完成", "恭喜，所有管孔已连续焊接完毕！");
         });
         return;

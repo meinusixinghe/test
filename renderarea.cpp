@@ -152,13 +152,25 @@ void RenderArea::paintEvent(QPaintEvent *event)
     if (m_showUserCoordinate) {
         painter.save();
 
+        // 1. 动态计算参考大小 (依据管板实际物理尺寸边界)
+        double contentW = m_dxfMaxBound.x() - m_dxfMinBound.x();
+        double contentH = m_dxfMaxBound.y() - m_dxfMinBound.y();
+        double refSize = std::max(contentW, contentH);
+        if (refSize < 1.0) refSize = 100.0; // 防止异常数据的安全后备
+
+        // 2. 根据管板大小动态计算各元素尺寸
+        double originRadius = refSize * 0.01;  // 原点半径取 1%
+        double arrowSize = refSize * 0.03;      // 箭头大小取 2%
+        double fontSize = refSize * 0.025;       // 字体大小取 1.5%
+        double textOffset = refSize * 0.02;
+
         // 绘制原点
-        QPen originPen(Qt::green, 0);
+        QPen originPen(Qt::yellow, 0);
         originPen.setCosmetic(true);
         originPen.setWidth(5);
         painter.setPen(originPen);
-        painter.setBrush(Qt::green);
-        painter.drawEllipse(m_userOrigin, 5, 5);
+        painter.setBrush(Qt::yellow);
+        painter.drawEllipse(m_userOrigin, originRadius, originRadius);
 
         // 绘制 X轴
         QPen xAxisPen(Qt::red, 0);
@@ -168,7 +180,6 @@ void RenderArea::paintEvent(QPaintEvent *event)
         painter.drawLine(m_userOrigin, m_userXAxis);
 
         // 绘制 X轴箭头
-        double arrowSize = 20.0;
         QPointF dir = m_userXAxis - m_userOrigin;
         double length = std::hypot(dir.x(), dir.y());
         if (length > 0) dir /= length;
@@ -178,48 +189,46 @@ void RenderArea::paintEvent(QPaintEvent *event)
         QPointF arrowP3 = arrowBase - perp * (arrowSize * 0.3);
         QPolygonF arrowHead;
         arrowHead << m_userXAxis << arrowP2 << arrowP3;
-        painter.setBrush(Qt::red);                                                  // 填充箭头
+        painter.setBrush(Qt::red);
         painter.drawPolygon(arrowHead);
         painter.setBrush(Qt::NoBrush);
 
         // x轴文字
         painter.save();
-        painter.scale(1.0, -1.0);                                                   // 翻转回来写字
+        painter.scale(1.0, -1.0);
         QFont xFont = painter.font();
-        xFont.setPointSize(30);                                                     // 修改文字大小
+        xFont.setPointSizeF(fontSize);
         painter.setFont(xFont);
-        painter.drawText(m_userXAxis.x(), -m_userXAxis.y(), "X轴");
+        painter.drawText(m_userXAxis.x() + textOffset, -(m_userXAxis.y() - textOffset), "X轴");
         painter.restore();
 
         // 绘制平面参考线(Y轴)
-        QPen yAxisPen(Qt::blue, 0);
+        QPen yAxisPen(Qt::darkGreen, 0);
         yAxisPen.setCosmetic(true);
         yAxisPen.setWidth(2);
         painter.setPen(yAxisPen);
         painter.drawLine(m_userOrigin, m_userPlanePoint);
 
-        QPointF dirY = m_userPlanePoint - m_userOrigin;                             // Y轴方向向量
-        double lengthY = std::hypot(dirY.x(), dirY.y());                            // Y轴长度
+        QPointF dirY = m_userPlanePoint - m_userOrigin;
+        double lengthY = std::hypot(dirY.x(), dirY.y());
         if (lengthY > 0) dirY /= lengthY;
-        QPointF arrowBaseY = m_userPlanePoint - dirY * arrowSize * 0.5;             // Y轴箭头底座
-        QPointF perpY(-dirY.y(), dirY.x());                                         // Y轴垂直向量（和 X轴逻辑一致）
-        QPointF arrowP2Y = arrowBaseY + perpY * (arrowSize * 0.3);                  // 箭头右侧点
-        QPointF arrowP3Y = arrowBaseY - perpY * (arrowSize * 0.3);                  // 箭头左侧点
+        QPointF arrowBaseY = m_userPlanePoint - dirY * arrowSize * 0.5;
+        QPointF perpY(-dirY.y(), dirY.x());
+        QPointF arrowP2Y = arrowBaseY + perpY * (arrowSize * 0.3);
+        QPointF arrowP3Y = arrowBaseY - perpY * (arrowSize * 0.3);
         QPolygonF arrowHeadY;
-        arrowHeadY << m_userPlanePoint << arrowP2Y << arrowP3Y;                     // 构建 Y轴箭头多边形
-        painter.setBrush(Qt::blue);                                                 // Y轴箭头填充蓝色
-        painter.drawPolygon(arrowHeadY);                                            // 绘制Y轴箭头
-        painter.setBrush(Qt::NoBrush);                                              // 恢复无填充
+        arrowHeadY << m_userPlanePoint << arrowP2Y << arrowP3Y;
+        painter.setBrush(Qt::darkGreen);
+        painter.drawPolygon(arrowHeadY);
+        painter.setBrush(Qt::NoBrush);
 
         // y轴文字
         painter.save();
         painter.scale(1.0, -1.0);
         QFont yFont = painter.font();
-        yFont.setPointSize(30);                                                     // 调大Y轴文字字号
+        yFont.setPointSizeF(fontSize);
         painter.setFont(yFont);
-        painter.drawText(m_userPlanePoint.x(), -m_userPlanePoint.y(), "Y轴");
-        painter.restore();
-
+        painter.drawText(m_userPlanePoint.x() + textOffset, -(m_userPlanePoint.y() - textOffset), "Y轴");
         painter.restore();
     }
 }
