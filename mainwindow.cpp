@@ -533,13 +533,22 @@ void MainWindow::loadDrawingData(const QString &filePath)
 
     // 6. 更新左侧绘图区
     renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate);
+    renderArea->setShowUserCoordinate(false);
+
     // 7. 重置选中状态
     m_currentSelectedIndex = -1;                                                                        // 当前选中的孔洞索引
     renderArea->setHighlightedIndex(m_currentSelectedIndex);
     if (m_coordManager) {                                                                               // 判断指针是否有效
-        m_coordManager->initialize(renderArea, dataTable, weldHoles, mainPlateHole, m_statusLabel);     // 调用初始化方法
+        delete m_coordManager;
     }
+    m_coordManager = new usercoordinatemanager(this);
+    m_coordManager->initialize(renderArea, dataTable, weldHoles, mainPlateHole, m_statusLabel);
 
+    if (m_toggleCoordBtn) {
+        m_toggleCoordBtn->setVisible(false);
+        m_toggleCoordBtn->setChecked(true);
+        m_toggleCoordBtn->setText("显示用户坐标系");
+    }
     m_isPathPlanned = false;
 }
 
@@ -1064,6 +1073,12 @@ void MainWindow::onStartClicked()
             QMessageBox::warning(this, "操作提示", "启动失败：必须先完成管孔排序！\n请点击上方工具栏或“操作”菜单中的“自动焊接路径规划”。");
             return;
         }
+
+        if (m_positioningMethod == 0) {
+            QMessageBox::warning(this, "操作提示", "启动失败：未选择定位方式！\n请先在顶部菜单栏点击“操作 -> 选择定位方式”进行设置。");
+            return;
+        }
+
         // 到达启动之后，不再跑步骤2，而是持续跑步骤3！
         if (weldHoles.isEmpty()) {
             QMessageBox::warning(this, "警告", "没有管孔数据可供焊接！");
@@ -1214,7 +1229,7 @@ void MainWindow::sendNextWeldHole()
         m_modbusManager->sendWeldingFinished();
 
         m_isWeldingProcessRunning = false;
-        m_startBtn->setText("启动");
+        m_startBtn->setText("预约");
         m_startBtn->setEnabled(true);
         m_pauseBtn->setVisible(false);
 

@@ -187,14 +187,15 @@ void ModbusManager::onReadReady()
                                 if (m_startupState != WaitProgramLoaded) return;
                                 m_ctrlWord129 |= (1 << ControlBits::RESERVE_ENABLE);
                                 writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
+                                m_startupState = WaitReserveReady;
                                 // 延时 200ms 后拉低
-                                QTimer::singleShot(200, this, [this](){
-                                    if (m_startupState != WaitProgramLoaded) return;
-                                    m_ctrlWord129 &= ~(1 << ControlBits::RESERVE_ENABLE);
-                                    writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
-                                    m_timeoutCounter = 0;
-                                    m_startupState = WaitReserveReady;
-                                });
+                                // QTimer::singleShot(200, this, [this](){
+                                //     if (m_startupState != WaitProgramLoaded) return;
+                                //     m_ctrlWord129 &= ~(1 << ControlBits::RESERVE_ENABLE);
+                                //     writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
+                                //     m_timeoutCounter = 0;
+                                //     m_startupState = WaitReserveReady;
+                                // });
                             });
                         } else {
                             emit logMessage("步骤2: 探测到机器人已处于预约状态。");
@@ -207,25 +208,30 @@ void ModbusManager::onReadReady()
                 }
                 break;
 
+            // 写入程序号于确认预约程序脉冲(40129.Bit9)
             case WaitReserveReady:
                 if (m_isReserved) {
                     emit logMessage(QString("步骤2: 预约就绪，写入程序号 %1 并等待系统加载").arg(m_targetProgram));
                     writeRegister(Addr::PC_RESERVE_PROG, m_targetProgram);
                     m_startupState = WaitProgramLoaded;
                     m_retryCounter = 0;
+                    m_ctrlWord129 &= ~(1 << ControlBits::RESERVE_CONFIRM);
+                    writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
                     // 确认预约程序 40129.9拉高
                     QTimer::singleShot(200, this, [this](){
                         if (m_startupState != WaitProgramLoaded) return;
                         m_ctrlWord129 |= (1 << ControlBits::RESERVE_CONFIRM);
                         writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
+                        m_timeoutCounter = 0;
+                        m_startupState = WaitProgramRunning;
                         // 200ms后，确认预约程序 40129.9拉低
-                        QTimer::singleShot(200, this, [this](){
-                            if (m_startupState != WaitProgramLoaded) return;
-                            m_ctrlWord129 &= ~(1 << ControlBits::RESERVE_CONFIRM);
-                            writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
-                            m_timeoutCounter = 0;
-                            m_startupState = WaitProgramRunning;
-                        });
+                        // QTimer::singleShot(200, this, [this](){
+                        //     if (m_startupState != WaitProgramLoaded) return;
+                        //     m_ctrlWord129 &= ~(1 << ControlBits::RESERVE_CONFIRM);
+                        //     writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
+                        //     m_timeoutCounter = 0;
+                        //     m_startupState = WaitProgramRunning;
+                        // });
                     });
                 }else {
                     m_timeoutCounter++;
@@ -399,7 +405,7 @@ void ModbusManager::sendWeldingFinished()
 {
     if (m_modbus->state() != QModbusDevice::ConnectedState) return;
 
-    emit logMessage("所有管孔焊接完成，下发全 0 数据复位...");
+    emit logMessage("所有管孔焊接完成");
     writeRegister(Addr::PC_PROCESS_ID, 0);
 
     QVector<quint16> zeroPayload;
@@ -548,6 +554,7 @@ void ModbusManager::processShutdownStep()
     case 2:
         // 第 3 步：松开复位，洗白 40129 基础控制字
         m_ctrlWord129 &= ~(1 << ControlBits::ALARM_RESET);
+        m_ctrlWord129 &= ~(1 << ControlBits::RESERVE_CONFIRM);
         writeRegister(Addr::PC_CONTROL_WORD, m_ctrlWord129);
         m_shutdownStep++;
         m_shutdownTimer->start(100);
