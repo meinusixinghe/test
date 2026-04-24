@@ -74,7 +74,7 @@ void RenderArea::paintEvent(QPaintEvent *event)
     painter.setRenderHint(QPainter::Antialiasing);                  // 开启抗锯齿，让图形更平滑
     painter.setRenderHint(QPainter::TextAntialiasing);              // 文字抗锯齿，更清晰
 
-    if (weldHoles.isEmpty() && contours.isEmpty()) return;  // 无数据时直接返回
+    if (weldHoles.isEmpty() && m_mainPlatePolygon.isEmpty() && m_displayPaths.isEmpty()) return;
 
     // 首次加载：计算初始变换（适配窗口+居中）；后续：应用当前变换（缩放+平移）
     if (m_scaleFactor == 1.0 && m_initialContentOffset == QPointF(0.0, 0.0)) {
@@ -125,28 +125,6 @@ void RenderArea::paintEvent(QPaintEvent *event)
             painter.setBrush(Qt::NoBrush);
         }
         painter.drawEllipse(hole.center, hole.radius, hole.radius);
-
-        // painter.save();
-        // painter.translate(hole.center);
-
-        // // 再次翻转 Y 轴 (负负得正，让文字正立)
-        // painter.scale(1.0, -1.0);
-
-        // // C. 设置字体和位置 (此时坐标系原点就是圆心)
-        // QFont numFont;
-        // int fontSize = qMax(1, static_cast<int>(hole.radius / 2.5)); // 调整字体大小
-        // numFont.setBold(true);
-        // numFont.setPointSizeF(fontSize);
-        // painter.setFont(numFont);
-
-        // // 计算文字矩形（以(0,0)为中心）
-        // double rectSize = hole.radius * 1.5;
-        // QRectF numRect(-rectSize/2, -rectSize/2, rectSize, rectSize);
-
-        // painter.setPen(isHighlighted ? Qt::red : Qt::black);
-        // painter.drawText(numRect, Qt::AlignCenter, QString::number(hole.id));
-
-        // painter.restore(); // 恢复到全局坐标系（Y向上），准备画下一个圆
     }
 
     // 绘制用户坐标系
@@ -360,7 +338,7 @@ void RenderArea::calculateInitialTransform(QPainter &painter)
     // 2.遍历孔洞中心
     for(const auto& h : std::as_const(weldHoles)) updateBounds(h.center);
     if (m_isRectangular) {
-        for (const auto& p : m_mainPlatePolygon)                    // 如果是方形，遍历多边形的所有顶点
+        for (const auto& p : std::as_const(m_mainPlatePolygon))                    // 如果是方形，遍历多边形的所有顶点
             updateBounds(p);
     } else {
         // 如果是圆形，加入圆的四个极点
@@ -371,13 +349,12 @@ void RenderArea::calculateInitialTransform(QPainter &painter)
             updateBounds(QPointF(mainPlateHole.center.x(), mainPlateHole.center.y() + mainPlateHole.radius));
         }
     }
-    if (minX > maxX) { applyCurrentTransform(painter); return; }    // 无有效点
-
     for (const auto& contour : std::as_const(m_displayPaths)) {
         for (const auto& p : contour.points) {
             updateBounds(p);
         }
     }
+    if (minX > maxX) { applyCurrentTransform(painter); return; }    // 无有效点
 
     // 计算内容的宽高和适配窗口的缩放因子
     double contentW = maxX - minX;                                  // 宽度

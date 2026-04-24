@@ -129,6 +129,54 @@ def parse_dxf(file_path):
         # 存入返回的数据字典中
         data['display_paths'] = display_paths
 
+        if len(data['contours']) == 0 and len(display_paths) > 0:
+                    # 复制一份所有的线段用于拼接
+                    edges = [path.copy() for path in display_paths if len(path) >= 2]
+
+                    joined_contours = []
+                    while edges:
+                        current_contour = edges.pop(0)
+                        changed = True
+                        while changed and edges:
+                            changed = False
+                            for i, edge in enumerate(edges):
+                                tol = 1.0 # 缝合容差值，端点距离小于 1.0 认为相连
+                                def dist(p1, p2):
+                                    return ((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2)**0.5
+
+                                # 尾接首
+                                if dist(current_contour[-1], edge[0]) < tol:
+                                    current_contour.extend(edge[1:])
+                                    edges.pop(i)
+                                    changed = True; break
+                                # 尾接尾 (edge反向加入)
+                                elif dist(current_contour[-1], edge[-1]) < tol:
+                                    current_contour.extend(edge[-2::-1])
+                                    edges.pop(i)
+                                    changed = True; break
+                                # 首接尾 (插入到头部)
+                                elif dist(current_contour[0], edge[-1]) < tol:
+                                    current_contour = edge[:-1] + current_contour
+                                    edges.pop(i)
+                                    changed = True; break
+                                # 首接首 (反转后插入到头部)
+                                elif dist(current_contour[0], edge[0]) < tol:
+                                    current_contour = edge[::-1][:-1] + current_contour
+                                    edges.pop(i)
+                                    changed = True; break
+
+                        joined_contours.append(current_contour)
+
+                    # 筛选拼接好的线条，如果首尾闭合，就当作管板主轮廓
+                    for contour in joined_contours:
+                        if len(contour) > 2:
+                            # 检查首尾两端是否闭合
+                            if ((contour[0][0]-contour[-1][0])**2 + (contour[0][1]-contour[-1][1])**2)**0.5 < 1.0:
+                                # 强制确保首尾坐标完全一致
+                                if contour[0] != contour[-1]:
+                                    contour.append(contour[0])
+                                data['contours'].append(contour)
+
     return data
 
 def save_to_json(dxf_path, output_path):
