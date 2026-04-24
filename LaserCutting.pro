@@ -42,7 +42,7 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 !isEmpty(target.path): INSTALLS += target
 
 DISTFILES += \
-    import_py_test.py
+    import_py.py
 
 win32: LIBS += -LC:/Users/zhangpeng/AppData/Local/Programs/Python/Python313/libs/ -lpython313
 

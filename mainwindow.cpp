@@ -347,7 +347,7 @@ void MainWindow::importDxf()
 
     // 2. 准备 Python脚本路径和临时 JSON 输出路径
     // QCoreApplication::applicationDirPath()可以找到 exe所在的目录
-    QString pythonScript = QCoreApplication::applicationDirPath() + "/import_py_test.py";
+    QString pythonScript = QCoreApplication::applicationDirPath() + "/import_py.py";
 
     // 使用 QTemporaryFile 确保生成的 JSON文件路径唯一且安全
     // QTemporaryFile tempFile;
@@ -526,6 +526,22 @@ void MainWindow::loadDrawingData(const QString &filePath)
         item3D->setFlags(item3D->flags() & ~Qt::ItemIsEditable);                                        // 初始加载时，禁止编辑三维坐标
         item3D->setBackground(QBrush(QColor(245, 245, 245)));                                           // 设置浅灰色背景提示用户不可编辑
         dataTable->setItem(i, 3, item3D);
+    }
+
+    QVector<Contour> displayPaths;
+    if (rootObj.contains("display_paths")) {
+        QJsonArray pathArray = rootObj["display_paths"].toArray();
+        for (const auto& pRef : std::as_const(pathArray)) {
+            QJsonArray ptsArray = pRef.toArray();
+            Contour contour;
+            for (const auto& ptRef : std::as_const(ptsArray)) {
+                QJsonArray xy = ptRef.toArray();
+                if (xy.size() >= 2) {
+                    contour.points.append(QPointF(xy[0].toDouble(), xy[1].toDouble()));
+                }
+            }
+            displayPaths.append(contour);
+        }
     }
     // 更新表格后重新连接信号
     connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);

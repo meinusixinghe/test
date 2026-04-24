@@ -28,6 +28,7 @@ public:
 
     void setHoleCompleted(int index);
     void clearCompletedHoles();
+    void setDisplayPaths(const QVector<Contour>& paths);
 protected:
     void paintEvent(QPaintEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
@@ -70,6 +71,8 @@ private:
     QPointF m_userPlanePoint;                               // 用户坐标系 y轴
 
     QSet<int> m_completedHoles;
+
+    QVector<Contour> m_displayPaths;
 };
 
 #endif // RENDERAREA_H

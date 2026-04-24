@@ -86,6 +86,17 @@ void RenderArea::paintEvent(QPaintEvent *event)
         applyCurrentTransform(painter);
     }
 
+    QPen pathPen(Qt::lightGray, 0); // 使用浅灰色，宽度设为0（化妆笔，始终1像素）
+    pathPen.setCosmetic(true);
+    painter.setPen(pathPen);
+
+    for (const auto& contour : std::as_const(m_displayPaths)) {
+        if (contour.points.size() > 1) {
+            // 使用 drawPolyline 绘制连续的点阵
+            painter.drawPolyline(contour.points.data(), contour.points.size());
+        }
+    }
+
     // 绘制管板外轮廓
     QPen mainPlatePen(Qt::black, 0);
     mainPlatePen.setCosmetic(true);                         // 用于将画笔设置为装饰性画笔（让画笔的线宽不随缩放变换而改变）
@@ -329,6 +340,10 @@ void RenderArea::mouseReleaseEvent(QMouseEvent *event)
     }
 }
 
+void RenderArea::setDisplayPaths(const QVector<Contour>& paths) {
+    m_displayPaths = paths;
+}
+
 // ----------------------------------------------------
 // 坐标变换：合并初始居中、缩放和用户平移
 // 解决了 DXF坐标与屏幕坐标的映射问题
@@ -367,6 +382,12 @@ void RenderArea::calculateInitialTransform(QPainter &painter)
         }
     }
     if (minX > maxX) { applyCurrentTransform(painter); return; }    // 无有效点
+
+    for (const auto& contour : std::as_const(m_displayPaths)) {
+        for (const auto& p : contour.points) {
+            updateBounds(p);
+        }
+    }
 
     // 计算内容的宽高和适配窗口的缩放因子
     double contentW = maxX - minX;                                  // 宽度
