@@ -19,6 +19,8 @@
 #include <QMouseEvent>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QSlider>
+#include <QTextEdit>
 
 class RenderArea;
 class usercoordinatemanager;
@@ -32,6 +34,9 @@ public:
     QPushButton *btnRestore;
     QPushButton *btnEraser;
     QPushButton *btnClose;
+
+    QSlider *sliderEraserSize;
+    QLabel *lblEraserSize;
 
     explicit FloatingToolWidget(QWidget *parent = nullptr);
 
@@ -58,7 +63,6 @@ public:
 private slots:
     // 导入DXF的触发
     void importDxf();
-    // void loadJSONData(); // 备用，如果想直接加载 JSON
 
     // 处理右侧列表点击的槽函数
     void handleTableSelectionChanged();
@@ -66,8 +70,6 @@ private slots:
     void handleTableCellChanged(int row, int column);
 
     void applyRotationMatrix();
-    void updateTableItem(int row, int column);
-    void updateTableFromData();
 
     // 建立用户坐标系向导
     void setupCoordinateWizard();
@@ -98,7 +100,7 @@ private slots:
     void sendNextWeldHole();
 
     void restoreDrawing();
-    void handleItemDeleted(int pathIndex);
+    void handleItemDeleted(const QPointF &pos);
 private:
     void loadDrawingData(const QString &filePath);      // 核心数据加载函数
     void setupUi();                                     // UI初始化函数
@@ -174,6 +176,8 @@ private:
     QVector<Hole> m_originalWeldHoles;
     Hole m_originalMainPlateHole;
     QPolygonF m_originalMainPlateContour;
+    QLabel* m_detailContentLabel;
+    QTextEdit* m_detailContentText;
 };
 
 #endif // MAINWINDOW_H

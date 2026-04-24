@@ -108,37 +108,16 @@ void RenderArea::paintEvent(QPaintEvent *event)
         }
     }
 
-    // 绘制管板外轮廓
-    QPen mainPlatePen(Qt::black, 0);
-    mainPlatePen.setCosmetic(true);                         // 用于将画笔设置为装饰性画笔（让画笔的线宽不随缩放变换而改变）
-    mainPlatePen.setWidth(4);
-    painter.setPen(mainPlatePen);
-    painter.setBrush(Qt::NoBrush);
-    if (m_isRectangular) {
-        if (!m_mainPlatePolygon.isEmpty())                  // 如果是方形模式，画多边形
-            painter.drawPolygon(m_mainPlatePolygon);
-    } else {
-        painter.drawEllipse(mainPlateHole.center, mainPlateHole.radius, mainPlateHole.radius);  // 如果是圆形模式，画圆
-    }
     for (int i = 0; i < weldHoles.size(); ++i) {
-        const Hole &hole = weldHoles[i];
-        bool isHighlighted = (i == m_highlightIndex);
-
-        // 4.1 绘制圆 (几何体：直接画)
-        if (isHighlighted) {
+        if (i == m_highlightIndex) {
+            const Hole &hole = weldHoles[i];
             QPen highlightPen(Qt::red, 0);
             highlightPen.setCosmetic(true);
             highlightPen.setWidth(3);
             painter.setPen(highlightPen);
             painter.setBrush(QBrush(Qt::yellow, Qt::Dense6Pattern));
-        }else {
-            QPen holePen(Qt::blue, 0);
-            holePen.setCosmetic(true);
-            holePen.setWidth(1);
-            painter.setPen(holePen);
-            painter.setBrush(Qt::NoBrush);
+            painter.drawEllipse(hole.center, hole.radius, hole.radius);
         }
-        painter.drawEllipse(hole.center, hole.radius, hole.radius);
     }
 
     // 绘制用户坐标系
@@ -225,13 +204,14 @@ void RenderArea::paintEvent(QPaintEvent *event)
         painter.restore();
     }
 
-    if (m_isEraserMode) {
+    bool hasData = !(weldHoles.isEmpty() && m_displayPaths.isEmpty() && m_mainPlatePolygon.isEmpty() && mainPlateHole.radius <= 0);
+    if (m_isEraserMode && hasData) {
         painter.save();
         painter.setTransform(QTransform()); // 重置变换，直接在屏幕物理像素下画
         QColor pink(255, 182, 193, 150);    // 浅粉色半透明填充
         painter.setBrush(pink);
         painter.setPen(Qt::NoPen);
-        int rectSize = 20; // 橡皮擦感应方块大小
+        int rectSize = m_eraserSize; // 橡皮擦感应方块大小
         painter.drawRect(m_currentMousePos.x() - rectSize / 2,
                          m_currentMousePos.y() - rectSize / 2,
                          rectSize, rectSize);
@@ -276,33 +256,10 @@ void RenderArea::mousePressEvent(QMouseEvent *event)
         transform.scale(m_scaleFactor, -m_scaleFactor);
         transform.translate((m_initialContentOffset + m_panOffsetDXF).x(),
                             (m_initialContentOffset + m_panOffsetDXF).y());
-        bool invertible;
-        QTransform invTransform = transform.inverted(&invertible);
-        if (!invertible) return;
+        QPointF dxfPos = transform.inverted().map(QPointF(event->pos()));
 
-        QPointF dxfPos = invTransform.map(QPointF(event->pos()));
-
-        // 2. 遍历所有线条，找到离点击位置最近的线段
-        double minDistance = std::numeric_limits<double>::max();
-        int closestIndex = -1;
-
-        for (int i = 0; i < m_displayPaths.size(); ++i) {
-            const auto& contour = m_displayPaths[i];
-            for (int j = 0; j < contour.points.size() - 1; ++j) {
-                double d = distancePointToSegment(dxfPos, contour.points[j], contour.points[j+1]);
-                if (d < minDistance) {
-                    minDistance = d;
-                    closestIndex = i;
-                }
-            }
-        }
-
-        // 3. 判断是否在粉色方块(容差约15像素)范围内
-        double pixelDistance = minDistance * m_scaleFactor;
-        if (pixelDistance < 15.0 && closestIndex != -1) {
-            emit itemDeleted(closestIndex); // 找到目标，发射信号让主界面删除
-        }
-        return; // 橡皮擦模式下不执行后续的拖拽平移
+        emit itemDeleted(dxfPos);
+        return;
     }
 
     if (event->button() == Qt::LeftButton) {        // 触发条件是鼠标左键
@@ -319,9 +276,15 @@ void RenderArea::mousePressEvent(QMouseEvent *event)
 // ----------------------------------------------------
 void RenderArea::mouseMoveEvent(QMouseEvent *event)
 {
+    bool hasData = !(weldHoles.isEmpty() && m_displayPaths.isEmpty() && m_mainPlatePolygon.isEmpty() && mainPlateHole.radius <= 0);
     if (m_isEraserMode) {
-        m_currentMousePos = event->pos();
-        update();
+        if (hasData) {
+            m_currentMousePos = event->pos();
+            setCursor(Qt::BlankCursor);
+            update();
+        } else {
+            setCursor(Qt::OpenHandCursor);
+        }
         return;
     }
 
@@ -495,7 +458,8 @@ void RenderArea::setHighlightedPathIndex(int index) {
 
 void RenderArea::setEraserMode(bool enabled) {
     m_isEraserMode = enabled;
-    if (enabled) {
+    bool hasData = !(weldHoles.isEmpty() && m_displayPaths.isEmpty() && m_mainPlatePolygon.isEmpty() && mainPlateHole.radius <= 0);
+    if (enabled && hasData) {
         setCursor(Qt::BlankCursor); // 隐藏默认鼠标，用粉色方块代替
     } else {
         setCursor(Qt::OpenHandCursor);
@@ -509,4 +473,11 @@ double RenderArea::distancePointToSegment(const QPointF& p, const QPointF& p1, c
     double t = std::max(0.0, std::min(1.0, ((p.x() - p1.x()) * (p2.x() - p1.x()) + (p.y() - p1.y()) * (p2.y() - p1.y())) / l2));
     QPointF projection(p1.x() + t * (p2.x() - p1.x()), p1.y() + t * (p2.y() - p1.y()));
     return std::hypot(p.x() - projection.x(), p.y() - projection.y());
+}
+
+void RenderArea::setEraserSize(int size) {
+    m_eraserSize = size;
+    if (m_isEraserMode) {
+        update(); // 如果当前正开着橡皮擦，立即刷新方块大小
+    }
 }

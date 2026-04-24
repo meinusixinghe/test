@@ -63,7 +63,25 @@ FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     mainLayout->addLayout(header);
     mainLayout->addLayout(tools);
 
-    setFixedSize(160, 80);
+    QHBoxLayout *sliderLayout = new QHBoxLayout();
+    QLabel *lblSliderTitle = new QLabel("大小:");
+    lblSliderTitle->setStyleSheet("font-size: 12px; color: #555; border: none; background: transparent;");
+
+    sliderEraserSize = new QSlider(Qt::Horizontal);
+    sliderEraserSize->setRange(5, 80); // 橡皮擦大小范围：5像素 ~ 80像素
+    sliderEraserSize->setValue(20);    // 默认 20
+
+    lblEraserSize = new QLabel("20");
+    lblEraserSize->setFixedWidth(20);
+    lblEraserSize->setStyleSheet("font-size: 12px; color: #333; border: none; background: transparent;");
+
+    sliderLayout->addWidget(lblSliderTitle);
+    sliderLayout->addWidget(sliderEraserSize);
+    sliderLayout->addWidget(lblEraserSize);
+
+    mainLayout->addLayout(sliderLayout);
+
+    setFixedSize(180, 110);
     setCursor(Qt::ArrowCursor); // 悬浮框内保持普通箭头
 }
 
@@ -259,12 +277,11 @@ void MainWindow::setupUi()
     titleLayout->addWidget(closeDetailBtn);
 
     // 详细信息占位符内容
-    QLabel* detailContent = new QLabel("暂无详细信息\n（预留扩展区域）", detailWidget);
-    detailContent->setAlignment(Qt::AlignCenter);
-    detailContent->setStyleSheet("color: gray;");
-
-    detailLayout->addWidget(detailTitleWidget);
-    detailLayout->addWidget(detailContent);
+    m_detailContentText = new QTextEdit(detailWidget);
+    m_detailContentText->setReadOnly(true);
+    m_detailContentText->setText("请点击上方表格以查看详细信息");
+    m_detailContentLabel->setStyleSheet("color: #333; font-size: 13px; line-height: 1.8; font-weight: bold;");
+    detailLayout->addWidget(m_detailContentText);
     detailLayout->addStretch();
 
     rightSplitter->addWidget(detailWidget);
@@ -386,8 +403,6 @@ void MainWindow::setupUi()
             this, &MainWindow::handleTableCellChanged);                                     // 表格单元格修改 → 同步更新管孔数据
     connect(rotateAction, &QAction::triggered, this, &MainWindow::applyRotationMatrix);     // 应用旋转矩阵 → 触发applyRotationMatrix函数
     // 连接 Manager的更新信号到表格刷新
-    connect(m_coordManager, &usercoordinatemanager::update3DCoordinates,
-            this, &MainWindow::updateTableFromData);
     // 建立用户坐标系的流程逻辑
     connect(m_setupCoordAction, &QAction::triggered, this, &MainWindow::setupCoordinateWizard);
     // 显示/隐藏坐标系按钮连接
@@ -428,6 +443,11 @@ void MainWindow::setupUi()
     });
     connect(renderArea, &RenderArea::itemDeleted, this, &MainWindow::handleItemDeleted);
 
+    connect(m_floatingToolWidget->sliderEraserSize, &QSlider::valueChanged, this, [this](int value){
+        m_floatingToolWidget->lblEraserSize->setText(QString::number(value));
+        renderArea->setEraserSize(value);
+    });
+
     resize(1200, 700);
 }
 
@@ -443,15 +463,7 @@ void MainWindow::importDxf()
     if (dxfPath.isEmpty()) return; // 用户取消选择
 
     // 2. 准备 Python脚本路径和临时 JSON 输出路径
-    // QCoreApplication::applicationDirPath()可以找到 exe所在的目录
     QString pythonScript = QCoreApplication::applicationDirPath() + "/import_py.py";
-
-    // 使用 QTemporaryFile 确保生成的 JSON文件路径唯一且安全
-    // QTemporaryFile tempFile;
-    // if (!tempFile.open()) {
-    //     QMessageBox::critical(this, "Error", "Cannot create temporary file path.");
-    //     return;
-    // }
 
     //这是保存 JSON文件
     QString jsonOutputPath = QFileDialog::getSaveFileName(this, "保存JSON文件", "", "JSON Files (*.json)");
@@ -571,18 +583,6 @@ void MainWindow::loadDrawingData(const QString &filePath)
             }
         }
     }
-    // 4. 解析轮廓数据（暂未启用，保留扩展）
-    // contours.clear();
-    // QJsonArray contourArray = rootObj["contours"].toArray();
-    // for (const auto& contourObj : std::as_const(contourArray)) {
-    //     Contour c;
-    //     QJsonArray pointsArray = contourObj.toArray();
-    //     for (const auto& pointObj : std::as_const(pointsArray)) {
-    //         QJsonArray point = pointObj.toArray();
-    //         c.points.append(QPointF(point[0].toDouble(), point[1].toDouble()));
-    //     }
-    //     contours.append(c);
-    // }
 
     // 5. 解析所有的背景线条（包含类型）
     m_displayPaths.clear();
@@ -627,16 +627,6 @@ void MainWindow::loadDrawingData(const QString &filePath)
     m_originalMainPlateContour = mainPlateContour;
 }
 
-// void MainWindow::loadJSONData()
-// {
-//     // 保持这个备用函数不变，如果你想单独加载 JSON
-//     QString filePath = QFileDialog::getOpenFileName(this, "Open JSON File", "", "JSON Files (*.json)");
-//     if (!filePath.isEmpty()) {
-//         loadDrawingData(filePath);
-//         update();
-//     }
-// }
-
 // ----------------------------------------------------
 // 功能：表格与绘图区的联动（交互逻辑）
 // 核心：表格选中某行 → 绘图区高亮对应圆
@@ -644,12 +634,108 @@ void MainWindow::loadDrawingData(const QString &filePath)
 void MainWindow::handleTableSelectionChanged()
 {
     int selectedRow = dataTable->currentRow();
-    if (selectedRow >= 0) {
+    if (selectedRow >= 0 && selectedRow < m_displayPaths.size()) {
         detailWidget->show(); // 选中时显示下方详细信息
+
+        const Contour& c = m_displayPaths[selectedRow];
+        QString infoText;
+
+        // 1. 直线算法
+        if (c.type == "直线" && c.points.size() >= 2) {
+            QPointF p1 = c.points.first();
+            QPointF p2 = c.points.last();
+            double length = std::hypot(p2.x() - p1.x(), p2.y() - p1.y());
+            infoText = QString("【 直线参数 】\n起点：( %1,  %2 )\n终点：( %3,  %4 )\n长度： %5")
+                           .arg(p1.x(), 0, 'f', 2).arg(p1.y(), 0, 'f', 2)
+                           .arg(p2.x(), 0, 'f', 2).arg(p2.y(), 0, 'f', 2)
+                           .arg(length, 0, 'f', 2);
+        }
+        // 2. 圆算法 (通过边界框求圆心和半径)
+        else if (c.type == "圆" && c.points.size() >= 3) {
+            double minX = c.points[0].x(), maxX = minX;
+            double minY = c.points[0].y(), maxY = minY;
+            for (const QPointF& p : std::as_const(c.points)) {
+                if (p.x() < minX) minX = p.x();
+                if (p.x() > maxX) maxX = p.x();
+                if (p.y() < minY) minY = p.y();
+                if (p.y() > maxY) maxY = p.y();
+            }
+            double cx = (minX + maxX) / 2.0;
+            double cy = (minY + maxY) / 2.0;
+            double radius = (maxX - minX) / 2.0;
+            infoText = QString("【 圆 参数 】\n圆心：( %1,  %2 )\n半径： %3")
+                           .arg(cx, 0, 'f', 2).arg(cy, 0, 'f', 2).arg(radius, 0, 'f', 2);
+        }
+        // 3. 圆弧算法 (任意取三点，利用外接圆公式求中心和半径)
+        else if (c.type == "圆弧" && c.points.size() >= 3) {
+            QPointF p1 = c.points.first();
+            QPointF p2 = c.points[c.points.size() / 2]; // 取圆弧中间点
+            QPointF p3 = c.points.last();
+
+            double x1 = p1.x(), y1 = p1.y();
+            double x2 = p2.x(), y2 = p2.y();
+            double x3 = p3.x(), y3 = p3.y();
+            double a = 2.0 * ((x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1));
+
+            double radius = 0.0;
+            if (std::abs(a) > 1e-6) {
+                double cx = ((y3 - y1) * (x2*x2 - x1*x1 + y2*y2 - y1*y1) + (y1 - y2) * (x3*x3 - x1*x1 + y3*y3 - y1*y1)) / a;
+                double cy = ((x1 - x3) * (x2*x2 - x1*x1 + y2*y2 - y1*y1) + (x2 - x1) * (x3*x3 - x1*x1 + y3*y3 - y1*y1)) / a;
+                radius = std::hypot(cx - x1, cy - y1);
+            }
+            infoText = QString("【 圆弧参数 】\n起点：( %1,  %2 )\n终点：( %3,  %4 )\n半径： %5")
+                           .arg(x1, 0, 'f', 2).arg(y1, 0, 'f', 2)
+                           .arg(x3, 0, 'f', 2).arg(y3, 0, 'f', 2)
+                           .arg(radius, 0, 'f', 2);
+        }
+        else if (c.type == "样条曲线" && c.points.size() >= 3) {
+            infoText = QString("【 样条曲线 (拟合 %1 段圆弧) 】\n").arg(c.points.size() / 2);
+            int arcIndex = 1;
+
+            // 步长为 2，每次取 3 个点 (0-1-2, 2-3-4, 4-5-6...) 保证首尾相接
+            for (int i = 0; i < c.points.size() - 2; i += 2) {
+                QPointF p1 = c.points[i];
+                QPointF p2 = c.points[i+1];
+                QPointF p3 = c.points[i+2];
+
+                double x1 = p1.x(), y1 = p1.y();
+                double x2 = p2.x(), y2 = p2.y();
+                double x3 = p3.x(), y3 = p3.y();
+
+                // 经典三点求圆心公式
+                double a = 2.0 * ((x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1));
+                QString rStr;
+
+                if (std::abs(a) > 1e-6) {
+                    double cx = ((y3 - y1) * (x2*x2 - x1*x1 + y2*y2 - y1*y1) + (y1 - y2) * (x3*x3 - x1*x1 + y3*y3 - y1*y1)) / a;
+                    double cy = ((x1 - x3) * (x2*x2 - x1*x1 + y2*y2 - y1*y1) + (x2 - x1) * (x3*x3 - x1*x1 + y3*y3 - y1*y1)) / a;
+                    double radius = std::hypot(cx - x1, cy - y1);
+                    rStr = QString::number(radius, 'f', 2);
+                } else {
+                    // 如果三个点在一条直线上（曲率极小），算作直线段
+                    rStr = "∞ (直线)";
+                }
+
+                infoText += QString("第 %1 段：\n  起点: (%2, %3)\n  终点: (%4, %5)\n  半径: %6\n")
+                                .arg(arcIndex++)
+                                .arg(x1, 0, 'f', 2).arg(y1, 0, 'f', 2)
+                                .arg(x3, 0, 'f', 2).arg(y3, 0, 'f', 2)
+                                .arg(rStr);
+            }
+        }
+        // 5. 其他类型
+        else {
+            infoText = QString("【 %1参数 】\n该曲线由 %2 个数据点拟合而成。").arg(c.type).arg(c.points.size());
+        }
+
+        // 更新界面文字
+        m_detailContentText->setPlainText(infoText);
+
     } else {
         detailWidget->hide(); // 取消选中时隐藏
     }
-    // 通知绘图区线条高亮
+
+    // 通知绘图区线条变蓝高亮
     renderArea->setHighlightedPathIndex(selectedRow);
 }
 
@@ -748,53 +834,6 @@ void MainWindow::handleTableCellChanged(int row, int column)
 
     // // 更新绘图区
     // renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate, false);
-}
-
-// ----------------------------------------------------
-// 功能：用于输入验证失败时恢复数据，或初始化表格单元格内容
-// 核心：从底层数据结构 weldHoles中读取原始数据，重新设置到表格单元格中
-// ----------------------------------------------------
-void MainWindow::updateTableItem(int row, int column)
-{
-    // if (row < 0 || row >= weldHoles.size())
-    //     return;
-
-    // const Hole &hole = weldHoles[row];                                                  // dxf导入的的焊接管孔数据
-    // switch (column) {
-    // case 0:
-    //     dataTable->setItem(row, 0, new QTableWidgetItem(QString::number(hole.radius, 'f', 2)));
-    //     break;
-    // case 1:
-    //     dataTable->setItem(row, 2, new QTableWidgetItem(QString("(%1, %2)").arg(hole.center.x(), 0, 'f', 2).arg(hole.center.y(), 0, 'f', 2)));
-    //     break;
-    // }
-}
-
-// ----------------------------------------------------
-// 功能：（与新建立的坐标系连接）
-// ----------------------------------------------------
-void MainWindow::updateTableFromData()
-{
-    // disconnect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
-    // dataTable->setRowCount(0);
-
-    // for (int i = 0; i < weldHoles.size(); ++i) {
-    //     dataTable->insertRow(i);
-    //     dataTable->setItem(i, 0, new QTableWidgetItem(QString::number(weldHoles[i].radius, 'f', 2)));
-
-    //     QString centerStr = QString("(%1, %2)")
-    //                             .arg(weldHoles[i].center3D.x(), 0, 'f', 2)
-    //                             .arg(weldHoles[i].center3D.y(), 0, 'f', 2);
-    //     dataTable->setItem(i, 1, new QTableWidgetItem(centerStr));
-
-    //     QString center3DStr = QString("(%1, %2, %3)")
-    //                               .arg(weldHoles[i].center3D.x(), 0, 'f', 2)
-    //                               .arg(weldHoles[i].center3D.y(), 0, 'f', 2)
-    //                               .arg(weldHoles[i].center3D.z(), 0, 'f', 2);
-    //     dataTable->setItem(i, 2, new QTableWidgetItem(center3DStr));
-    // }
-
-    // connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
 }
 
 // ----------------------------------------------------
@@ -1334,24 +1373,49 @@ void MainWindow::restoreDrawing()
     }
 }
 
-void MainWindow::handleItemDeleted(int pathIndex)
+void MainWindow::handleItemDeleted(const QPointF &pos)
 {
-    if (pathIndex >= 0 && pathIndex < m_displayPaths.size()) {
-        // 1. 从内存数据中抹除这条线
-        m_displayPaths.removeAt(pathIndex);
+    double tolerance = 15.0 / renderArea->scaleFactor(); // 碰撞容差
 
-        // 2. 从右侧表格中移除对应的行
-        disconnect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
-        dataTable->removeRow(pathIndex);
-        connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
-
-        // 3. 清理详细信息窗口，防止越界崩溃
-        dataTable->clearSelection();
-        detailWidget->hide();
-        renderArea->setHighlightedPathIndex(-1);
-
-        // 4. 通知绘图区重新画线
-        renderArea->setDisplayPaths(m_displayPaths);
-        renderArea->update();
+    // --- 1. 删除基础线条 (m_displayPaths) ---
+    for (int i = m_displayPaths.size() - 1; i >= 0; --i) {
+        bool hit = false;
+        for (int j = 0; j < m_displayPaths[i].points.size() - 1; ++j) {
+            // 这里调用你 renderarea 里的那个距离计算函数
+            if (renderArea->distancePointToSegment(pos, m_displayPaths[i].points[j], m_displayPaths[i].points[j+1]) < tolerance) {
+                hit = true; break;
+            }
+        }
+        if (hit) {
+            m_displayPaths.removeAt(i);
+            dataTable->removeRow(i); // 同步删除表格
+        }
     }
+
+    // --- 2. 删除管孔 (weldHoles) ---
+    for (int i = weldHoles.size() - 1; i >= 0; --i) {
+        double d = std::abs(std::hypot(pos.x() - weldHoles[i].center.x(), pos.y() - weldHoles[i].center.y()) - weldHoles[i].radius);
+        if (d < tolerance) {
+            weldHoles.removeAt(i);
+        }
+    }
+
+    // --- 3. 删除外框 (mainPlateContour / Hole) ---
+    // 检查方形边框
+    bool hitPlate = false;
+    for (int j = 0; j < mainPlateContour.size() - 1; ++j) {
+        if (renderArea->distancePointToSegment(pos, mainPlateContour[j], mainPlateContour[j+1]) < tolerance) {
+            hitPlate = true; break;
+        }
+    }
+    // 检查圆形边框
+    double dPlateCircle = std::abs(std::hypot(pos.x() - mainPlateHole.center.x(), pos.y() - mainPlateHole.center.y()) - mainPlateHole.radius);
+    if (hitPlate || dPlateCircle < tolerance) {
+        mainPlateContour.clear();
+        mainPlateHole.radius = 0;
+    }
+
+    // --- 4. 统一刷新界面 ---
+    renderArea->setDisplayPaths(m_displayPaths);
+    renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate, false);
 }

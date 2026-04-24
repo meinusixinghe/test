@@ -29,6 +29,9 @@ public:
     void setDisplayPaths(const QVector<Contour>& paths);
     void setHighlightedPathIndex(int index);
     void setEraserMode(bool enabled);
+    double scaleFactor() const { return m_scaleFactor; }
+    double distancePointToSegment(const QPointF& p, const QPointF& p1, const QPointF& p2);
+    void setEraserSize(int size);
 protected:
     void paintEvent(QPaintEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
@@ -38,7 +41,7 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
 signals:
-    void itemDeleted(int pathIndex);
+    void itemDeleted(const QPointF &dxfPos);
 private:
     // 管板数据
     QVector<Hole> weldHoles;                                // 仅焊接管孔（不含主体圆）
@@ -76,7 +79,8 @@ private:
 
     bool m_isEraserMode = false;
     QPoint m_currentMousePos;
-    double distancePointToSegment(const QPointF& p, const QPointF& p1, const QPointF& p2);
+
+    int m_eraserSize = 20;
 };
 
 #endif // RENDERAREA_H
