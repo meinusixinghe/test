@@ -15,12 +15,33 @@
 #include <QCloseEvent>
 #include <QSettings>
 #include <QSplitter>
+#include <QWidget>
+#include <QMouseEvent>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
 
 class RenderArea;
 class usercoordinatemanager;
 
 struct Hole { QPointF center; QVector3D center3D; double radius; };             // 管孔的二维坐标（二维点类，浮点型）、管孔的三维坐标（三维点类，浮点型）、管孔的半径
 struct Contour { QString type; QVector<QPointF> points; };                                    // 多段线（目前未启用）
+
+class FloatingToolWidget : public QWidget {
+    Q_OBJECT
+public:
+    QPushButton *btnRestore;
+    QPushButton *btnEraser;
+    QPushButton *btnClose;
+
+    explicit FloatingToolWidget(QWidget *parent = nullptr);
+
+protected:
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+
+private:
+    QPoint m_dragPosition;
+};
 
 class MainWindow : public QMainWindow
 {
@@ -145,8 +166,8 @@ private:
     int m_positioningMethod = 0;                        // 保存用户选择的定位方式号，默认为 0
     bool m_isPathPlanned = false;
 
-    QAction* m_restoreAction;
-    QAction* m_eraserAction;
+    QAction* m_imageProcessAction;                      // 图纸处理菜单按钮
+    FloatingToolWidget* m_floatingToolWidget;           // 悬浮工具箱
 
     QMenu* m_toolsMenu;
     QVector<Contour> m_originalDisplayPaths;

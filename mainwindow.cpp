@@ -27,6 +27,68 @@
 #include <QSettings>
 #include <QCloseEvent>
 
+FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
+    setAttribute(Qt::WA_StyledBackground, true); // 允许样式表控制背景
+    // 设置工具箱的现代 UI 风格
+    setStyleSheet("FloatingToolWidget { background-color: rgba(245, 246, 247, 230); border: 1px solid #C0C0C0; border-radius: 6px; }"
+                  "QPushButton { background-color: white; border: 1px solid #D0D0D0; border-radius: 4px; padding: 6px; color: #333; font-weight: bold; }"
+                  "QPushButton:hover { background-color: #E8F0FE; border: 1px solid #A0C8F0; }"
+                  "QPushButton:checked { background-color: #DDEEFE; border: 1px solid #80B8FF; color: #0055A4; }");
+
+    QVBoxLayout *mainLayout = new QVBoxLayout(this);
+    mainLayout->setContentsMargins(8, 4, 8, 8);
+    mainLayout->setSpacing(6);
+
+    // 顶部标题栏和关闭按钮
+    QHBoxLayout *header = new QHBoxLayout();
+    header->setContentsMargins(0, 0, 0, 0);
+    QLabel *title = new QLabel("图纸处理工具");
+    title->setStyleSheet("font-size: 12px; color: #666; font-weight: normal; border: none; background: transparent;");
+    btnClose = new QPushButton("×");
+    btnClose->setFixedSize(20, 20);
+    btnClose->setStyleSheet("QPushButton { font-size: 14px; font-weight: bold; color: #999; padding: 0px; border: none; background: transparent; }"
+                            "QPushButton:hover { color: white; background-color: #FF4444; border-radius: 10px; }");
+    header->addWidget(title);
+    header->addStretch();
+    header->addWidget(btnClose);
+
+    // 底部工具按钮
+    QHBoxLayout *tools = new QHBoxLayout();
+    btnRestore = new QPushButton("还原");
+    btnEraser = new QPushButton("橡皮擦"); // 此处可后续替换为 setIcon(QIcon("..."));
+    btnEraser->setCheckable(true);
+    tools->addWidget(btnRestore);
+    tools->addWidget(btnEraser);
+
+    mainLayout->addLayout(header);
+    mainLayout->addLayout(tools);
+
+    setFixedSize(160, 80);
+    setCursor(Qt::ArrowCursor); // 悬浮框内保持普通箭头
+}
+
+void FloatingToolWidget::mousePressEvent(QMouseEvent *event) {
+    // 记录鼠标按下的相对位置，用于拖拽
+    if (event->button() == Qt::LeftButton) {
+        m_dragPosition = event->globalPosition().toPoint() - frameGeometry().topLeft();
+        event->accept();
+    }
+}
+
+void FloatingToolWidget::mouseMoveEvent(QMouseEvent *event) {
+    // 鼠标拖拽移动悬浮框
+    if (event->buttons() & Qt::LeftButton) {
+        QPoint newPos = event->globalPosition().toPoint() - m_dragPosition;
+        // 限制它不要被拖出绘图区边界
+        if (parentWidget()) {
+            newPos.setX(qBound(0, newPos.x(), parentWidget()->width() - width()));
+            newPos.setY(qBound(0, newPos.y(), parentWidget()->height() - height()));
+        }
+        move(newPos);
+        event->accept();
+    }
+}
+
 MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
 {
     // 1. 初始化 UI
@@ -244,11 +306,8 @@ void MainWindow::setupUi()
     m_operationMenu->addAction(m_posMethodAction);
 
     m_toolsMenu = menuBar()->addMenu("工具");
-    m_restoreAction = new QAction("还原图纸", this);
-    m_eraserAction = new QAction("橡皮擦", this);
-    m_eraserAction->setCheckable(true);
-    m_operationMenu->addAction(m_restoreAction);
-    m_operationMenu->addAction(m_eraserAction);
+    m_imageProcessAction = new QAction("图纸处理", this);
+    m_toolsMenu->addAction(m_imageProcessAction);
 
     m_connectMenu = menuBar()->addMenu("连接");
     m_connectAction = new QAction("建立连接", this);
@@ -262,9 +321,6 @@ void MainWindow::setupUi()
     toolBar->addAction(m_setupCoordAction);
     toolBar->addAction(m_pathPlanningAction);
     toolBar->addAction(m_manageProcessAction);
-    toolBar->addSeparator();                                                                    // 加分隔符，和原有工具栏内容区分
-    toolBar->addAction(m_restoreAction);
-    toolBar->addAction(m_eraserAction);
 
     // 6. 状态标签
     m_statusLabel = new QLabel("就绪", this);
@@ -339,19 +395,36 @@ void MainWindow::setupUi()
         m_coordManager->toggleCoordinateDisplay(checked);
         m_toggleCoordBtn->setText(checked ? "隐藏用户坐标系" : "显示用户坐标系");
     });
+
     // 路径规划
     connect(m_pathPlanningAction, &QAction::triggered, this, &MainWindow::onPathPlanningTriggered);
+
     // 焊接工艺
     connect(m_manageProcessAction, &QAction::triggered, this, &MainWindow::onManageWeldingProcess);
+
+    m_floatingToolWidget = new FloatingToolWidget(renderArea);
+    m_floatingToolWidget->hide();
+
     // 通信
     connect(m_connectAction, &QAction::triggered, this, &MainWindow::onConnectTriggered);
     connect(m_posMethodAction, &QAction::triggered, this, &MainWindow::onSelectPositioningMethod);
     connect(m_startBtn, &QPushButton::clicked, this, &MainWindow::onStartClicked);
     connect(m_pauseBtn, &QPushButton::clicked, this, &MainWindow::onPauseClicked);
     connect(m_resetBtn, &QPushButton::clicked, this, &MainWindow::onResetClicked);
-    connect(m_restoreAction, &QAction::triggered, this, &MainWindow::restoreDrawing);
-    connect(m_eraserAction, &QAction::toggled, this, [this](bool checked){
+    connect(m_floatingToolWidget->btnRestore, &QPushButton::clicked, this, &MainWindow::restoreDrawing);
+    connect(m_floatingToolWidget->btnEraser, &QPushButton::toggled, this, [this](bool checked){
         renderArea->setEraserMode(checked);
+    });
+    connect(m_floatingToolWidget->btnClose, &QPushButton::clicked, this, [this](){
+        m_floatingToolWidget->hide();
+        m_floatingToolWidget->btnEraser->setChecked(false);
+    });
+    connect(m_imageProcessAction, &QAction::triggered, this, [this](){
+        if (!m_floatingToolWidget->isVisible()) {
+            m_floatingToolWidget->move(20, 20); // 每次刚打开时，显示在绘图区左上角附近
+        }
+        m_floatingToolWidget->show();
+        m_floatingToolWidget->raise();          // 确保图层在最上方
     });
     connect(renderArea, &RenderArea::itemDeleted, this, &MainWindow::handleItemDeleted);
 

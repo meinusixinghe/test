@@ -269,7 +269,6 @@ void RenderArea::wheelEvent(QWheelEvent *event)
 // ----------------------------------------------------
 void RenderArea::mousePressEvent(QMouseEvent *event)
 {
-    // === 新增：橡皮擦模式下的点击删除逻辑 ===
     if (m_isEraserMode && event->button() == Qt::LeftButton) {
         // 1. 将屏幕像素坐标反算为底层的 DXF 坐标
         QTransform transform;
@@ -308,7 +307,9 @@ void RenderArea::mousePressEvent(QMouseEvent *event)
 
     if (event->button() == Qt::LeftButton) {        // 触发条件是鼠标左键
         m_lastMousePos = event->pos();              // 记录当前鼠标位置
-        setCursor(Qt::ClosedHandCursor);            // 改变鼠标图标为 “闭手”
+        if (!m_isEraserMode) {
+            setCursor(Qt::ClosedHandCursor);
+        }
         event->accept();
     }
 }
@@ -373,7 +374,9 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event)
 void RenderArea::mouseReleaseEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton) {
-        setCursor(Qt::OpenHandCursor);                      // 鼠标松开后恢复为 “开手”图标
+        if (!m_isEraserMode) {
+            setCursor(Qt::OpenHandCursor);
+        }
         event->accept();
     }
 }
