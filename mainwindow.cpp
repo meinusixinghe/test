@@ -81,16 +81,6 @@ MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
     // 4.4 单孔闭环完成，自动触发下一个！
     connect(m_modbusManager, &ModbusManager::jobSentSuccess, this, [this]() {
         if (m_isWeldingProcessRunning) {
-            dataTable->blockSignals(true);
-            for (int col = 0; col < dataTable->columnCount(); ++col) {
-                if (QTableWidgetItem* item = dataTable->item(m_currentWeldIndex, col)) {
-                    item->setBackground(QBrush(QColor(144, 238, 144)));
-                    item->setForeground(QBrush(Qt::black));
-                }
-            }
-            dataTable->blockSignals(false);
-            renderArea->setHoleCompleted(m_currentWeldIndex);
-            dataTable->viewport()->update();
             QApplication::processEvents();
             m_currentWeldIndex++; // 索引加 1
             sendNextWeldHole();   // 自动调取下一行数据发送给机器人
@@ -177,14 +167,13 @@ void MainWindow::setupUi()
     // 2. 后创建右侧：数据表格 (TableWidget)
     dataTable = new QTableWidget(this);
     dataTable->setMinimumSize(200,400);
-    dataTable->setColumnCount(4);
-    dataTable->setHorizontalHeaderLabels({"ID", "半径", "二维坐标", "三维坐标"});
+    dataTable->setColumnCount(3);
+    dataTable->setHorizontalHeaderLabels({"半径", "二维坐标", "三维坐标"});
     dataTable->verticalHeader()->setVisible(false);                                             // 关闭表格行头
     // 优化表格列宽显示
     dataTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    dataTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    dataTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     dataTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
-    dataTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
     splitter->addWidget(dataTable);                                                             // 添加到分割器右侧
 
     // 3. 设置初始比例：左侧占 3份，右侧占 1份
@@ -231,25 +220,6 @@ void MainWindow::setupUi()
     // 6. 状态标签
     m_statusLabel = new QLabel("就绪", this);
     statusBar()->addWidget(m_statusLabel);
-
-    // 状态栏标签（管板半径/焊接孔数）
-    QWidget* labelContainer = new QWidget(this);
-    QVBoxLayout* labelLayout = new QVBoxLayout(labelContainer);                                 // 创建垂直布局，设置到容器上
-    labelLayout->setContentsMargins(0, 0, 0, 0);
-    labelLayout->setSpacing(2);                                                                 // 两个标签之间的垂直间距
-    labelLayout->setAlignment(Qt::AlignCenter);                                                 // 标签在容器中居中对齐
-    mainPlateRadiusLabel = new QLabel("管板半径：--", this);
-    weldHoleCountLabel = new QLabel("焊接管孔数：0", this);
-    QFont statusFont = mainPlateRadiusLabel->font();                                            // 设置字体
-    statusFont.setPointSize(11);
-    mainPlateRadiusLabel->setFont(statusFont);
-    weldHoleCountLabel->setFont(statusFont);
-    mainPlateRadiusLabel->setMinimumWidth(120);                                                 // 设置最小宽度，防止字体显示不全
-    weldHoleCountLabel->setMinimumWidth(120);
-    labelLayout->addWidget(mainPlateRadiusLabel);
-    labelLayout->addWidget(weldHoleCountLabel);
-    toolBar->addWidget(labelContainer);
-    toolBar->addSeparator();
 
     // 工具栏上的状态指示器容器 (网络 + 伺服)
     QWidget* statusContainer = new QWidget(this);
@@ -420,7 +390,6 @@ void MainWindow::loadDrawingData(const QString &filePath)
     for (const auto& holeObj : std::as_const(holeArray)) {          // 从所有管孔遍历 holeObj
         QJsonObject hole = holeObj.toObject();                      // 将当前遍历到的 JSON值（holeObj）转换为 QJsonObject（Qt的 JSON对象类型）
         Hole h;                                                     // 存储当前解析出的单个管孔数据
-        h.id = hole.contains("id") ? hole["id"].toInt() : (allHoles.size() + 1);        // 管孔唯一编号
         QJsonArray center = hole["center"].toArray();               // 圆心（数组）
         h.center = QPointF(center[0].toDouble(), center[1].toDouble());
         h.radius = hole["radius"].toDouble();                       // 半径
@@ -467,23 +436,14 @@ void MainWindow::loadDrawingData(const QString &filePath)
                     mainPlateHole = hole;
             }
             // 分离管孔
-            int weldHoles_count = 0;
             for (const auto& hole : std::as_const(allHoles)) {
                 if (hole.radius < mainPlateHole.radius - 1e-3) {
-                    weldHoles_count++;
                     Hole newHole = hole;
-                    newHole.id = weldHoles_count;
                     weldHoles.append(newHole);
                 }
             }
         }
     }
-    if (isRectangularPlate) {
-        mainPlateRadiusLabel->setText("管板类型：方形/多边形");
-    } else {
-        mainPlateRadiusLabel->setText(QString("管板半径：%1").arg(mainPlateHole.radius, 0, 'f', 2));
-    }
-    weldHoleCountLabel->setText(QString("焊接管孔数：%1").arg(weldHoles.size()));
     // 4. 解析轮廓数据（暂未启用，保留扩展）
     // contours.clear();
     // QJsonArray contourArray = rootObj["contours"].toArray();
@@ -512,12 +472,11 @@ void MainWindow::loadDrawingData(const QString &filePath)
          * idItem->setFlags(idItem->flags() & ~Qt::ItemIsEditable);                                     // 移除可编辑标志，保留可选择、启用
          * dataTable->setItem(i, 0, idItem);
          */
-        dataTable->setItem(i, 0, new QTableWidgetItem(QString::number(weldHoles[i].id)));               // 第 i行第 0列：ID
-        dataTable->setItem(i, 1, new QTableWidgetItem(QString::number(weldHoles[i].radius, 'f', 2)));   // 半径
+        dataTable->setItem(i, 0, new QTableWidgetItem(QString::number(weldHoles[i].radius, 'f', 2)));   // 半径
         QString centerStr = QString("(%1, %2)")                                                         // 二维圆心坐标
                                 .arg(weldHoles[i].center.x(), 0, 'f', 2)
                                 .arg(weldHoles[i].center.y(), 0, 'f', 2);
-        dataTable->setItem(i, 2, new QTableWidgetItem(centerStr));
+        dataTable->setItem(i, 1, new QTableWidgetItem(centerStr));
         QString center3DStr = QString("(%1, %2, %3)")                                                   // 三维坐标
                                   .arg(weldHoles[i].center3D.x(), 0, 'f', 2)
                                   .arg(weldHoles[i].center3D.y(), 0, 'f', 2)
@@ -525,7 +484,7 @@ void MainWindow::loadDrawingData(const QString &filePath)
         QTableWidgetItem* item3D = new QTableWidgetItem(center3DStr);
         item3D->setFlags(item3D->flags() & ~Qt::ItemIsEditable);                                        // 初始加载时，禁止编辑三维坐标
         item3D->setBackground(QBrush(QColor(245, 245, 245)));                                           // 设置浅灰色背景提示用户不可编辑
-        dataTable->setItem(i, 3, item3D);
+        dataTable->setItem(i, 2, item3D);
     }
 
     QVector<Contour> displayPaths;
@@ -548,6 +507,7 @@ void MainWindow::loadDrawingData(const QString &filePath)
     // updateTableFromData();
 
     // 6. 更新左侧绘图区
+    renderArea->setDisplayPaths(displayPaths);
     renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate);
     renderArea->setShowUserCoordinate(false);
 
@@ -605,7 +565,7 @@ void MainWindow::handleTableCellChanged(int row, int column)
     QString value = item->text();                                       // 获取 item对象的内容
     bool ok;
     double num =0;
-    if (column == 1) {                                                  // 第一列半径
+    if (column == 0) {                                                  // 第一列半径
         // 半径列：用原有的toDouble验证
         // bool ok;
         num=value.toDouble(&ok);                                        // 转换成功，ok=true
@@ -614,7 +574,7 @@ void MainWindow::handleTableCellChanged(int row, int column)
             updateTableItem(row, column);                               // 将输入错误的数据还原为修改前的数据
             return;
         }
-    } else if (column == 2) {                                           // 第二列二维圆心坐标
+    } else if (column == 1) {                                           // 第二列二维圆心坐标
         QStringList parts = value.split(',');                           // 按逗号，把字符串拆分成字符串列表
         parts[0].replace('(', ' ').trimmed().toDouble(&ok);             // 先将(替换为空格，再去掉首尾的所有空格，最后转换为浮点数
         if (!ok || parts.size() != 2) {
@@ -633,10 +593,10 @@ void MainWindow::handleTableCellChanged(int row, int column)
     // 修改对应单元格数据
     Hole &hole = weldHoles[row];                                        // 根据列索引更新 weldHoles中对应的数据
     switch (column) {
-    case 1:{                                                            // 半径
+    case 0:{                                                            // 半径
         hole.radius = num;
         break;}
-    case 2:{                                                            // 圆心坐标，需要特殊处理
+    case 1:{                                                            // 圆心坐标，需要特殊处理
         QStringList parts = value.split(',');                           // 解析 "X, Y"格式
         if (parts.size() == 2) {
             double x = parts[0].replace('(', ' ').trimmed().toDouble(&ok);          // 去除括号和空格，转换为 X坐标
@@ -653,7 +613,7 @@ void MainWindow::handleTableCellChanged(int row, int column)
                           .arg(hole.center.y(), 0, 'f', 2));         // 重新格式化显示：保证坐标始终是"(X, Y)"且保留 2位小数，统一格式
         break;
     }
-    case 3:{
+    case 2:{
         QString str = value;
         str.remove('(').remove(')');
         QStringList parts = str.split(',');
@@ -698,12 +658,9 @@ void MainWindow::updateTableItem(int row, int column)
     const Hole &hole = weldHoles[row];                                                  // dxf导入的的焊接管孔数据
     switch (column) {
     case 0:
-        dataTable->setItem(row, 0, new QTableWidgetItem(QString::number(hole.id)));
+        dataTable->setItem(row, 0, new QTableWidgetItem(QString::number(hole.radius, 'f', 2)));
         break;
     case 1:
-        dataTable->setItem(row, 1, new QTableWidgetItem(QString::number(hole.radius, 'f', 2)));
-        break;
-    case 2:
         dataTable->setItem(row, 2, new QTableWidgetItem(QString("(%1, %2)").arg(hole.center.x(), 0, 'f', 2).arg(hole.center.y(), 0, 'f', 2)));
         break;
     }
@@ -719,19 +676,18 @@ void MainWindow::updateTableFromData()
 
     for (int i = 0; i < weldHoles.size(); ++i) {
         dataTable->insertRow(i);
-        dataTable->setItem(i, 0, new QTableWidgetItem(QString::number(weldHoles[i].id)));
-        dataTable->setItem(i, 1, new QTableWidgetItem(QString::number(weldHoles[i].radius, 'f', 2)));
+        dataTable->setItem(i, 0, new QTableWidgetItem(QString::number(weldHoles[i].radius, 'f', 2)));
 
         QString centerStr = QString("(%1, %2)")
                                 .arg(weldHoles[i].center3D.x(), 0, 'f', 2)
                                 .arg(weldHoles[i].center3D.y(), 0, 'f', 2);
-        dataTable->setItem(i, 2, new QTableWidgetItem(centerStr));
+        dataTable->setItem(i, 1, new QTableWidgetItem(centerStr));
 
         QString center3DStr = QString("(%1, %2, %3)")
                                   .arg(weldHoles[i].center3D.x(), 0, 'f', 2)
                                   .arg(weldHoles[i].center3D.y(), 0, 'f', 2)
                                   .arg(weldHoles[i].center3D.z(), 0, 'f', 2);
-        dataTable->setItem(i, 3, new QTableWidgetItem(center3DStr));
+        dataTable->setItem(i, 2, new QTableWidgetItem(center3DStr));
     }
 
     connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
@@ -916,12 +872,11 @@ void MainWindow::onPathPlanningTriggered()
     dataTable->setRowCount(0);
     for (int i = 0; i < weldHoles.size(); ++i) {
         dataTable->insertRow(i);
-        dataTable->setItem(i, 0, new QTableWidgetItem(QString::number(weldHoles[i].id)));
-        dataTable->setItem(i, 1, new QTableWidgetItem(QString::number(weldHoles[i].radius, 'f', 2)));
+        dataTable->setItem(i, 0, new QTableWidgetItem(QString::number(weldHoles[i].radius, 'f', 2)));
         QString centerStr = QString("(%1, %2)").arg(weldHoles[i].center3D.x(), 0, 'f', 2).arg(weldHoles[i].center3D.y(), 0, 'f', 2);
-        dataTable->setItem(i, 2, new QTableWidgetItem(centerStr));
+        dataTable->setItem(i, 1, new QTableWidgetItem(centerStr));
         QString center3DStr = QString("(%1, %2, %3)").arg(weldHoles[i].center3D.x(), 0, 'f', 2).arg(weldHoles[i].center3D.y(), 0, 'f', 2).arg(weldHoles[i].center3D.z(), 0, 'f', 2);
-        dataTable->setItem(i, 3, new QTableWidgetItem(center3DStr));
+        dataTable->setItem(i, 2, new QTableWidgetItem(center3DStr));
     }
     connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
 
@@ -938,14 +893,7 @@ void MainWindow::onPathPlanningTriggered()
     QJsonArray holeArray;
     for (const auto& h : std::as_const(weldHoles)) {
         QJsonObject hObj;
-        hObj["id"] = h.id;
         hObj["radius"] = h.radius;
-
-        // 保存规划后的顺序和ID
-        //QJsonArray centerArr;
-        //centerArr.append(h.center.x());
-        //centerArr.append(h.center.y());
-        //hObj["center"] = centerArr;
 
         // 也可以保存三维坐标
         QJsonArray center3DArr;
@@ -1110,21 +1058,6 @@ void MainWindow::onStartClicked()
         m_pauseBtn->setChecked(false); // 确保按钮处于没被按下的状态
         m_pauseBtn->setText("暂停");
 
-        renderArea->clearCompletedHoles();
-        dataTable->blockSignals(true);
-        for (int r = 0; r < dataTable->rowCount(); ++r) {
-            for (int c = 0; c < dataTable->columnCount(); ++c) {
-                if (QTableWidgetItem* item = dataTable->item(r, c)) {
-                    item->setForeground(QBrush(Qt::black));
-                    if (c == 3) {
-                        item->setBackground(QBrush(QColor(245, 245, 245)));
-                    } else {
-                        item->setBackground(QBrush(Qt::white));
-                    }
-                }
-            }
-        }
-        dataTable->blockSignals(false);
         ModbusManager::RobotCmd cmd = static_cast<ModbusManager::RobotCmd>(m_positioningMethod);
         m_modbusManager->startWeldingProcess(cmd);
     }

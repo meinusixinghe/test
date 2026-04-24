@@ -18,7 +18,7 @@
 class RenderArea;
 class usercoordinatemanager;
 
-struct Hole { int id; QPointF center; QVector3D center3D; double radius; };     // 管孔的唯一编号、管孔的二维坐标（二维点类，浮点型）、管孔的三维坐标（三维点类，浮点型）、管孔的半径
+struct Hole { QPointF center; QVector3D center3D; double radius; };             // 管孔的二维坐标（二维点类，浮点型）、管孔的三维坐标（三维点类，浮点型）、管孔的半径
 struct Contour { QVector<QPointF> points; };                                    // 多段线（目前未启用）
 
 class MainWindow : public QMainWindow
@@ -93,8 +93,6 @@ private:
     QAction* loadAction;
     QMenu* fileMenu;
     QToolBar* toolBar;
-    QLabel* mainPlateRadiusLabel;                       // 显示主体圆半径
-    QLabel* weldHoleCountLabel;                         // 显示焊接管孔数量
 
     int m_currentSelectedIndex = -1;                    // 存储当前选中的孔洞索引 (-1表示未选中)
 

@@ -26,8 +26,6 @@ public:
     void setUserCoordinatePoints(const QPointF& origin, const QPointF& xAxis, const QPointF& planePoint);
     void setShowUserCoordinate(bool show);
 
-    void setHoleCompleted(int index);
-    void clearCompletedHoles();
     void setDisplayPaths(const QVector<Contour>& paths);
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -69,8 +67,6 @@ private:
     QPointF m_userOrigin;                                   // 用户坐标系原点
     QPointF m_userXAxis;                                    // 用户坐标系 x轴
     QPointF m_userPlanePoint;                               // 用户坐标系 y轴
-
-    QSet<int> m_completedHoles;
 
     QVector<Contour> m_displayPaths;
 };

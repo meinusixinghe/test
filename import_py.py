@@ -27,7 +27,6 @@ def parse_dxf(file_path):
     # 遍历 DXF中的实体
     if doc.modelspace():
         msp = doc.modelspace()                      # 获取DXF模型空间
-        hole_id = 1
         temp_holes = []                             # 临时存储孔数据
 
         # ==================== 1. 提取圆形（孔） ====================
@@ -35,16 +34,12 @@ def parse_dxf(file_path):
             center = entity.dxf.center
             radius = entity.dxf.radius
             temp_holes.append({
-                'id': hole_id,
                 'center': [center.x, center.y],
                 'radius': radius
             })
-            hole_id += 1
 
         # 排序规则：先按 X轴升序，X相同按 Y轴升序
         temp_holes.sort(key=lambda h: (-round(h['center'][1], 1), round(h['center'][0])))
-        for idx, hole in enumerate(temp_holes):
-            hole['id'] = idx + 1
         data['holes'] = temp_holes
 
         # ==================== 2. 提取多段线 (主轮廓) ====================

@@ -43,9 +43,6 @@ void RenderArea::setData(const QVector<Hole> &h,const Hole &mPH,const QPolygonF 
         m_scaleFactor = 1.0;
         m_panOffsetDXF = QPointF(0.0, 0.0);
         m_initialContentOffset = QPointF(0.0, 0.0);
-
-        m_completedHoles.clear(); // 只有这时才清空已完成的列表
-
         m_dxfMinBound = QPointF(0.0, 0.0);
         m_dxfMaxBound = QPointF(0.0, 0.0);
     }
@@ -86,7 +83,7 @@ void RenderArea::paintEvent(QPaintEvent *event)
         applyCurrentTransform(painter);
     }
 
-    QPen pathPen(Qt::lightGray, 0); // 使用浅灰色，宽度设为0（化妆笔，始终1像素）
+    QPen pathPen(Qt::black, 1);
     pathPen.setCosmetic(true);
     painter.setPen(pathPen);
 
@@ -112,7 +109,6 @@ void RenderArea::paintEvent(QPaintEvent *event)
     for (int i = 0; i < weldHoles.size(); ++i) {
         const Hole &hole = weldHoles[i];
         bool isHighlighted = (i == m_highlightIndex);
-        bool isCompleted = m_completedHoles.contains(i);
 
         // 4.1 绘制圆 (几何体：直接画)
         if (isHighlighted) {
@@ -121,12 +117,6 @@ void RenderArea::paintEvent(QPaintEvent *event)
             highlightPen.setWidth(3);
             painter.setPen(highlightPen);
             painter.setBrush(QBrush(Qt::yellow, Qt::Dense6Pattern));
-        }else if (isCompleted) {
-            QPen completePen(Qt::darkGreen, 0);
-            completePen.setCosmetic(true);
-            completePen.setWidth(2);
-            painter.setPen(completePen);
-            painter.setBrush(QBrush(QColor(144, 238, 144))); // 浅绿色 (LightGreen)
         }else {
             QPen holePen(Qt::blue, 0);
             holePen.setCosmetic(true);
@@ -136,27 +126,27 @@ void RenderArea::paintEvent(QPaintEvent *event)
         }
         painter.drawEllipse(hole.center, hole.radius, hole.radius);
 
-        painter.save();
-        painter.translate(hole.center);
+        // painter.save();
+        // painter.translate(hole.center);
 
-        // 再次翻转 Y 轴 (负负得正，让文字正立)
-        painter.scale(1.0, -1.0);
+        // // 再次翻转 Y 轴 (负负得正，让文字正立)
+        // painter.scale(1.0, -1.0);
 
-        // C. 设置字体和位置 (此时坐标系原点就是圆心)
-        QFont numFont;
-        int fontSize = qMax(1, static_cast<int>(hole.radius / 2.5)); // 调整字体大小
-        numFont.setBold(true);
-        numFont.setPointSizeF(fontSize);
-        painter.setFont(numFont);
+        // // C. 设置字体和位置 (此时坐标系原点就是圆心)
+        // QFont numFont;
+        // int fontSize = qMax(1, static_cast<int>(hole.radius / 2.5)); // 调整字体大小
+        // numFont.setBold(true);
+        // numFont.setPointSizeF(fontSize);
+        // painter.setFont(numFont);
 
-        // 计算文字矩形（以(0,0)为中心）
-        double rectSize = hole.radius * 1.5;
-        QRectF numRect(-rectSize/2, -rectSize/2, rectSize, rectSize);
+        // // 计算文字矩形（以(0,0)为中心）
+        // double rectSize = hole.radius * 1.5;
+        // QRectF numRect(-rectSize/2, -rectSize/2, rectSize, rectSize);
 
-        painter.setPen(isHighlighted ? Qt::red : Qt::black);
-        painter.drawText(numRect, Qt::AlignCenter, QString::number(hole.id));
+        // painter.setPen(isHighlighted ? Qt::red : Qt::black);
+        // painter.drawText(numRect, Qt::AlignCenter, QString::number(hole.id));
 
-        painter.restore(); // 恢复到全局坐标系（Y向上），准备画下一个圆
+        // painter.restore(); // 恢复到全局坐标系（Y向上），准备画下一个圆
     }
 
     // 绘制用户坐标系
@@ -443,23 +433,5 @@ void RenderArea::setUserCoordinatePoints(const QPointF& origin, const QPointF& x
 void RenderArea::setShowUserCoordinate(bool show)
 {
     m_showUserCoordinate = show;
-    update();
-}
-
-// ----------------------------------------------------
-// 标记单个孔洞为已完成，并触发重绘
-// ----------------------------------------------------
-void RenderArea::setHoleCompleted(int index)
-{
-    m_completedHoles.insert(index);
-    update();
-}
-
-// ----------------------------------------------------
-// 清空所有孔洞的完成状态
-// ----------------------------------------------------
-void RenderArea::clearCompletedHoles()
-{
-    m_completedHoles.clear();
     update();
 }
