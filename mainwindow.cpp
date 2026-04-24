@@ -243,6 +243,13 @@ void MainWindow::setupUi()
     m_posMethodAction->setIcon(QIcon(":/img/images/icons5.png"));
     m_operationMenu->addAction(m_posMethodAction);
 
+    m_toolsMenu = menuBar()->addMenu("工具");
+    m_restoreAction = new QAction("还原图纸", this);
+    m_eraserAction = new QAction("橡皮擦", this);
+    m_eraserAction->setCheckable(true);
+    m_operationMenu->addAction(m_restoreAction);
+    m_operationMenu->addAction(m_eraserAction);
+
     m_connectMenu = menuBar()->addMenu("连接");
     m_connectAction = new QAction("建立连接", this);
     m_connectAction->setIcon(QIcon(":/img/images/icons6.png"));
@@ -256,6 +263,8 @@ void MainWindow::setupUi()
     toolBar->addAction(m_pathPlanningAction);
     toolBar->addAction(m_manageProcessAction);
     toolBar->addSeparator();                                                                    // 加分隔符，和原有工具栏内容区分
+    toolBar->addAction(m_restoreAction);
+    toolBar->addAction(m_eraserAction);
 
     // 6. 状态标签
     m_statusLabel = new QLabel("就绪", this);
@@ -340,6 +349,11 @@ void MainWindow::setupUi()
     connect(m_startBtn, &QPushButton::clicked, this, &MainWindow::onStartClicked);
     connect(m_pauseBtn, &QPushButton::clicked, this, &MainWindow::onPauseClicked);
     connect(m_resetBtn, &QPushButton::clicked, this, &MainWindow::onResetClicked);
+    connect(m_restoreAction, &QAction::triggered, this, &MainWindow::restoreDrawing);
+    connect(m_eraserAction, &QAction::toggled, this, [this](bool checked){
+        renderArea->setEraserMode(checked);
+    });
+    connect(renderArea, &RenderArea::itemDeleted, this, &MainWindow::handleItemDeleted);
 
     resize(1200, 700);
 }
@@ -533,6 +547,11 @@ void MainWindow::loadDrawingData(const QString &filePath)
 
     renderArea->setDisplayPaths(m_displayPaths);
     renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate);
+
+    m_originalDisplayPaths = m_displayPaths;
+    m_originalWeldHoles = weldHoles;
+    m_originalMainPlateHole = mainPlateHole;
+    m_originalMainPlateContour = mainPlateContour;
 }
 
 // void MainWindow::loadJSONData()
@@ -1208,3 +1227,58 @@ void MainWindow::sendNextWeldHole()
     m_modbusManager->sendWeldHoleData(data);
 }
 
+void MainWindow::restoreDrawing()
+{
+    if (m_originalDisplayPaths.isEmpty() && m_originalWeldHoles.isEmpty()) return;
+
+    QMessageBox::StandardButton reply;
+    reply = QMessageBox::question(this, "还原图纸", "确定要还原图纸到初始状态吗？\n所有被橡皮擦除的线条都将恢复。",
+                                  QMessageBox::Yes | QMessageBox::No);
+    if (reply == QMessageBox::Yes) {
+        // 1. 恢复底层数据
+        m_displayPaths = m_originalDisplayPaths;
+        weldHoles = m_originalWeldHoles;
+        mainPlateHole = m_originalMainPlateHole;
+        mainPlateContour = m_originalMainPlateContour;
+
+        // 2. 刷新右侧表格
+        disconnect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
+        dataTable->setRowCount(0);
+        for (int i = 0; i < m_displayPaths.size(); ++i) {
+            dataTable->insertRow(i);
+            QTableWidgetItem* item = new QTableWidgetItem(m_displayPaths[i].type);
+            item->setTextAlignment(Qt::AlignCenter);
+            item->setFlags(item->flags() & ~Qt::ItemIsEditable);
+            dataTable->setItem(i, 0, item);
+        }
+        connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
+
+        // 3. 重置 UI 状态并通知渲染区更新 (false 表示视角和缩放不重置，保持当前视图)
+        detailWidget->hide();
+        renderArea->setHighlightedPathIndex(-1);
+        renderArea->setDisplayPaths(m_displayPaths);
+        renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate, false);
+    }
+}
+
+void MainWindow::handleItemDeleted(int pathIndex)
+{
+    if (pathIndex >= 0 && pathIndex < m_displayPaths.size()) {
+        // 1. 从内存数据中抹除这条线
+        m_displayPaths.removeAt(pathIndex);
+
+        // 2. 从右侧表格中移除对应的行
+        disconnect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
+        dataTable->removeRow(pathIndex);
+        connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
+
+        // 3. 清理详细信息窗口，防止越界崩溃
+        dataTable->clearSelection();
+        detailWidget->hide();
+        renderArea->setHighlightedPathIndex(-1);
+
+        // 4. 通知绘图区重新画线
+        renderArea->setDisplayPaths(m_displayPaths);
+        renderArea->update();
+    }
+}

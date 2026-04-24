@@ -75,6 +75,9 @@ private slots:
 
     // 持续发送下一个管孔的函数
     void sendNextWeldHole();
+
+    void restoreDrawing();
+    void handleItemDeleted(int pathIndex);
 private:
     void loadDrawingData(const QString &filePath);      // 核心数据加载函数
     void setupUi();                                     // UI初始化函数
@@ -142,6 +145,14 @@ private:
     int m_positioningMethod = 0;                        // 保存用户选择的定位方式号，默认为 0
     bool m_isPathPlanned = false;
 
+    QAction* m_restoreAction;
+    QAction* m_eraserAction;
+
+    QMenu* m_toolsMenu;
+    QVector<Contour> m_originalDisplayPaths;
+    QVector<Hole> m_originalWeldHoles;
+    Hole m_originalMainPlateHole;
+    QPolygonF m_originalMainPlateContour;
 };
 
 #endif // MAINWINDOW_H

@@ -25,6 +25,7 @@ RenderArea::RenderArea(QWidget *parent): QWidget(parent),
     setAutoFillBackground(true);                        // 自动填充背景，避免透明
     setFocusPolicy(Qt::StrongFocus);                    // 获得焦点，支持键盘事件（此处未用，预留）
     setCursor(Qt::OpenHandCursor);                      // 设置鼠标样式，提醒用户可以拖拽
+    setMouseTracking(true);
 }
 
 // ----------------------------------------------------
@@ -223,6 +224,19 @@ void RenderArea::paintEvent(QPaintEvent *event)
         painter.drawText(m_userPlanePoint.x() + textOffset, -(m_userPlanePoint.y() - textOffset), "Y轴");
         painter.restore();
     }
+
+    if (m_isEraserMode) {
+        painter.save();
+        painter.setTransform(QTransform()); // 重置变换，直接在屏幕物理像素下画
+        QColor pink(255, 182, 193, 150);    // 浅粉色半透明填充
+        painter.setBrush(pink);
+        painter.setPen(Qt::NoPen);
+        int rectSize = 20; // 橡皮擦感应方块大小
+        painter.drawRect(m_currentMousePos.x() - rectSize / 2,
+                         m_currentMousePos.y() - rectSize / 2,
+                         rectSize, rectSize);
+        painter.restore();
+    }
 }
 
 // ----------------------------------------------------
@@ -255,6 +269,43 @@ void RenderArea::wheelEvent(QWheelEvent *event)
 // ----------------------------------------------------
 void RenderArea::mousePressEvent(QMouseEvent *event)
 {
+    // === 新增：橡皮擦模式下的点击删除逻辑 ===
+    if (m_isEraserMode && event->button() == Qt::LeftButton) {
+        // 1. 将屏幕像素坐标反算为底层的 DXF 坐标
+        QTransform transform;
+        transform.translate(width() / 2.0, height() / 2.0);
+        transform.scale(m_scaleFactor, -m_scaleFactor);
+        transform.translate((m_initialContentOffset + m_panOffsetDXF).x(),
+                            (m_initialContentOffset + m_panOffsetDXF).y());
+        bool invertible;
+        QTransform invTransform = transform.inverted(&invertible);
+        if (!invertible) return;
+
+        QPointF dxfPos = invTransform.map(QPointF(event->pos()));
+
+        // 2. 遍历所有线条，找到离点击位置最近的线段
+        double minDistance = std::numeric_limits<double>::max();
+        int closestIndex = -1;
+
+        for (int i = 0; i < m_displayPaths.size(); ++i) {
+            const auto& contour = m_displayPaths[i];
+            for (int j = 0; j < contour.points.size() - 1; ++j) {
+                double d = distancePointToSegment(dxfPos, contour.points[j], contour.points[j+1]);
+                if (d < minDistance) {
+                    minDistance = d;
+                    closestIndex = i;
+                }
+            }
+        }
+
+        // 3. 判断是否在粉色方块(容差约15像素)范围内
+        double pixelDistance = minDistance * m_scaleFactor;
+        if (pixelDistance < 15.0 && closestIndex != -1) {
+            emit itemDeleted(closestIndex); // 找到目标，发射信号让主界面删除
+        }
+        return; // 橡皮擦模式下不执行后续的拖拽平移
+    }
+
     if (event->button() == Qt::LeftButton) {        // 触发条件是鼠标左键
         m_lastMousePos = event->pos();              // 记录当前鼠标位置
         setCursor(Qt::ClosedHandCursor);            // 改变鼠标图标为 “闭手”
@@ -267,6 +318,12 @@ void RenderArea::mousePressEvent(QMouseEvent *event)
 // ----------------------------------------------------
 void RenderArea::mouseMoveEvent(QMouseEvent *event)
 {
+    if (m_isEraserMode) {
+        m_currentMousePos = event->pos();
+        update();
+        return;
+    }
+
     if (event->buttons() & Qt::LeftButton) {
         QPoint delta = event->pos() - m_lastMousePos;                       // 像素移动量
 
@@ -431,4 +488,22 @@ void RenderArea::setHighlightedPathIndex(int index) {
         m_highlightPathIndex = index;
         update();
     }
+}
+
+void RenderArea::setEraserMode(bool enabled) {
+    m_isEraserMode = enabled;
+    if (enabled) {
+        setCursor(Qt::BlankCursor); // 隐藏默认鼠标，用粉色方块代替
+    } else {
+        setCursor(Qt::OpenHandCursor);
+    }
+    update();
+}
+
+double RenderArea::distancePointToSegment(const QPointF& p, const QPointF& p1, const QPointF& p2) {
+    double l2 = std::pow(p1.x() - p2.x(), 2) + std::pow(p1.y() - p2.y(), 2);
+    if (l2 == 0.0) return std::hypot(p.x() - p1.x(), p.y() - p1.y());
+    double t = std::max(0.0, std::min(1.0, ((p.x() - p1.x()) * (p2.x() - p1.x()) + (p.y() - p1.y()) * (p2.y() - p1.y())) / l2));
+    QPointF projection(p1.x() + t * (p2.x() - p1.x()), p1.y() + t * (p2.y() - p1.y()));
+    return std::hypot(p.x() - projection.x(), p.y() - projection.y());
 }
