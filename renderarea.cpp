@@ -83,13 +83,13 @@ void RenderArea::paintEvent(QPaintEvent *event)
         applyCurrentTransform(painter);
     }
 
-    QPen pathPen(Qt::black, 1);
+    QPen pathPen(Qt::black, 0);
     pathPen.setCosmetic(true);
+    pathPen.setWidth(4);
     painter.setPen(pathPen);
 
     for (const auto& contour : std::as_const(m_displayPaths)) {
         if (contour.points.size() > 1) {
-            // 使用 drawPolyline 绘制连续的点阵
             painter.drawPolyline(contour.points.data(), contour.points.size());
         }
     }
