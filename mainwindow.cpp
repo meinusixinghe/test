@@ -164,17 +164,57 @@ void MainWindow::setupUi()
     bottomBtnLayout->addStretch();
     overlayLayout->addLayout(bottomBtnLayout);
 
-    // 2. 后创建右侧：数据表格 (TableWidget)
-    dataTable = new QTableWidget(this);
-    dataTable->setMinimumSize(200,400);
-    dataTable->setColumnCount(3);
-    dataTable->setHorizontalHeaderLabels({"半径", "二维坐标", "三维坐标"});
-    dataTable->verticalHeader()->setVisible(false);                                             // 关闭表格行头
-    // 优化表格列宽显示
-    dataTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    dataTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
-    dataTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
-    splitter->addWidget(dataTable);                                                             // 添加到分割器右侧
+    // 2. 右侧垂直分割器 (上：表格，下：详细信息)
+    rightSplitter = new QSplitter(Qt::Vertical, splitter);
+    splitter->addWidget(rightSplitter);
+
+    dataTable = new QTableWidget(rightSplitter);
+    dataTable->setMinimumSize(200, 200);
+    dataTable->setColumnCount(1);
+    dataTable->setHorizontalHeaderLabels({"线条类型"});
+    dataTable->verticalHeader()->setVisible(false);
+    dataTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    dataTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    dataTable->setSelectionMode(QAbstractItemView::SingleSelection);
+    rightSplitter->addWidget(dataTable);
+
+    // 创建底部的详细信息视窗
+    detailWidget = new QWidget(rightSplitter);
+    QVBoxLayout* detailLayout = new QVBoxLayout(detailWidget);
+    detailLayout->setContentsMargins(10, 10, 10, 10);
+
+    // 带有 X 关闭按钮的表头
+    QWidget* detailTitleWidget = new QWidget(detailWidget);
+    QHBoxLayout* titleLayout = new QHBoxLayout(detailTitleWidget);
+    titleLayout->setContentsMargins(0, 0, 0, 0);
+    QLabel* detailTitle = new QLabel("详细信息", detailTitleWidget);
+    QFont f = detailTitle->font(); f.setBold(true); detailTitle->setFont(f);
+    QPushButton* closeDetailBtn = new QPushButton("X", detailTitleWidget);
+    closeDetailBtn->setFixedSize(24, 24);
+    closeDetailBtn->setStyleSheet("QPushButton { color: red; font-weight: bold; border: none; } QPushButton:hover { background-color: #ffe6e6; }");
+    titleLayout->addWidget(detailTitle);
+    titleLayout->addStretch();
+    titleLayout->addWidget(closeDetailBtn);
+
+    // 详细信息占位符内容
+    QLabel* detailContent = new QLabel("暂无详细信息\n（预留扩展区域）", detailWidget);
+    detailContent->setAlignment(Qt::AlignCenter);
+    detailContent->setStyleSheet("color: gray;");
+
+    detailLayout->addWidget(detailTitleWidget);
+    detailLayout->addWidget(detailContent);
+    detailLayout->addStretch();
+
+    rightSplitter->addWidget(detailWidget);
+    detailWidget->hide(); // 初始隐藏，让表格填满
+
+    // X 按钮点击事件：关闭窗口、清除表格选中、清除左侧高亮
+    connect(closeDetailBtn, &QPushButton::clicked, this, [this](){
+        dataTable->clearSelection();
+        dataTable->setCurrentItem(nullptr);
+        detailWidget->hide();
+        renderArea->setHighlightedPathIndex(-1);
+    });                                                             // 添加到分割器右侧
 
     // 3. 设置初始比例：左侧占 3份，右侧占 1份
     splitter->setCollapsible(0, false);
@@ -396,7 +436,7 @@ void MainWindow::loadDrawingData(const QString &filePath)
         allHoles.append(h);                                         // 将解析完成的 Hole对象 h添加到 allHoles容器的末尾，完成单个管孔的解析和存储
     }
 
-    // 2. 解析轮廓
+    // 4. 解析轮廓
     contours.clear();
     QJsonArray contourArray = rootObj["contours"].toArray();
     for (const auto& cObj : std::as_const(contourArray)) {
@@ -457,75 +497,42 @@ void MainWindow::loadDrawingData(const QString &filePath)
     //     contours.append(c);
     // }
 
-    // 5. 更新右侧表格(只更新管孔的)
-    // 加载表格前断开信号连接
-    /*
-     QTableWidget::cellChanged是 “单元格内容被修改” 时触发的信号
-    */
-    disconnect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
-    dataTable->setRowCount(0);                                                                          // 清空表格数据
-    for (int i = 0; i < weldHoles.size(); ++i) {
-        dataTable->insertRow(i);                                                                        // 插入行
-        /*
-         * 可替换dataTable->setItem(i, 0, new QTableWidgetItem(QString::number(weldHoles[i].id)));使第 0列数据不能修改数据
-         * QTableWidgetItem* idItem = new QTableWidgetItem(QString::number(weldHoles[i].id));           // 创建对象
-         * idItem->setFlags(idItem->flags() & ~Qt::ItemIsEditable);                                     // 移除可编辑标志，保留可选择、启用
-         * dataTable->setItem(i, 0, idItem);
-         */
-        dataTable->setItem(i, 0, new QTableWidgetItem(QString::number(weldHoles[i].radius, 'f', 2)));   // 半径
-        QString centerStr = QString("(%1, %2)")                                                         // 二维圆心坐标
-                                .arg(weldHoles[i].center.x(), 0, 'f', 2)
-                                .arg(weldHoles[i].center.y(), 0, 'f', 2);
-        dataTable->setItem(i, 1, new QTableWidgetItem(centerStr));
-        QString center3DStr = QString("(%1, %2, %3)")                                                   // 三维坐标
-                                  .arg(weldHoles[i].center3D.x(), 0, 'f', 2)
-                                  .arg(weldHoles[i].center3D.y(), 0, 'f', 2)
-                                  .arg(weldHoles[i].center3D.z(), 0, 'f', 2);
-        QTableWidgetItem* item3D = new QTableWidgetItem(center3DStr);
-        item3D->setFlags(item3D->flags() & ~Qt::ItemIsEditable);                                        // 初始加载时，禁止编辑三维坐标
-        item3D->setBackground(QBrush(QColor(245, 245, 245)));                                           // 设置浅灰色背景提示用户不可编辑
-        dataTable->setItem(i, 2, item3D);
-    }
-
-    QVector<Contour> displayPaths;
+    // 5. 解析所有的背景线条（包含类型）
+    m_displayPaths.clear();
     if (rootObj.contains("display_paths")) {
         QJsonArray pathArray = rootObj["display_paths"].toArray();
         for (const auto& pRef : std::as_const(pathArray)) {
-            QJsonArray ptsArray = pRef.toArray();
+            QJsonObject pathObj = pRef.toObject();
             Contour contour;
+            contour.type = pathObj["type"].toString(); // 取出 python新加的 type
+            QJsonArray ptsArray = pathObj["points"].toArray();
             for (const auto& ptRef : std::as_const(ptsArray)) {
                 QJsonArray xy = ptRef.toArray();
                 if (xy.size() >= 2) {
                     contour.points.append(QPointF(xy[0].toDouble(), xy[1].toDouble()));
                 }
             }
-            displayPaths.append(contour);
+            m_displayPaths.append(contour);
         }
     }
-    // 更新表格后重新连接信号
-    connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
-    // updateTableFromData();
 
     // 6. 更新左侧绘图区
-    renderArea->setDisplayPaths(displayPaths);
+    disconnect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
+    dataTable->setRowCount(0);
+    for (int i = 0; i < m_displayPaths.size(); ++i) {
+        dataTable->insertRow(i);
+        QTableWidgetItem* item = new QTableWidgetItem(m_displayPaths[i].type);
+        item->setTextAlignment(Qt::AlignCenter);
+        item->setFlags(item->flags() & ~Qt::ItemIsEditable); // 不允许用户编辑文字
+        dataTable->setItem(i, 0, item);
+    }
+    connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
+
+    detailWidget->hide();
+    renderArea->setHighlightedPathIndex(-1);
+
+    renderArea->setDisplayPaths(m_displayPaths);
     renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate);
-    renderArea->setShowUserCoordinate(false);
-
-    // 7. 重置选中状态
-    m_currentSelectedIndex = -1;                                                                        // 当前选中的孔洞索引
-    renderArea->setHighlightedIndex(m_currentSelectedIndex);
-    if (m_coordManager) {                                                                               // 判断指针是否有效
-        delete m_coordManager;
-    }
-    m_coordManager = new usercoordinatemanager(this);
-    m_coordManager->initialize(renderArea, dataTable, weldHoles, mainPlateHole, m_statusLabel);
-
-    if (m_toggleCoordBtn) {
-        m_toggleCoordBtn->setVisible(false);
-        m_toggleCoordBtn->setChecked(true);
-        m_toggleCoordBtn->setText("显示用户坐标系");
-    }
-    m_isPathPlanned = false;
 }
 
 // void MainWindow::loadJSONData()
@@ -544,9 +551,14 @@ void MainWindow::loadDrawingData(const QString &filePath)
 // ----------------------------------------------------
 void MainWindow::handleTableSelectionChanged()
 {
-    int selectedRow = dataTable->currentRow();                          // 获取当前选中行（-1表示未选中）
-    m_currentSelectedIndex = selectedRow;                               // 更新主窗口的选中索引
-    renderArea->setHighlightedIndex(m_currentSelectedIndex);            // 传递给绘图区，实现高亮
+    int selectedRow = dataTable->currentRow();
+    if (selectedRow >= 0) {
+        detailWidget->show(); // 选中时显示下方详细信息
+    } else {
+        detailWidget->hide(); // 取消选中时隐藏
+    }
+    // 通知绘图区线条高亮
+    renderArea->setHighlightedPathIndex(selectedRow);
 }
 
 // ----------------------------------------------------
@@ -554,96 +566,96 @@ void MainWindow::handleTableSelectionChanged()
 // ----------------------------------------------------
 void MainWindow::handleTableCellChanged(int row, int column)
 {
-    if (row < 0 || row >= weldHoles.size())                             // 索引有效性检查：防止行索引超出weldHoles的范围，避免数组越界
-        return;
+    // if (row < 0 || row >= weldHoles.size())                             // 索引有效性检查：防止行索引超出weldHoles的范围，避免数组越界
+    //     return;
 
-    // 获取当前单元格数据
-    QTableWidgetItem *item = dataTable->item(row, column);              // 获取当前单元格的 item对象，判空防止空指针访问（一个单元格对象）
-    if (!item) return;
+    // // 获取当前单元格数据
+    // QTableWidgetItem *item = dataTable->item(row, column);              // 获取当前单元格的 item对象，判空防止空指针访问（一个单元格对象）
+    // if (!item) return;
 
-    // 校验输入的数据有效性
-    QString value = item->text();                                       // 获取 item对象的内容
-    bool ok;
-    double num =0;
-    if (column == 0) {                                                  // 第一列半径
-        // 半径列：用原有的toDouble验证
-        // bool ok;
-        num=value.toDouble(&ok);                                        // 转换成功，ok=true
-        if (!ok) {                                                      // 转换失败
-            QMessageBox::warning(this, "输入错误", "请输入有效的数字");
-            updateTableItem(row, column);                               // 将输入错误的数据还原为修改前的数据
-            return;
-        }
-    } else if (column == 1) {                                           // 第二列二维圆心坐标
-        QStringList parts = value.split(',');                           // 按逗号，把字符串拆分成字符串列表
-        parts[0].replace('(', ' ').trimmed().toDouble(&ok);             // 先将(替换为空格，再去掉首尾的所有空格，最后转换为浮点数
-        if (!ok || parts.size() != 2) {
-            QMessageBox::warning(this, "输入错误", "请输入有效的数字");
-            updateTableItem(row, column);
-            return;
-        }
-        parts[1].replace(')', ' ').trimmed().toDouble(&ok);
-        if (!ok) {
-            QMessageBox::warning(this, "输入错误", "请输入有效的数字");
-            updateTableItem(row, column);
-            return;
-        }
-    }
+    // // 校验输入的数据有效性
+    // QString value = item->text();                                       // 获取 item对象的内容
+    // bool ok;
+    // double num =0;
+    // if (column == 0) {                                                  // 第一列半径
+    //     // 半径列：用原有的toDouble验证
+    //     // bool ok;
+    //     num=value.toDouble(&ok);                                        // 转换成功，ok=true
+    //     if (!ok) {                                                      // 转换失败
+    //         QMessageBox::warning(this, "输入错误", "请输入有效的数字");
+    //         updateTableItem(row, column);                               // 将输入错误的数据还原为修改前的数据
+    //         return;
+    //     }
+    // } else if (column == 1) {                                           // 第二列二维圆心坐标
+    //     QStringList parts = value.split(',');                           // 按逗号，把字符串拆分成字符串列表
+    //     parts[0].replace('(', ' ').trimmed().toDouble(&ok);             // 先将(替换为空格，再去掉首尾的所有空格，最后转换为浮点数
+    //     if (!ok || parts.size() != 2) {
+    //         QMessageBox::warning(this, "输入错误", "请输入有效的数字");
+    //         updateTableItem(row, column);
+    //         return;
+    //     }
+    //     parts[1].replace(')', ' ').trimmed().toDouble(&ok);
+    //     if (!ok) {
+    //         QMessageBox::warning(this, "输入错误", "请输入有效的数字");
+    //         updateTableItem(row, column);
+    //         return;
+    //     }
+    // }
 
-    // 修改对应单元格数据
-    Hole &hole = weldHoles[row];                                        // 根据列索引更新 weldHoles中对应的数据
-    switch (column) {
-    case 0:{                                                            // 半径
-        hole.radius = num;
-        break;}
-    case 1:{                                                            // 圆心坐标，需要特殊处理
-        QStringList parts = value.split(',');                           // 解析 "X, Y"格式
-        if (parts.size() == 2) {
-            double x = parts[0].replace('(', ' ').trimmed().toDouble(&ok);          // 去除括号和空格，转换为 X坐标
-            if (ok) {
-                double y = parts[1].replace(')', ' ').trimmed().toDouble(&ok);      // 去除括号和空格，转换为 Y坐标
-                if (ok) {
-                    hole.center.setX(x);
-                    hole.center.setY(y);
-                }
-            }
-        }
-        item->setText(QString("(%1, %2)")
-                          .arg(hole.center.x(), 0, 'f', 2)
-                          .arg(hole.center.y(), 0, 'f', 2));         // 重新格式化显示：保证坐标始终是"(X, Y)"且保留 2位小数，统一格式
-        break;
-    }
-    case 2:{
-        QString str = value;
-        str.remove('(').remove(')');
-        QStringList parts = str.split(',');
-        if (parts.size() == 3) {
-            double x = parts[0].trimmed().toDouble(&ok);
-            if (ok) {
-                double y = parts[1].trimmed().toDouble(&ok);
-                if (ok) {
-                    double z = parts[2].trimmed().toDouble(&ok);
-                    if (ok) {
-                        hole.center3D = QVector3D(x, y, z);
-                        // 如果修改了三维坐标，同步更新二维坐标（投影）
-                        hole.center = QPointF(x, y);
-                        // 更新二维坐标单元格
-                        dataTable->item(row, 2)->setText(QString("(%1, %2)")
-                                                             .arg(x, 0, 'f', 2)
-                                                             .arg(y, 0, 'f', 2));
-                    }
-                }
-            }
-        }
-        item->setText(QString("(%1, %2, %3)")
-                          .arg(hole.center3D.x(), 0, 'f', 2)
-                          .arg(hole.center3D.y(), 0, 'f', 2)
-                          .arg(hole.center3D.z(), 0, 'f', 2));
-        break;}
-    }
+    // // 修改对应单元格数据
+    // Hole &hole = weldHoles[row];                                        // 根据列索引更新 weldHoles中对应的数据
+    // switch (column) {
+    // case 0:{                                                            // 半径
+    //     hole.radius = num;
+    //     break;}
+    // case 1:{                                                            // 圆心坐标，需要特殊处理
+    //     QStringList parts = value.split(',');                           // 解析 "X, Y"格式
+    //     if (parts.size() == 2) {
+    //         double x = parts[0].replace('(', ' ').trimmed().toDouble(&ok);          // 去除括号和空格，转换为 X坐标
+    //         if (ok) {
+    //             double y = parts[1].replace(')', ' ').trimmed().toDouble(&ok);      // 去除括号和空格，转换为 Y坐标
+    //             if (ok) {
+    //                 hole.center.setX(x);
+    //                 hole.center.setY(y);
+    //             }
+    //         }
+    //     }
+    //     item->setText(QString("(%1, %2)")
+    //                       .arg(hole.center.x(), 0, 'f', 2)
+    //                       .arg(hole.center.y(), 0, 'f', 2));         // 重新格式化显示：保证坐标始终是"(X, Y)"且保留 2位小数，统一格式
+    //     break;
+    // }
+    // case 2:{
+    //     QString str = value;
+    //     str.remove('(').remove(')');
+    //     QStringList parts = str.split(',');
+    //     if (parts.size() == 3) {
+    //         double x = parts[0].trimmed().toDouble(&ok);
+    //         if (ok) {
+    //             double y = parts[1].trimmed().toDouble(&ok);
+    //             if (ok) {
+    //                 double z = parts[2].trimmed().toDouble(&ok);
+    //                 if (ok) {
+    //                     hole.center3D = QVector3D(x, y, z);
+    //                     // 如果修改了三维坐标，同步更新二维坐标（投影）
+    //                     hole.center = QPointF(x, y);
+    //                     // 更新二维坐标单元格
+    //                     dataTable->item(row, 2)->setText(QString("(%1, %2)")
+    //                                                          .arg(x, 0, 'f', 2)
+    //                                                          .arg(y, 0, 'f', 2));
+    //                 }
+    //             }
+    //         }
+    //     }
+    //     item->setText(QString("(%1, %2, %3)")
+    //                       .arg(hole.center3D.x(), 0, 'f', 2)
+    //                       .arg(hole.center3D.y(), 0, 'f', 2)
+    //                       .arg(hole.center3D.z(), 0, 'f', 2));
+    //     break;}
+    // }
 
-    // 更新绘图区
-    renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate, false);
+    // // 更新绘图区
+    // renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate, false);
 }
 
 // ----------------------------------------------------
@@ -652,18 +664,18 @@ void MainWindow::handleTableCellChanged(int row, int column)
 // ----------------------------------------------------
 void MainWindow::updateTableItem(int row, int column)
 {
-    if (row < 0 || row >= weldHoles.size())
-        return;
+    // if (row < 0 || row >= weldHoles.size())
+    //     return;
 
-    const Hole &hole = weldHoles[row];                                                  // dxf导入的的焊接管孔数据
-    switch (column) {
-    case 0:
-        dataTable->setItem(row, 0, new QTableWidgetItem(QString::number(hole.radius, 'f', 2)));
-        break;
-    case 1:
-        dataTable->setItem(row, 2, new QTableWidgetItem(QString("(%1, %2)").arg(hole.center.x(), 0, 'f', 2).arg(hole.center.y(), 0, 'f', 2)));
-        break;
-    }
+    // const Hole &hole = weldHoles[row];                                                  // dxf导入的的焊接管孔数据
+    // switch (column) {
+    // case 0:
+    //     dataTable->setItem(row, 0, new QTableWidgetItem(QString::number(hole.radius, 'f', 2)));
+    //     break;
+    // case 1:
+    //     dataTable->setItem(row, 2, new QTableWidgetItem(QString("(%1, %2)").arg(hole.center.x(), 0, 'f', 2).arg(hole.center.y(), 0, 'f', 2)));
+    //     break;
+    // }
 }
 
 // ----------------------------------------------------
@@ -671,26 +683,26 @@ void MainWindow::updateTableItem(int row, int column)
 // ----------------------------------------------------
 void MainWindow::updateTableFromData()
 {
-    disconnect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
-    dataTable->setRowCount(0);
+    // disconnect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
+    // dataTable->setRowCount(0);
 
-    for (int i = 0; i < weldHoles.size(); ++i) {
-        dataTable->insertRow(i);
-        dataTable->setItem(i, 0, new QTableWidgetItem(QString::number(weldHoles[i].radius, 'f', 2)));
+    // for (int i = 0; i < weldHoles.size(); ++i) {
+    //     dataTable->insertRow(i);
+    //     dataTable->setItem(i, 0, new QTableWidgetItem(QString::number(weldHoles[i].radius, 'f', 2)));
 
-        QString centerStr = QString("(%1, %2)")
-                                .arg(weldHoles[i].center3D.x(), 0, 'f', 2)
-                                .arg(weldHoles[i].center3D.y(), 0, 'f', 2);
-        dataTable->setItem(i, 1, new QTableWidgetItem(centerStr));
+    //     QString centerStr = QString("(%1, %2)")
+    //                             .arg(weldHoles[i].center3D.x(), 0, 'f', 2)
+    //                             .arg(weldHoles[i].center3D.y(), 0, 'f', 2);
+    //     dataTable->setItem(i, 1, new QTableWidgetItem(centerStr));
 
-        QString center3DStr = QString("(%1, %2, %3)")
-                                  .arg(weldHoles[i].center3D.x(), 0, 'f', 2)
-                                  .arg(weldHoles[i].center3D.y(), 0, 'f', 2)
-                                  .arg(weldHoles[i].center3D.z(), 0, 'f', 2);
-        dataTable->setItem(i, 2, new QTableWidgetItem(center3DStr));
-    }
+    //     QString center3DStr = QString("(%1, %2, %3)")
+    //                               .arg(weldHoles[i].center3D.x(), 0, 'f', 2)
+    //                               .arg(weldHoles[i].center3D.y(), 0, 'f', 2)
+    //                               .arg(weldHoles[i].center3D.z(), 0, 'f', 2);
+    //     dataTable->setItem(i, 2, new QTableWidgetItem(center3DStr));
+    // }
 
-    connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
+    // connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
 }
 
 // ----------------------------------------------------
@@ -843,11 +855,11 @@ void MainWindow::onPathPlanningTriggered()
 {
     // 1. 前置检查
     if (weldHoles.isEmpty()) {
-        QMessageBox::warning(this, "警告", "没有管孔数据，请先导入DXF文件。");
+        QMessageBox::warning(this, "警告", "没有管孔数据，无法进行规划。");
         return;
     }
 
-    // 检查是否建立了用户坐标系 (需求提到：在建立完坐标系之后)
+    // 检查是否建立了用户坐标系
     if (!m_coordManager || !m_coordManager->isSetupComplete()) {
         QMessageBox::warning(this, "警告", "请先建立用户坐标系后再进行路径规划。");
         return;
@@ -862,30 +874,19 @@ void MainWindow::onPathPlanningTriggered()
     // 3. 执行路径规划 (传入当前 weldingHoles和主体圆)
     QVector<Hole> sortedHoles = PathPlanner::planPath(weldHoles, mainPlateHole, selectedAlgo);
 
-    // 4. 更新数据
+    // 4. 更新底层数据
     weldHoles = sortedHoles;
     m_isPathPlanned = true;
 
-    // 5. 刷新界面 (表格 + 绘图区)
-    // 更新表格
-    disconnect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
-    dataTable->setRowCount(0);
-    for (int i = 0; i < weldHoles.size(); ++i) {
-        dataTable->insertRow(i);
-        dataTable->setItem(i, 0, new QTableWidgetItem(QString::number(weldHoles[i].radius, 'f', 2)));
-        QString centerStr = QString("(%1, %2)").arg(weldHoles[i].center3D.x(), 0, 'f', 2).arg(weldHoles[i].center3D.y(), 0, 'f', 2);
-        dataTable->setItem(i, 1, new QTableWidgetItem(centerStr));
-        QString center3DStr = QString("(%1, %2, %3)").arg(weldHoles[i].center3D.x(), 0, 'f', 2).arg(weldHoles[i].center3D.y(), 0, 'f', 2).arg(weldHoles[i].center3D.z(), 0, 'f', 2);
-        dataTable->setItem(i, 2, new QTableWidgetItem(center3DStr));
-    }
-    connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
-
-    // 更新绘图区
+    // 5. 刷新界面
+    // 注意：这里【绝对不要】再操作 dataTable！因为表格现在属于 m_displayPaths（线条类型）
+    // 只需要通知左侧绘图区更新管孔数据的内部排序即可
     renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate, false);
 
-    QMessageBox::information(this, "成功", "路径规划已完成，管孔编号已更新。");
+    // 提示语修改，去掉编号相关的字眼
+    QMessageBox::information(this, "成功", "管孔路径规划已完成！");
 
-    // 6. 保存为 JSON
+    // 6. 保存为 JSON (给下位机或机器人使用)
     QString savePath = QFileDialog::getSaveFileName(this, "保存规划结果", "", "JSON Files (*.json)");
     if (savePath.isEmpty()) return;
 
@@ -895,7 +896,7 @@ void MainWindow::onPathPlanningTriggered()
         QJsonObject hObj;
         hObj["radius"] = h.radius;
 
-        // 也可以保存三维坐标
+        // 保存三维坐标
         QJsonArray center3DArr;
         center3DArr.append(h.center3D.x());
         center3DArr.append(h.center3D.y());
@@ -905,14 +906,14 @@ void MainWindow::onPathPlanningTriggered()
         holeArray.append(hObj);
     }
     rootObj["holes"] = holeArray;
-    rootObj["algorithm"] = static_cast<int>(selectedAlgo); // 记录用的什么算法
+    rootObj["algorithm"] = static_cast<int>(selectedAlgo);
 
     QJsonDocument doc(rootObj);
     QFile file(savePath);
     if (file.open(QIODevice::WriteOnly)) {
         file.write(doc.toJson());
         file.close();
-        QMessageBox::information(this, "保存成功", "文件已保存至: " + savePath);
+        QMessageBox::information(this, "保存成功", "规划坐标文件已保存至:\n" + savePath);
     } else {
         QMessageBox::critical(this, "错误", "无法写入文件");
     }

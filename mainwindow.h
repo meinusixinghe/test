@@ -14,12 +14,13 @@
 #include "modbusmanager.h"
 #include <QCloseEvent>
 #include <QSettings>
+#include <QSplitter>
 
 class RenderArea;
 class usercoordinatemanager;
 
 struct Hole { QPointF center; QVector3D center3D; double radius; };             // 管孔的二维坐标（二维点类，浮点型）、管孔的三维坐标（三维点类，浮点型）、管孔的半径
-struct Contour { QVector<QPointF> points; };                                    // 多段线（目前未启用）
+struct Contour { QString type; QVector<QPointF> points; };                                    // 多段线（目前未启用）
 
 class MainWindow : public QMainWindow
 {
@@ -90,6 +91,10 @@ private:
     RenderArea* renderArea;                             // 左侧绘图区
     QTableWidget* dataTable;                            // 右侧数据表格
 
+    QSplitter* rightSplitter;
+    QWidget* detailWidget;
+    QVector<Contour> m_displayPaths;
+
     QAction* loadAction;
     QMenu* fileMenu;
     QToolBar* toolBar;
@@ -136,6 +141,7 @@ private:
 
     int m_positioningMethod = 0;                        // 保存用户选择的定位方式号，默认为 0
     bool m_isPathPlanned = false;
+
 };
 
 #endif // MAINWINDOW_H

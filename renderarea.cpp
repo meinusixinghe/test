@@ -88,8 +88,21 @@ void RenderArea::paintEvent(QPaintEvent *event)
     pathPen.setWidth(4);
     painter.setPen(pathPen);
 
-    for (const auto& contour : std::as_const(m_displayPaths)) {
+    for (int i = 0; i < m_displayPaths.size(); ++i) {
+        const auto& contour = m_displayPaths[i];
         if (contour.points.size() > 1) {
+            // 如果是当前选中的线条，变成蓝色并加粗到 6
+            if (i == m_highlightPathIndex) {
+                QPen hlPen(Qt::yellow, 0);
+                hlPen.setCosmetic(true);
+                hlPen.setWidth(6);
+                painter.setPen(hlPen);
+            } else {
+                QPen pathPen(Qt::black, 0);
+                pathPen.setCosmetic(true);
+                pathPen.setWidth(4);
+                painter.setPen(pathPen);
+            }
             painter.drawPolyline(contour.points.data(), contour.points.size());
         }
     }
@@ -411,4 +424,11 @@ void RenderArea::setShowUserCoordinate(bool show)
 {
     m_showUserCoordinate = show;
     update();
+}
+
+void RenderArea::setHighlightedPathIndex(int index) {
+    if (m_highlightPathIndex != index) {
+        m_highlightPathIndex = index;
+        update();
+    }
 }

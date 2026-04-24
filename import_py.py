@@ -48,17 +48,19 @@ def parse_dxf(file_path):
             start = entity.dxf.start
             end = entity.dxf.end
             pts = [[start.x, start.y], [end.x, end.y]]
-            display_paths.append(pts)
+            display_paths.append({"type": "直线", "points": pts}) # 标记类型
             edges.append(pts.copy())
 
-        # 提取多段线 (LWPOLYLINE / POLYLINE)
+        # 提取多段线 (LWPOLYLINE / POLYLINE) - 拆分为独立直线
         for entity in msp.query('LWPOLYLINE'):
             try:
                 with entity.points("xy") as vertices:
                     pts = [[p[0], p[1]] for p in vertices]
                     if len(pts) >= 2:
                         if entity.closed and pts[0] != pts[-1]:pts.append([pts[0][0], pts[0][1]])
-                        display_paths.append(pts)
+                        # 将多段线拆分成单独的直线段放入显示列表
+                        for i in range(len(pts)-1):
+                            display_paths.append({"type": "直线", "points": [pts[i], pts[i+1]]})
                         edges.append(pts.copy())
             except Exception:
                 pass
@@ -70,28 +72,32 @@ def parse_dxf(file_path):
                     pts.append([v.dxf.location.x, v.dxf.location.y])
                 if len(pts) >= 2:
                     if entity.is_closed and pts[0] != pts[-1]:pts.append([pts[0][0], pts[0][1]])
-                    display_paths.append(pts)
+                    for i in range(len(pts)-1):
+                        display_paths.append({"type": "直线", "points": [pts[i], pts[i+1]]})
                     edges.append(pts.copy())
 
-        # 提取圆弧、样条曲线、椭圆 (ARC SPLINE ELLIPSE)
-        for entity in msp.query('ARC SPLINE ELLIPSE'):
+        # 提取圆弧、椭圆、圆 (统一标记为圆弧)
+        for entity in msp.query('ARC ELLIPSE CIRCLE'):
             try:
                 pts = list(entity.flattening(0.1))
                 if len(pts) >= 2:
                     p_list = [[p.x, p.y] for p in pts]
-                    display_paths.append(p_list)
-                    edges.append(p_list.copy())
+                    if entity.dxftype() == 'CIRCLE' and p_list[0] != p_list[-1]:
+                        p_list.append(p_list[0])
+                    display_paths.append({"type": "圆弧", "points": p_list})
+                    if entity.dxftype() != 'CIRCLE':
+                        edges.append(p_list.copy())
             except Exception:
                 pass
 
-        for entity in msp.query('CIRCLE'):
+        # 提取样条曲线
+        for entity in msp.query('SPLINE'):
             try:
                 pts = list(entity.flattening(0.1))
                 if len(pts) >= 2:
                     p_list = [[p.x, p.y] for p in pts]
-                    if p_list[0] != p_list[-1]:
-                        p_list.append(p_list[0])
-                    display_paths.append(p_list)
+                    display_paths.append({"type": "样条曲线", "points": p_list})
+                    edges.append(p_list.copy())
             except Exception:
                 pass
 

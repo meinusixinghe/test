@@ -27,6 +27,7 @@ public:
     void setShowUserCoordinate(bool show);
 
     void setDisplayPaths(const QVector<Contour>& paths);
+    void setHighlightedPathIndex(int index);
 protected:
     void paintEvent(QPaintEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
@@ -69,6 +70,7 @@ private:
     QPointF m_userPlanePoint;                               // 用户坐标系 y轴
 
     QVector<Contour> m_displayPaths;
+    int m_highlightPathIndex = -1;
 };
 
 #endif // RENDERAREA_H
