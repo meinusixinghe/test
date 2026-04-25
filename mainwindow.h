@@ -25,7 +25,7 @@
 class RenderArea;
 class usercoordinatemanager;
 
-struct Hole { QPointF center; QVector3D center3D; double radius; };             // 管孔的二维坐标（二维点类，浮点型）、管孔的三维坐标（三维点类，浮点型）、管孔的半径
+struct Hole { QPointF center; QVector3D center3D; double radius = 0.0; };             // 管孔的二维坐标（二维点类，浮点型）、管孔的三维坐标（三维点类，浮点型）、管孔的半径
 struct Contour { QString type; QVector<QPointF> points; };                                    // 多段线（目前未启用）
 
 class FloatingToolWidget : public QWidget {

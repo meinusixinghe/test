@@ -29,6 +29,7 @@ RenderArea::RenderArea(QWidget *parent): QWidget(parent),
     setCursor(Qt::OpenHandCursor);                      // 设置鼠标样式，提醒用户可以拖拽
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
+    m_eraserPixmap = QPixmap(":/img/images/eraser2.png");
 }
 
 // ----------------------------------------------------
@@ -42,7 +43,6 @@ void RenderArea::setData(const QVector<Hole> &h,const Hole &mPH,const QPolygonF 
     mainPlateHole = mPH;                                // 管板圆
     m_mainPlatePolygon = platePoly;                     // 存多边形
     m_isRectangular = isRect;                           // 存标志位
-    m_eraserPixmap = QPixmap(":/img/images/eraser2.png");
     if (resetView) {
         m_scaleFactor = 1.0;
         m_panOffsetDXF = QPointF(0.0, 0.0);
@@ -205,8 +205,7 @@ void RenderArea::paintEvent(QPaintEvent *event)
         painter.restore();
     }
 
-    bool hasData = !(weldHoles.isEmpty() && m_displayPaths.isEmpty() && m_mainPlatePolygon.isEmpty() && mainPlateHole.radius <= 0);
-    if (m_isEraserMode && hasData && !m_isMiddlePanning) {
+    if (m_isEraserMode && !m_isMiddlePanning) {
         painter.save();
         painter.setTransform(QTransform());
         painter.drawPixmap(
@@ -219,7 +218,7 @@ void RenderArea::paintEvent(QPaintEvent *event)
     }
 
     // 绘制套索矩形框
-    if (m_isLassoDragging && hasData) {
+    if (m_isLassoDragging) {
         painter.save();
         painter.setTransform(QTransform()); // 使用屏幕像素坐标系
         QRect rect = QRect(m_lassoStartPos, m_lassoCurrentPos).normalized();
@@ -304,11 +303,9 @@ void RenderArea::mousePressEvent(QMouseEvent *event)
 // ----------------------------------------------------
 void RenderArea::mouseMoveEvent(QMouseEvent *event)
 {
-    bool hasData = !(weldHoles.isEmpty() && m_displayPaths.isEmpty() && m_mainPlatePolygon.isEmpty() && mainPlateHole.radius <= 0);
     m_currentMousePos = event->pos();
     if (event->buttons() & Qt::MiddleButton) {
         QPoint delta = event->pos() - m_lastMousePos;
-        // 更新 DXF 平移偏移量
         m_panOffsetDXF += QPointF(delta.x() / m_scaleFactor, -delta.y() / m_scaleFactor);
         m_lastMousePos = event->pos();
         update();
@@ -316,13 +313,8 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event)
         return;
     }
     if (m_isEraserMode) {
-        if (hasData) {
-            m_currentMousePos = event->pos();
-            setCursor(Qt::BlankCursor);
-            update();
-        } else {
-            setCursor(Qt::OpenHandCursor);
-        }
+        setCursor(Qt::BlankCursor);
+        update();
         return;
     }
     if (m_isLassoDragging) {
@@ -519,8 +511,7 @@ void RenderArea::setHighlightedPathIndex(int index) {
 
 void RenderArea::setEraserMode(bool enabled) {
     m_isEraserMode = enabled;
-    bool hasData = !(m_displayPaths.isEmpty() && weldHoles.isEmpty());
-    if (enabled && hasData) {
+    if (enabled) {
         setCursor(Qt::BlankCursor);
     } else {
         setCursor(Qt::OpenHandCursor);
