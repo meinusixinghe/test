@@ -42,7 +42,7 @@ void RenderArea::setData(const QVector<Hole> &h,const Hole &mPH,const QPolygonF 
     mainPlateHole = mPH;                                // 管板圆
     m_mainPlatePolygon = platePoly;                     // 存多边形
     m_isRectangular = isRect;                           // 存标志位
-
+    m_eraserPixmap = QPixmap(":/img/images/eraser2.png");
     if (resetView) {
         m_scaleFactor = 1.0;
         m_panOffsetDXF = QPointF(0.0, 0.0);
@@ -206,21 +206,20 @@ void RenderArea::paintEvent(QPaintEvent *event)
     }
 
     bool hasData = !(weldHoles.isEmpty() && m_displayPaths.isEmpty() && m_mainPlatePolygon.isEmpty() && mainPlateHole.radius <= 0);
-    if (m_isEraserMode && hasData) {
+    if (m_isEraserMode && hasData && !m_isMiddlePanning) {
         painter.save();
-        painter.setTransform(QTransform()); // 重置变换，直接在屏幕物理像素下画
-        QColor pink(255, 182, 193, 150);    // 浅粉色半透明填充
-        painter.setBrush(pink);
-        painter.setPen(Qt::NoPen);
-        int rectSize = m_eraserSize; // 橡皮擦感应方块大小
-        painter.drawRect(m_currentMousePos.x() - rectSize / 2,
-                         m_currentMousePos.y() - rectSize / 2,
-                         rectSize, rectSize);
+        painter.setTransform(QTransform());
+        painter.drawPixmap(
+            QRect(m_currentMousePos.x() - m_eraserSize / 2,
+                  m_currentMousePos.y() - m_eraserSize / 2,
+                  m_eraserSize, m_eraserSize),
+            m_eraserPixmap
+            );
         painter.restore();
     }
 
     // 绘制套索矩形框
-    if (m_isLassoDragging) {
+    if (m_isLassoDragging && hasData) {
         painter.save();
         painter.setTransform(QTransform()); // 使用屏幕像素坐标系
         QRect rect = QRect(m_lassoStartPos, m_lassoCurrentPos).normalized();
@@ -261,6 +260,15 @@ void RenderArea::wheelEvent(QWheelEvent *event)
 // ----------------------------------------------------
 void RenderArea::mousePressEvent(QMouseEvent *event)
 {
+    if (event->button() == Qt::MiddleButton) {
+        m_lastMousePos = event->pos();
+        m_isMiddlePanning = true;
+        setCursor(Qt::ClosedHandCursor); // 拖拽时变为握紧的手
+        update();
+        event->accept();
+        return;
+    }
+
     if (m_isLassoMode && event->button() == Qt::LeftButton) {
         m_isLassoDragging = true;
         m_lassoStartPos = event->pos();
@@ -297,6 +305,16 @@ void RenderArea::mousePressEvent(QMouseEvent *event)
 void RenderArea::mouseMoveEvent(QMouseEvent *event)
 {
     bool hasData = !(weldHoles.isEmpty() && m_displayPaths.isEmpty() && m_mainPlatePolygon.isEmpty() && mainPlateHole.radius <= 0);
+    m_currentMousePos = event->pos();
+    if (event->buttons() & Qt::MiddleButton) {
+        QPoint delta = event->pos() - m_lastMousePos;
+        // 更新 DXF 平移偏移量
+        m_panOffsetDXF += QPointF(delta.x() / m_scaleFactor, -delta.y() / m_scaleFactor);
+        m_lastMousePos = event->pos();
+        update();
+        event->accept();
+        return;
+    }
     if (m_isEraserMode) {
         if (hasData) {
             m_currentMousePos = event->pos();
@@ -362,6 +380,16 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event)
 // ----------------------------------------------------
 void RenderArea::mouseReleaseEvent(QMouseEvent *event)
 {
+    if (event->button() == Qt::MiddleButton) {
+        m_isMiddlePanning = false;
+        // 根据当前模式恢复光标
+        if (m_isLassoMode) setCursor(Qt::CrossCursor);
+        else if (m_isEraserMode) setCursor(Qt::BlankCursor);
+        else setCursor(Qt::OpenHandCursor);
+        update();
+        event->accept();
+        return;
+    }
     if (event->button() == Qt::LeftButton) {
         if (!m_isEraserMode && !m_isLassoMode) {
             setCursor(Qt::OpenHandCursor);
@@ -533,11 +561,24 @@ void RenderArea::clearSelection() {
     update();
 }
 
-// 监听键盘 Delete 键，一键删除绿色线条
 void RenderArea::keyPressEvent(QKeyEvent *event) {
+    // 1. 捕捉删除键：批量删除绿色高亮的线条
     if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) && !m_selectedPathIndices.isEmpty()) {
         emit bulkPathsDeleted(m_selectedPathIndices.values());
         clearSelection();
+    }
+    // 2. 捕捉 Esc 键：实现逐级取消
+    else if (event->key() == Qt::Key_Escape) {
+        if (m_isLassoMode && !m_selectedPathIndices.isEmpty()) {
+            clearSelection();
+        }
+        else {
+            emit cancelModesRequested();
+        }
+    }
+    // 3. 其他按键交给系统默认处理
+    else {
+        QWidget::keyPressEvent(event);
     }
 }
 

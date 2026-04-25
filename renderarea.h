@@ -8,6 +8,7 @@
 #include <QMouseEvent>
 #include "mainwindow.h"
 #include <QSet>
+#include <QPixmap>
 
 struct Hole;
 struct Contour;
@@ -46,6 +47,7 @@ protected:
 signals:
     void itemDeleted(const QPointF &dxfPos);
     void bulkPathsDeleted(QList<int> indices);
+    void cancelModesRequested();
 private:
     // 管板数据
     QVector<Hole> weldHoles;                                // 仅焊接管孔（不含主体圆）
@@ -90,6 +92,8 @@ private:
     QPoint m_lassoStartPos;
     QPoint m_lassoCurrentPos;
     QSet<int> m_selectedPathIndices;
+    QPixmap m_eraserPixmap;
+    bool m_isMiddlePanning = false;
 };
 
 #endif // RENDERAREA_H

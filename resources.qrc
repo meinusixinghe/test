@@ -10,6 +10,7 @@
         <file>images/eraser.png</file>
         <file>images/lasso.png</file>
         <file>images/restore.png</file>
+        <file>images/eraser2.png</file>
     </qresource>
     <qresource prefix="/icon">
         <file>icons/ball_blue.ico</file>

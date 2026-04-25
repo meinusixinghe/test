@@ -60,7 +60,6 @@ FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     btnRestore->setIconSize(QSize(20, 20));
     btnRestore->setFixedSize(50, 30);
     btnRestore->setToolTip("还原图纸");
-    btnRestore->setCheckable(true);
     btnRestore->setCursor(Qt::PointingHandCursor);
     btnEraser = new QPushButton();
     btnEraser->setIcon(QIcon(":/img/images/eraser.png"));
@@ -479,7 +478,10 @@ void MainWindow::setupUi()
     });
     // 连接批量删除信号
     connect(renderArea, &RenderArea::bulkPathsDeleted, this, &MainWindow::handleBulkPathsDeleted);
-
+    connect(renderArea, &RenderArea::cancelModesRequested, this, [this](){
+        m_floatingToolWidget->btnLasso->setChecked(false);
+        m_floatingToolWidget->btnEraser->setChecked(false);
+    });
     resize(1200, 700);
 }
 
