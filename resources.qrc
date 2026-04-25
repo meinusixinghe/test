@@ -7,6 +7,9 @@
         <file>images/icons4.png</file>
         <file>images/icons5.png</file>
         <file>images/icons6.png</file>
+        <file>images/eraser.png</file>
+        <file>images/lasso.png</file>
+        <file>images/restore.png</file>
     </qresource>
     <qresource prefix="/icon">
         <file>icons/ball_blue.ico</file>

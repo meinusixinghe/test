@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <QPolygonF>
 #include <QtMath>
+#include <QPainterPath>
+#include <QKeyEvent>
 
 using std::min;
 using std::max;
@@ -26,6 +28,7 @@ RenderArea::RenderArea(QWidget *parent): QWidget(parent),
     setFocusPolicy(Qt::StrongFocus);                    // 获得焦点，支持键盘事件（此处未用，预留）
     setCursor(Qt::OpenHandCursor);                      // 设置鼠标样式，提醒用户可以拖拽
     setMouseTracking(true);
+    setFocusPolicy(Qt::StrongFocus);
 }
 
 // ----------------------------------------------------
@@ -84,26 +87,24 @@ void RenderArea::paintEvent(QPaintEvent *event)
         applyCurrentTransform(painter);
     }
 
-    QPen pathPen(Qt::black, 0);
-    pathPen.setCosmetic(true);
-    pathPen.setWidth(4);
-    painter.setPen(pathPen);
-
     for (int i = 0; i < m_displayPaths.size(); ++i) {
         const auto& contour = m_displayPaths[i];
         if (contour.points.size() > 1) {
-            // 如果是当前选中的线条，变成蓝色并加粗到 6
-            if (i == m_highlightPathIndex) {
-                QPen hlPen(Qt::yellow, 0);
-                hlPen.setCosmetic(true);
-                hlPen.setWidth(6);
-                painter.setPen(hlPen);
-            } else {
-                QPen pathPen(Qt::black, 0);
-                pathPen.setCosmetic(true);
-                pathPen.setWidth(4);
-                painter.setPen(pathPen);
+            QPen pen;
+            if (m_selectedPathIndices.contains(i)) {
+                pen = QPen(Qt::green, 0);
+                pen.setWidth(3);
             }
+            else if (i == m_highlightPathIndex) {
+                pen = QPen(Qt::yellow, 0);
+                pen.setWidth(6);
+            }
+            else {
+                pen = QPen(Qt::black, 0);
+                pen.setWidth(4);
+            }
+            pen.setCosmetic(true);
+            painter.setPen(pen);
             painter.drawPolyline(contour.points.data(), contour.points.size());
         }
     }
@@ -217,6 +218,17 @@ void RenderArea::paintEvent(QPaintEvent *event)
                          rectSize, rectSize);
         painter.restore();
     }
+
+    // 绘制套索矩形框
+    if (m_isLassoDragging) {
+        painter.save();
+        painter.setTransform(QTransform()); // 使用屏幕像素坐标系
+        QRect rect = QRect(m_lassoStartPos, m_lassoCurrentPos).normalized();
+        painter.setPen(QPen(Qt::black, 1)); // 黑色细边框
+        painter.setBrush(QColor(150, 150, 150, 80)); // 浅灰色，透明度 80
+        painter.drawRect(rect);
+        painter.restore();
+    }
 }
 
 // ----------------------------------------------------
@@ -249,8 +261,16 @@ void RenderArea::wheelEvent(QWheelEvent *event)
 // ----------------------------------------------------
 void RenderArea::mousePressEvent(QMouseEvent *event)
 {
+    if (m_isLassoMode && event->button() == Qt::LeftButton) {
+        m_isLassoDragging = true;
+        m_lassoStartPos = event->pos();
+        m_lassoCurrentPos = event->pos();
+        m_selectedPathIndices.clear();
+        update();
+        event->accept();
+        return;
+    }
     if (m_isEraserMode && event->button() == Qt::LeftButton) {
-        // 1. 将屏幕像素坐标反算为底层的 DXF 坐标
         QTransform transform;
         transform.translate(width() / 2.0, height() / 2.0);
         transform.scale(m_scaleFactor, -m_scaleFactor);
@@ -264,7 +284,7 @@ void RenderArea::mousePressEvent(QMouseEvent *event)
 
     if (event->button() == Qt::LeftButton) {        // 触发条件是鼠标左键
         m_lastMousePos = event->pos();              // 记录当前鼠标位置
-        if (!m_isEraserMode) {
+        if (!m_isEraserMode && !m_isLassoMode) {
             setCursor(Qt::ClosedHandCursor);
         }
         event->accept();
@@ -287,7 +307,13 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event)
         }
         return;
     }
-
+    if (m_isLassoDragging) {
+        m_lassoCurrentPos = event->pos();
+        updateLassoSelection();
+        update();
+        event->accept();
+        return;
+    }
     if (event->buttons() & Qt::LeftButton) {
         QPoint delta = event->pos() - m_lastMousePos;                       // 像素移动量
 
@@ -337,10 +363,17 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event)
 void RenderArea::mouseReleaseEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton) {
-        if (!m_isEraserMode) {
+        if (!m_isEraserMode && !m_isLassoMode) {
             setCursor(Qt::OpenHandCursor);
         }
         event->accept();
+    }
+    if (m_isLassoDragging && event->button() == Qt::LeftButton) {
+        m_isLassoDragging = false;
+        updateLassoSelection();
+        update();
+        event->accept();
+        return;
     }
 }
 
@@ -458,9 +491,9 @@ void RenderArea::setHighlightedPathIndex(int index) {
 
 void RenderArea::setEraserMode(bool enabled) {
     m_isEraserMode = enabled;
-    bool hasData = !(weldHoles.isEmpty() && m_displayPaths.isEmpty() && m_mainPlatePolygon.isEmpty() && mainPlateHole.radius <= 0);
+    bool hasData = !(m_displayPaths.isEmpty() && weldHoles.isEmpty());
     if (enabled && hasData) {
-        setCursor(Qt::BlankCursor); // 隐藏默认鼠标，用粉色方块代替
+        setCursor(Qt::BlankCursor);
     } else {
         setCursor(Qt::OpenHandCursor);
     }
@@ -479,5 +512,67 @@ void RenderArea::setEraserSize(int size) {
     m_eraserSize = size;
     if (m_isEraserMode) {
         update(); // 如果当前正开着橡皮擦，立即刷新方块大小
+    }
+}
+
+void RenderArea::setLassoMode(bool enabled) {
+    m_isLassoMode = enabled;
+    if (enabled) {
+        setCursor(Qt::CrossCursor); // 开启套索：立即变为十字
+        setFocus();
+    } else {
+        clearSelection();
+        setCursor(Qt::OpenHandCursor); // 关闭套索：恢复为普通手型
+    }
+    update();
+}
+
+void RenderArea::clearSelection() {
+    m_selectedPathIndices.clear();
+    m_isLassoDragging = false;
+    update();
+}
+
+// 监听键盘 Delete 键，一键删除绿色线条
+void RenderArea::keyPressEvent(QKeyEvent *event) {
+    if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) && !m_selectedPathIndices.isEmpty()) {
+        emit bulkPathsDeleted(m_selectedPathIndices.values());
+        clearSelection();
+    }
+}
+
+void RenderArea::updateLassoSelection() {
+    QRect selectionRect = QRect(m_lassoStartPos, m_lassoCurrentPos).normalized();
+    m_selectedPathIndices.clear();
+
+    // 构建屏幕坐标到 DXF 坐标的映射矩阵
+    QTransform transform;
+    transform.translate(width() / 2.0, height() / 2.0);
+    transform.scale(m_scaleFactor, -m_scaleFactor);
+    transform.translate((m_initialContentOffset + m_panOffsetDXF).x(),
+                        (m_initialContentOffset + m_panOffsetDXF).y());
+
+    QPainterPath rectPath;
+    rectPath.addRect(selectionRect);
+
+    // 遍历所有线条，检查是否在矩形内或与矩形相交
+    for (int i = 0; i < m_displayPaths.size(); ++i) {
+        const auto& contour = m_displayPaths[i];
+        bool isInside = false;
+        for (int j = 0; j < contour.points.size() - 1; ++j) {
+            QPointF p1 = transform.map(contour.points[j]);
+            QPointF p2 = transform.map(contour.points[j+1]);
+
+            // 只要端点在框内，或者线段与边框相交，就算选中
+            if (selectionRect.contains(p1.toPoint()) || selectionRect.contains(p2.toPoint())) {
+                isInside = true; break;
+            }
+            QPainterPath linePath;
+            linePath.moveTo(p1); linePath.lineTo(p2);
+            if (rectPath.intersects(linePath)) {
+                isInside = true; break;
+            }
+        }
+        if (isInside) m_selectedPathIndices.insert(i);
     }
 }

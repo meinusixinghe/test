@@ -32,9 +32,12 @@ public:
     double scaleFactor() const { return m_scaleFactor; }
     double distancePointToSegment(const QPointF& p, const QPointF& p1, const QPointF& p2);
     void setEraserSize(int size);
+    void setLassoMode(bool enabled);
+    void clearSelection();
 protected:
     void paintEvent(QPaintEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
 
     // 用于平移的鼠标事件
     void mousePressEvent(QMouseEvent *event) override;
@@ -42,6 +45,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent *event) override;
 signals:
     void itemDeleted(const QPointF &dxfPos);
+    void bulkPathsDeleted(QList<int> indices);
 private:
     // 管板数据
     QVector<Hole> weldHoles;                                // 仅焊接管孔（不含主体圆）
@@ -79,8 +83,13 @@ private:
 
     bool m_isEraserMode = false;
     QPoint m_currentMousePos;
-
     int m_eraserSize = 20;
+    void updateLassoSelection();
+    bool m_isLassoMode = false;
+    bool m_isLassoDragging = false;
+    QPoint m_lassoStartPos;
+    QPoint m_lassoCurrentPos;
+    QSet<int> m_selectedPathIndices;
 };
 
 #endif // RENDERAREA_H

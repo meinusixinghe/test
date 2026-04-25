@@ -26,6 +26,7 @@
 #include <QInputDialog>
 #include <QSettings>
 #include <QCloseEvent>
+#include <QTimer>
 
 FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     setAttribute(Qt::WA_StyledBackground, true); // 允许样式表控制背景
@@ -54,10 +55,30 @@ FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
 
     // 底部工具按钮
     QHBoxLayout *tools = new QHBoxLayout();
-    btnRestore = new QPushButton("还原");
-    btnEraser = new QPushButton("橡皮擦"); // 此处可后续替换为 setIcon(QIcon("..."));
+    btnRestore = new QPushButton();
+    btnRestore->setIcon(QIcon(":/img/images/restore.png"));
+    btnRestore->setIconSize(QSize(20, 20));
+    btnRestore->setFixedSize(50, 30);
+    btnRestore->setToolTip("还原图纸");
+    btnRestore->setCheckable(true);
+    btnRestore->setCursor(Qt::PointingHandCursor);
+    btnEraser = new QPushButton();
+    btnEraser->setIcon(QIcon(":/img/images/eraser.png"));
+    btnEraser->setIconSize(QSize(20, 20));
+    btnEraser->setFixedSize(50, 30);
+    btnEraser->setToolTip("橡皮擦");
     btnEraser->setCheckable(true);
+    btnEraser->setCursor(Qt::PointingHandCursor);
+    btnLasso = new QPushButton();
+    btnLasso->setIcon(QIcon(":/img/images/lasso.png"));
+    btnLasso->setIconSize(QSize(20, 20));
+    btnLasso->setFixedSize(50, 30);
+    btnLasso->setToolTip("框选线条 (按 Delete 键删除)");
+    btnLasso->setCheckable(true);
+    btnLasso->setCursor(Qt::PointingHandCursor);
+
     tools->addWidget(btnRestore);
+    tools->addWidget(btnLasso);
     tools->addWidget(btnEraser);
 
     mainLayout->addLayout(header);
@@ -279,12 +300,12 @@ void MainWindow::setupUi()
     // 详细信息占位符内容
     m_detailContentText = new QTextEdit(detailWidget);
     m_detailContentText->setReadOnly(true);
-    m_detailContentText->setText("请点击上方表格以查看详细信息");
-    m_detailContentLabel->setStyleSheet("color: #333; font-size: 13px; line-height: 1.8; font-weight: bold;");
+    m_detailContentText->setStyleSheet("color: #333; font-size: 13px; line-height: 1.8; font-weight: bold; border: none; background: transparent;");
+    detailLayout->addWidget(detailTitleWidget);
     detailLayout->addWidget(m_detailContentText);
-    detailLayout->addStretch();
-
     rightSplitter->addWidget(detailWidget);
+    rightSplitter->setStretchFactor(0, 3);
+    rightSplitter->setStretchFactor(1, 1);
     detailWidget->hide(); // 初始隐藏，让表格填满
 
     // X 按钮点击事件：关闭窗口、清除表格选中、清除左侧高亮
@@ -433,6 +454,7 @@ void MainWindow::setupUi()
     connect(m_floatingToolWidget->btnClose, &QPushButton::clicked, this, [this](){
         m_floatingToolWidget->hide();
         m_floatingToolWidget->btnEraser->setChecked(false);
+        m_floatingToolWidget->btnLasso->setChecked(false);
     });
     connect(m_imageProcessAction, &QAction::triggered, this, [this](){
         if (!m_floatingToolWidget->isVisible()) {
@@ -447,6 +469,16 @@ void MainWindow::setupUi()
         m_floatingToolWidget->lblEraserSize->setText(QString::number(value));
         renderArea->setEraserSize(value);
     });
+    connect(m_floatingToolWidget->btnLasso, &QPushButton::toggled, this, [this](bool checked){
+        if (checked) m_floatingToolWidget->btnEraser->setChecked(false);
+        renderArea->setLassoMode(checked);
+    });
+    connect(m_floatingToolWidget->btnEraser, &QPushButton::toggled, this, [this](bool checked){
+        if (checked) m_floatingToolWidget->btnLasso->setChecked(false);
+        renderArea->setEraserMode(checked);
+    });
+    // 连接批量删除信号
+    connect(renderArea, &RenderArea::bulkPathsDeleted, this, &MainWindow::handleBulkPathsDeleted);
 
     resize(1200, 700);
 }
@@ -688,39 +720,72 @@ void MainWindow::handleTableSelectionChanged()
                            .arg(x3, 0, 'f', 2).arg(y3, 0, 'f', 2)
                            .arg(radius, 0, 'f', 2);
         }
+        // 4. 样条曲线拟合算法 (自适应容差拟合算法)
         else if (c.type == "样条曲线" && c.points.size() >= 3) {
-            infoText = QString("【 样条曲线 (拟合 %1 段圆弧) 】\n").arg(c.points.size() / 2);
+            infoText = "【 样条曲线 (自适应圆弧拟合) 】\n";
             int arcIndex = 1;
+            int i = 0;
+            int n = c.points.size();
+            double tolerance = 0.1; // 拟合容差设定为 0.1 毫米 (可根据精度需求调小)
 
-            // 步长为 2，每次取 3 个点 (0-1-2, 2-3-4, 4-5-6...) 保证首尾相接
-            for (int i = 0; i < c.points.size() - 2; i += 2) {
-                QPointF p1 = c.points[i];
-                QPointF p2 = c.points[i+1];
-                QPointF p3 = c.points[i+2];
+            while (i < n - 1) {
+                int best_j = i + 1;
+                double best_radius = 0.0;
+                bool found_arc = false;
 
-                double x1 = p1.x(), y1 = p1.y();
-                double x2 = p2.x(), y2 = p2.y();
-                double x3 = p3.x(), y3 = p3.y();
+                // 贪心算法：从最远的点开始往回找，试图找到能包容的最大圆弧
+                for (int j = n - 1; j >= i + 2; --j) {
+                    int mid = i + (j - i) / 2;
+                    QPointF p1 = c.points[i], p2 = c.points[mid], p3 = c.points[j];
 
-                // 经典三点求圆心公式
-                double a = 2.0 * ((x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1));
-                QString rStr;
+                    double x1 = p1.x(), y1 = p1.y();
+                    double x2 = p2.x(), y2 = p2.y();
+                    double x3 = p3.x(), y3 = p3.y();
 
-                if (std::abs(a) > 1e-6) {
+                    // 三点求圆心公式
+                    double a = 2.0 * ((x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1));
+                    if (std::abs(a) < 1e-6) continue; // 三点共线，无法拟合圆
+
                     double cx = ((y3 - y1) * (x2*x2 - x1*x1 + y2*y2 - y1*y1) + (y1 - y2) * (x3*x3 - x1*x1 + y3*y3 - y1*y1)) / a;
                     double cy = ((x1 - x3) * (x2*x2 - x1*x1 + y2*y2 - y1*y1) + (x2 - x1) * (x3*x3 - x1*x1 + y3*y3 - y1*y1)) / a;
                     double radius = std::hypot(cx - x1, cy - y1);
-                    rStr = QString::number(radius, 'f', 2);
-                } else {
-                    // 如果三个点在一条直线上（曲率极小），算作直线段
-                    rStr = "∞ (直线)";
+
+                    // 核心校验：检查这中间的所有点，是否都在这个圆弧的容差范围内
+                    bool valid = true;
+                    for (int k = i + 1; k < j; ++k) {
+                        double distToCenter = std::hypot(c.points[k].x() - cx, c.points[k].y() - cy);
+                        if (std::abs(distToCenter - radius) > tolerance) {
+                            valid = false;
+                            break; // 只要有一个点偏离过大，这个大圆弧作废
+                        }
+                    }
+
+                    if (valid) {
+                        best_j = j;
+                        best_radius = radius;
+                        found_arc = true;
+                        break; // 找到了满足精度的“最大圆弧”，直接跳出循环！
+                    }
                 }
 
-                infoText += QString("第 %1 段：\n  起点: (%2, %3)\n  终点: (%4, %5)\n  半径: %6\n")
-                                .arg(arcIndex++)
-                                .arg(x1, 0, 'f', 2).arg(y1, 0, 'f', 2)
-                                .arg(x3, 0, 'f', 2).arg(y3, 0, 'f', 2)
-                                .arg(rStr);
+                // 输出结果拼接到文本
+                if (found_arc) {
+                    infoText += QString("第 %1 段 (圆弧):\n  起点: (%2, %3)\n  终点: (%4, %5)\n  半径: %6\n")
+                                    .arg(arcIndex++)
+                                    .arg(c.points[i].x(), 0, 'f', 2).arg(c.points[i].y(), 0, 'f', 2)
+                                    .arg(c.points[best_j].x(), 0, 'f', 2).arg(c.points[best_j].y(), 0, 'f', 2)
+                                    .arg(best_radius, 0, 'f', 2);
+                } else {
+                    // 如果连最近的 3 个点都无法拟合（比如遇到了尖角或者纯直线段），则降级为直线
+                    double length = std::hypot(c.points[best_j].x() - c.points[i].x(), c.points[best_j].y() - c.points[i].y());
+                    infoText += QString("第 %1 段 (直线):\n  起点: (%2, %3)\n  终点: (%4, %5)\n  长度: %6\n")
+                                    .arg(arcIndex++)
+                                    .arg(c.points[i].x(), 0, 'f', 2).arg(c.points[i].y(), 0, 'f', 2)
+                                    .arg(c.points[best_j].x(), 0, 'f', 2).arg(c.points[best_j].y(), 0, 'f', 2)
+                                    .arg(length, 0, 'f', 2);
+                }
+
+                i = best_j; // 指针直接跳到这一段的末尾，继续拟合下一段
             }
         }
         // 5. 其他类型
@@ -728,14 +793,13 @@ void MainWindow::handleTableSelectionChanged()
             infoText = QString("【 %1参数 】\n该曲线由 %2 个数据点拟合而成。").arg(c.type).arg(c.points.size());
         }
 
-        // 更新界面文字
         m_detailContentText->setPlainText(infoText);
 
     } else {
         detailWidget->hide(); // 取消选中时隐藏
     }
 
-    // 通知绘图区线条变蓝高亮
+    // 通知绘图区线条高亮
     renderArea->setHighlightedPathIndex(selectedRow);
 }
 
@@ -1341,19 +1405,26 @@ void MainWindow::sendNextWeldHole()
 
 void MainWindow::restoreDrawing()
 {
+    m_floatingToolWidget->btnRestore->clearFocus();
+    m_floatingToolWidget->btnRestore->setDown(false);
+
+    m_floatingToolWidget->btnLasso->setChecked(false);
+    m_floatingToolWidget->btnEraser->setChecked(false);
+
     if (m_originalDisplayPaths.isEmpty() && m_originalWeldHoles.isEmpty()) return;
 
     QMessageBox::StandardButton reply;
     reply = QMessageBox::question(this, "还原图纸", "确定要还原图纸到初始状态吗？\n所有被橡皮擦除的线条都将恢复。",
                                   QMessageBox::Yes | QMessageBox::No);
+
+    m_floatingToolWidget->btnRestore->update();
+
     if (reply == QMessageBox::Yes) {
-        // 1. 恢复底层数据
         m_displayPaths = m_originalDisplayPaths;
         weldHoles = m_originalWeldHoles;
         mainPlateHole = m_originalMainPlateHole;
         mainPlateContour = m_originalMainPlateContour;
 
-        // 2. 刷新右侧表格
         disconnect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
         dataTable->setRowCount(0);
         for (int i = 0; i < m_displayPaths.size(); ++i) {
@@ -1365,7 +1436,6 @@ void MainWindow::restoreDrawing()
         }
         connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
 
-        // 3. 重置 UI 状态并通知渲染区更新 (false 表示视角和缩放不重置，保持当前视图)
         detailWidget->hide();
         renderArea->setHighlightedPathIndex(-1);
         renderArea->setDisplayPaths(m_displayPaths);
@@ -1416,6 +1486,31 @@ void MainWindow::handleItemDeleted(const QPointF &pos)
     }
 
     // --- 4. 统一刷新界面 ---
+    renderArea->setDisplayPaths(m_displayPaths);
+    renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate, false);
+}
+
+void MainWindow::handleBulkPathsDeleted(QList<int> indices)
+{
+    // 为了防止数组越界，必须将索引从大到小排序，从尾部开始删
+    std::sort(indices.begin(), indices.end(), std::greater<int>());
+
+    // 暂停表格的变动监听，提升性能
+    disconnect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
+
+    for (int idx : indices) {
+        if (idx >= 0 && idx < m_displayPaths.size()) {
+            m_displayPaths.removeAt(idx); // 删内存
+            dataTable->removeRow(idx);    // 删UI
+        }
+    }
+    connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
+
+    // 状态清理并刷新
+    dataTable->clearSelection();
+    detailWidget->hide();
+    renderArea->setHighlightedPathIndex(-1);
+
     renderArea->setDisplayPaths(m_displayPaths);
     renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate, false);
 }

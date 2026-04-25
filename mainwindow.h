@@ -33,6 +33,7 @@ class FloatingToolWidget : public QWidget {
 public:
     QPushButton *btnRestore;
     QPushButton *btnEraser;
+    QPushButton *btnLasso;
     QPushButton *btnClose;
 
     QSlider *sliderEraserSize;
@@ -101,6 +102,7 @@ private slots:
 
     void restoreDrawing();
     void handleItemDeleted(const QPointF &pos);
+    void handleBulkPathsDeleted(QList<int> indices);
 private:
     void loadDrawingData(const QString &filePath);      // 核心数据加载函数
     void setupUi();                                     // UI初始化函数
@@ -176,7 +178,6 @@ private:
     QVector<Hole> m_originalWeldHoles;
     Hole m_originalMainPlateHole;
     QPolygonF m_originalMainPlateContour;
-    QLabel* m_detailContentLabel;
     QTextEdit* m_detailContentText;
 };
 
