@@ -40,6 +40,7 @@ public:
     QLabel *lblEraserSize;
 
     explicit FloatingToolWidget(QWidget *parent = nullptr);
+    void setSliderVisible(bool visible);
 
 protected:
     void mousePressEvent(QMouseEvent *event) override;
@@ -47,6 +48,7 @@ protected:
 
 private:
     QPoint m_dragPosition;
+    QWidget *sliderContainer;
 };
 
 class MainWindow : public QMainWindow
@@ -54,8 +56,8 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 protected:
-    // 拦截窗口关闭事件，确保安全断开连接
     void closeEvent(QCloseEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 public:
     explicit MainWindow(QWidget *parent = nullptr);

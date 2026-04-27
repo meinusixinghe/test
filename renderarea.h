@@ -28,7 +28,7 @@ public:
     void setShowUserCoordinate(bool show);
 
     void setDisplayPaths(const QVector<Contour>& paths);
-    void setHighlightedPathIndex(int index);
+    void setHighlightedPathIndices(const QList<int> &indices);
     void setEraserMode(bool enabled);
     double scaleFactor() const { return m_scaleFactor; }
     double distancePointToSegment(const QPointF& p, const QPointF& p1, const QPointF& p2);
@@ -66,7 +66,7 @@ private:
     QPointF m_dxfMaxBound;
 
     // 当前要高亮显示的孔洞索引
-    int m_highlightIndex = -1;
+    QList<int> m_highlightPathIndices;
 
     // 鼠标拖拽
     QPoint m_lastMousePos;                                  // 记录鼠标上一次的位置 (Widget像素单位)

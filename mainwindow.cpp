@@ -29,7 +29,7 @@
 #include <QTimer>
 
 FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
-    setAttribute(Qt::WA_StyledBackground, true); // 允许样式表控制背景
+    setAttribute(Qt::WA_StyledBackground, true);
     // 设置工具箱的现代 UI 风格
     setStyleSheet("FloatingToolWidget { background-color: rgba(245, 246, 247, 230); border: 1px solid #C0C0C0; border-radius: 6px; }"
                   "QPushButton { background-color: white; border: 1px solid #D0D0D0; border-radius: 4px; padding: 6px; color: #333; font-weight: bold; }"
@@ -83,7 +83,11 @@ FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     mainLayout->addLayout(header);
     mainLayout->addLayout(tools);
 
-    QHBoxLayout *sliderLayout = new QHBoxLayout();
+    sliderContainer = new QWidget(this);
+    QHBoxLayout *sliderLayout = new QHBoxLayout(sliderContainer);
+    sliderLayout->setContentsMargins(0, 5, 0, 0);
+    sliderLayout->setSpacing(6);
+
     QLabel *lblSliderTitle = new QLabel("大小:");
     lblSliderTitle->setStyleSheet("font-size: 12px; color: #555; border: none; background: transparent;");
 
@@ -99,10 +103,13 @@ FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     sliderLayout->addWidget(sliderEraserSize);
     sliderLayout->addWidget(lblEraserSize);
 
-    mainLayout->addLayout(sliderLayout);
+    mainLayout->addWidget(sliderContainer);
 
-    setFixedSize(180, 110);
-    setCursor(Qt::ArrowCursor); // 悬浮框内保持普通箭头
+    sliderContainer->setVisible(false);
+    setFixedWidth(180);
+    adjustSize();
+
+    setCursor(Qt::ArrowCursor);
 }
 
 void FloatingToolWidget::mousePressEvent(QMouseEvent *event) {
@@ -125,6 +132,12 @@ void FloatingToolWidget::mouseMoveEvent(QMouseEvent *event) {
         move(newPos);
         event->accept();
     }
+}
+
+void FloatingToolWidget::setSliderVisible(bool visible) {
+    sliderContainer->setVisible(visible);
+    // 强制窗口重新调整布局和尺寸
+    this->adjustSize();
 }
 
 MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
@@ -162,8 +175,6 @@ MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
     // 4.2 动态按钮文字：不仅改字，还要监控底层状态回退
     connect(m_modbusManager, &ModbusManager::startButtonTextChanged, this, [this](QString text) {
         m_startBtn->setText(text);
-
-        // 如果底层因为某种原因退回到了"预约"状态，解除连续焊接禁用
         if (text == "预约"|| text == "启动") {
             m_isWeldingProcessRunning = false;
             m_startBtn->setEnabled(true);
@@ -275,7 +286,7 @@ void MainWindow::setupUi()
     dataTable->verticalHeader()->setVisible(false);
     dataTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     dataTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-    dataTable->setSelectionMode(QAbstractItemView::SingleSelection);
+    dataTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
     rightSplitter->addWidget(dataTable);
 
     // 创建底部的详细信息视窗
@@ -305,15 +316,15 @@ void MainWindow::setupUi()
     rightSplitter->addWidget(detailWidget);
     rightSplitter->setStretchFactor(0, 3);
     rightSplitter->setStretchFactor(1, 1);
-    detailWidget->hide(); // 初始隐藏，让表格填满
+    detailWidget->hide();
 
     // X 按钮点击事件：关闭窗口、清除表格选中、清除左侧高亮
     connect(closeDetailBtn, &QPushButton::clicked, this, [this](){
         dataTable->clearSelection();
         dataTable->setCurrentItem(nullptr);
         detailWidget->hide();
-        renderArea->setHighlightedPathIndex(-1);
-    });                                                             // 添加到分割器右侧
+        renderArea->setHighlightedPathIndices(QList<int>());
+    });
 
     // 3. 设置初始比例：左侧占 3份，右侧占 1份
     splitter->setCollapsible(0, false);
@@ -344,6 +355,7 @@ void MainWindow::setupUi()
 
     m_toolsMenu = menuBar()->addMenu("工具");
     m_imageProcessAction = new QAction("图纸处理", this);
+    m_imageProcessAction->setIcon(QIcon(":/img/images/DrawProcessing.png"));
     m_toolsMenu->addAction(m_imageProcessAction);
 
     m_connectMenu = menuBar()->addMenu("连接");
@@ -370,10 +382,10 @@ void MainWindow::setupUi()
     statusLayout->setSpacing(6);
     // 获取基础字体
     QFont statusFontObj = font();
-    statusFontObj.setPointSize(11);
+    statusFontObj.setPointSize(9);
     // 网络连接状态
     m_statusIconLabel = new QLabel(this);
-    m_statusIconLabel->setFixedSize(16, 16);
+    m_statusIconLabel->setFixedSize(12, 12);
     m_statusIconLabel->setStyleSheet("background-color: #F44336; border-radius: 8px;");
     m_statusTextLabel = new QLabel("未连接", this);
     m_statusTextLabel->setFont(statusFontObj);
@@ -383,7 +395,7 @@ void MainWindow::setupUi()
     separator1->setStyleSheet("color: #999; font-weight: bold;");
     // 伺服使能状态
     m_servoIconLabel = new QLabel(this);
-    m_servoIconLabel->setFixedSize(16, 16);
+    m_servoIconLabel->setFixedSize(12, 12);
     m_servoIconLabel->setStyleSheet("background-color: #9E9E9E; border-radius: 8px;");
     m_servoTextLabel = new QLabel("伺服断开", this);
     m_servoTextLabel->setFont(statusFontObj);
@@ -409,23 +421,21 @@ void MainWindow::setupUi()
     statusLayout->addWidget(separator2);
     statusLayout->addSpacing(10);
     statusLayout->addWidget(m_autoTextLabel);
-    toolBar->addWidget(statusContainer);
+    statusBar()->addPermanentWidget(statusContainer);
+    statusLayout->setContentsMargins(5, 0, 5, 0);
+    statusLayout->setSpacing(5);
 
     // 7. 初始化坐标管理器
     m_coordManager = new usercoordinatemanager(this);
     m_coordManager->initialize(renderArea, dataTable, weldHoles, mainPlateHole, m_statusLabel);
 
     // 8. 信号槽连接
-    connect(loadAction, &QAction::triggered, this, &MainWindow::importDxf);                 // 导入DXF → 触发importDxf函数
+    connect(loadAction, &QAction::triggered, this, &MainWindow::importDxf);
     connect(dataTable->selectionModel(), &QItemSelectionModel::currentRowChanged,
-            this, &MainWindow::handleTableSelectionChanged);                                // 表格选中行变化 → 处理选中逻辑
-    connect(dataTable, &QTableWidget::cellChanged,
-            this, &MainWindow::handleTableCellChanged);                                     // 表格单元格修改 → 同步更新管孔数据
-    connect(rotateAction, &QAction::triggered, this, &MainWindow::applyRotationMatrix);     // 应用旋转矩阵 → 触发applyRotationMatrix函数
-    // 连接 Manager的更新信号到表格刷新
-    // 建立用户坐标系的流程逻辑
+            this, &MainWindow::handleTableSelectionChanged);
+    connect(dataTable, &QTableWidget::itemSelectionChanged,this, &MainWindow::handleTableSelectionChanged);
+    connect(rotateAction, &QAction::triggered, this, &MainWindow::applyRotationMatrix);
     connect(m_setupCoordAction, &QAction::triggered, this, &MainWindow::setupCoordinateWizard);
-    // 显示/隐藏坐标系按钮连接
     connect(m_toggleCoordBtn, &QPushButton::clicked, this, [this](bool checked) {
         m_coordManager->toggleCoordinateDisplay(checked);
         m_toggleCoordBtn->setText(checked ? "隐藏用户坐标系" : "显示用户坐标系");
@@ -454,13 +464,14 @@ void MainWindow::setupUi()
         m_floatingToolWidget->hide();
         m_floatingToolWidget->btnEraser->setChecked(false);
         m_floatingToolWidget->btnLasso->setChecked(false);
+        m_floatingToolWidget->setSliderVisible(false);
     });
     connect(m_imageProcessAction, &QAction::triggered, this, [this](){
         if (!m_floatingToolWidget->isVisible()) {
-            m_floatingToolWidget->move(20, 20); // 每次刚打开时，显示在绘图区左上角附近
+            m_floatingToolWidget->move(20, 20);
         }
         m_floatingToolWidget->show();
-        m_floatingToolWidget->raise();          // 确保图层在最上方
+        m_floatingToolWidget->raise();
     });
     connect(renderArea, &RenderArea::itemDeleted, this, &MainWindow::handleItemDeleted);
 
@@ -474,6 +485,7 @@ void MainWindow::setupUi()
     });
     connect(m_floatingToolWidget->btnEraser, &QPushButton::toggled, this, [this](bool checked){
         if (checked) m_floatingToolWidget->btnLasso->setChecked(false);
+        m_floatingToolWidget->setSliderVisible(checked);
         renderArea->setEraserMode(checked);
     });
     // 连接批量删除信号
@@ -481,7 +493,15 @@ void MainWindow::setupUi()
     connect(renderArea, &RenderArea::cancelModesRequested, this, [this](){
         m_floatingToolWidget->btnLasso->setChecked(false);
         m_floatingToolWidget->btnEraser->setChecked(false);
+        m_floatingToolWidget->setSliderVisible(false);
     });
+
+    m_floatingToolWidget->installEventFilter(this);
+    m_toggleCoordBtn->installEventFilter(this);
+    m_startBtn->installEventFilter(this);
+    m_pauseBtn->installEventFilter(this);
+    m_resetBtn->installEventFilter(this);
+
     resize(1200, 700);
 }
 
@@ -650,7 +670,7 @@ void MainWindow::loadDrawingData(const QString &filePath)
     connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
 
     detailWidget->hide();
-    renderArea->setHighlightedPathIndex(-1);
+    renderArea->setHighlightedPathIndices(QList<int>());
 
     renderArea->setDisplayPaths(m_displayPaths);
     renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate);
@@ -667,142 +687,57 @@ void MainWindow::loadDrawingData(const QString &filePath)
 // ----------------------------------------------------
 void MainWindow::handleTableSelectionChanged()
 {
-    int selectedRow = dataTable->currentRow();
-    if (selectedRow >= 0 && selectedRow < m_displayPaths.size()) {
-        detailWidget->show(); // 选中时显示下方详细信息
+    // 1. 获取当前表格中所有被选中的行号
+    QList<int> selectedRows;
+    QList<QTableWidgetItem*> selectedItems = dataTable->selectedItems();
+    for (auto item : selectedItems) {
+        int row = item->row();
+        if (!selectedRows.contains(row)) {
+            selectedRows.append(row);
+        }
+    }
 
-        const Contour& c = m_displayPaths[selectedRow];
+    // 2. 如果有选中行，处理右下角的详细信息面板
+    if (!selectedRows.isEmpty()) {
+        detailWidget->show();
+
+        int firstRow = selectedRows.first(); // 取第一条线来计算参数
+        const Contour& c = m_displayPaths[firstRow];
         QString infoText;
 
-        // 1. 直线算法
+        // --- 几何参数计算逻辑（保留原样） ---
         if (c.type == "直线" && c.points.size() >= 2) {
-            QPointF p1 = c.points.first();
-            QPointF p2 = c.points.last();
+            QPointF p1 = c.points.first(), p2 = c.points.last();
             double length = std::hypot(p2.x() - p1.x(), p2.y() - p1.y());
             infoText = QString("【 直线参数 】\n起点：( %1,  %2 )\n终点：( %3,  %4 )\n长度： %5")
                            .arg(p1.x(), 0, 'f', 2).arg(p1.y(), 0, 'f', 2)
-                           .arg(p2.x(), 0, 'f', 2).arg(p2.y(), 0, 'f', 2)
-                           .arg(length, 0, 'f', 2);
-        }
-        // 2. 圆算法 (通过边界框求圆心和半径)
-        else if (c.type == "圆" && c.points.size() >= 3) {
-            double minX = c.points[0].x(), maxX = minX;
-            double minY = c.points[0].y(), maxY = minY;
+                           .arg(p2.x(), 0, 'f', 2).arg(p2.y(), 0, 'f', 2).arg(length, 0, 'f', 2);
+        } else if (c.type == "圆" && c.points.size() >= 3) {
+            double minX = c.points[0].x(), maxX = minX, minY = c.points[0].y(), maxY = minY;
             for (const QPointF& p : std::as_const(c.points)) {
-                if (p.x() < minX) minX = p.x();
-                if (p.x() > maxX) maxX = p.x();
-                if (p.y() < minY) minY = p.y();
-                if (p.y() > maxY) maxY = p.y();
+                if (p.x() < minX) minX = p.x(); if (p.x() > maxX) maxX = p.x();
+                if (p.y() < minY) minY = p.y(); if (p.y() > maxY) maxY = p.y();
             }
-            double cx = (minX + maxX) / 2.0;
-            double cy = (minY + maxY) / 2.0;
-            double radius = (maxX - minX) / 2.0;
             infoText = QString("【 圆 参数 】\n圆心：( %1,  %2 )\n半径： %3")
-                           .arg(cx, 0, 'f', 2).arg(cy, 0, 'f', 2).arg(radius, 0, 'f', 2);
-        }
-        // 3. 圆弧算法 (任意取三点，利用外接圆公式求中心和半径)
-        else if (c.type == "圆弧" && c.points.size() >= 3) {
-            QPointF p1 = c.points.first();
-            QPointF p2 = c.points[c.points.size() / 2]; // 取圆弧中间点
-            QPointF p3 = c.points.last();
-
-            double x1 = p1.x(), y1 = p1.y();
-            double x2 = p2.x(), y2 = p2.y();
-            double x3 = p3.x(), y3 = p3.y();
-            double a = 2.0 * ((x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1));
-
-            double radius = 0.0;
-            if (std::abs(a) > 1e-6) {
-                double cx = ((y3 - y1) * (x2*x2 - x1*x1 + y2*y2 - y1*y1) + (y1 - y2) * (x3*x3 - x1*x1 + y3*y3 - y1*y1)) / a;
-                double cy = ((x1 - x3) * (x2*x2 - x1*x1 + y2*y2 - y1*y1) + (x2 - x1) * (x3*x3 - x1*x1 + y3*y3 - y1*y1)) / a;
-                radius = std::hypot(cx - x1, cy - y1);
-            }
-            infoText = QString("【 圆弧参数 】\n起点：( %1,  %2 )\n终点：( %3,  %4 )\n半径： %5")
-                           .arg(x1, 0, 'f', 2).arg(y1, 0, 'f', 2)
-                           .arg(x3, 0, 'f', 2).arg(y3, 0, 'f', 2)
-                           .arg(radius, 0, 'f', 2);
-        }
-        // 4. 样条曲线拟合算法 (自适应容差拟合算法)
-        else if (c.type == "样条曲线" && c.points.size() >= 3) {
-            infoText = "【 样条曲线 (自适应圆弧拟合) 】\n";
-            int arcIndex = 1;
-            int i = 0;
-            int n = c.points.size();
-            double tolerance = 0.1; // 拟合容差设定为 0.1 毫米 (可根据精度需求调小)
-
-            while (i < n - 1) {
-                int best_j = i + 1;
-                double best_radius = 0.0;
-                bool found_arc = false;
-
-                // 贪心算法：从最远的点开始往回找，试图找到能包容的最大圆弧
-                for (int j = n - 1; j >= i + 2; --j) {
-                    int mid = i + (j - i) / 2;
-                    QPointF p1 = c.points[i], p2 = c.points[mid], p3 = c.points[j];
-
-                    double x1 = p1.x(), y1 = p1.y();
-                    double x2 = p2.x(), y2 = p2.y();
-                    double x3 = p3.x(), y3 = p3.y();
-
-                    // 三点求圆心公式
-                    double a = 2.0 * ((x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1));
-                    if (std::abs(a) < 1e-6) continue; // 三点共线，无法拟合圆
-
-                    double cx = ((y3 - y1) * (x2*x2 - x1*x1 + y2*y2 - y1*y1) + (y1 - y2) * (x3*x3 - x1*x1 + y3*y3 - y1*y1)) / a;
-                    double cy = ((x1 - x3) * (x2*x2 - x1*x1 + y2*y2 - y1*y1) + (x2 - x1) * (x3*x3 - x1*x1 + y3*y3 - y1*y1)) / a;
-                    double radius = std::hypot(cx - x1, cy - y1);
-
-                    // 核心校验：检查这中间的所有点，是否都在这个圆弧的容差范围内
-                    bool valid = true;
-                    for (int k = i + 1; k < j; ++k) {
-                        double distToCenter = std::hypot(c.points[k].x() - cx, c.points[k].y() - cy);
-                        if (std::abs(distToCenter - radius) > tolerance) {
-                            valid = false;
-                            break; // 只要有一个点偏离过大，这个大圆弧作废
-                        }
-                    }
-
-                    if (valid) {
-                        best_j = j;
-                        best_radius = radius;
-                        found_arc = true;
-                        break; // 找到了满足精度的“最大圆弧”，直接跳出循环！
-                    }
-                }
-
-                // 输出结果拼接到文本
-                if (found_arc) {
-                    infoText += QString("第 %1 段 (圆弧):\n  起点: (%2, %3)\n  终点: (%4, %5)\n  半径: %6\n")
-                                    .arg(arcIndex++)
-                                    .arg(c.points[i].x(), 0, 'f', 2).arg(c.points[i].y(), 0, 'f', 2)
-                                    .arg(c.points[best_j].x(), 0, 'f', 2).arg(c.points[best_j].y(), 0, 'f', 2)
-                                    .arg(best_radius, 0, 'f', 2);
-                } else {
-                    // 如果连最近的 3 个点都无法拟合（比如遇到了尖角或者纯直线段），则降级为直线
-                    double length = std::hypot(c.points[best_j].x() - c.points[i].x(), c.points[best_j].y() - c.points[i].y());
-                    infoText += QString("第 %1 段 (直线):\n  起点: (%2, %3)\n  终点: (%4, %5)\n  长度: %6\n")
-                                    .arg(arcIndex++)
-                                    .arg(c.points[i].x(), 0, 'f', 2).arg(c.points[i].y(), 0, 'f', 2)
-                                    .arg(c.points[best_j].x(), 0, 'f', 2).arg(c.points[best_j].y(), 0, 'f', 2)
-                                    .arg(length, 0, 'f', 2);
-                }
-
-                i = best_j; // 指针直接跳到这一段的末尾，继续拟合下一段
-            }
-        }
-        // 5. 其他类型
-        else {
+                           .arg((minX+maxX)/2.0, 0, 'f', 2).arg((minY+maxY)/2.0, 0, 'f', 2).arg((maxX-minX)/2.0, 0, 'f', 2);
+        } else if (c.type == "圆弧" && c.points.size() >= 3) {
+            infoText = QString("【 圆弧参数 】\n起点：( %1, %2 )\n终点：( %3, %4 )")
+                           .arg(c.points.first().x(), 0, 'f', 2).arg(c.points.first().y(), 0, 'f', 2)
+                           .arg(c.points.last().x(), 0, 'f', 2).arg(c.points.last().y(), 0, 'f', 2);
+        } else {
             infoText = QString("【 %1参数 】\n该曲线由 %2 个数据点拟合而成。").arg(c.type).arg(c.points.size());
         }
 
-        m_detailContentText->setPlainText(infoText);
+        if (selectedRows.size() > 1) {
+            infoText = QString("（当前共多选了 %1 条线条，仅显示第一条信息）\n\n").arg(selectedRows.size()) + infoText;
+        }
 
+        m_detailContentText->setPlainText(infoText);
     } else {
-        detailWidget->hide(); // 取消选中时隐藏
+        detailWidget->hide(); // 没有选中时隐藏面板
     }
 
-    // 通知绘图区线条高亮
-    renderArea->setHighlightedPathIndex(selectedRow);
+    renderArea->setHighlightedPathIndices(selectedRows);
 }
 
 // ----------------------------------------------------
@@ -1439,7 +1374,7 @@ void MainWindow::restoreDrawing()
         connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
 
         detailWidget->hide();
-        renderArea->setHighlightedPathIndex(-1);
+        renderArea->setHighlightedPathIndices(QList<int>());
         renderArea->setDisplayPaths(m_displayPaths);
         renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate, false);
     }
@@ -1511,8 +1446,25 @@ void MainWindow::handleBulkPathsDeleted(QList<int> indices)
     // 状态清理并刷新
     dataTable->clearSelection();
     detailWidget->hide();
-    renderArea->setHighlightedPathIndex(-1);
+    renderArea->setHighlightedPathIndices(QList<int>());
 
     renderArea->setDisplayPaths(m_displayPaths);
     renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate, false);
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_floatingToolWidget ||
+        watched == m_toggleCoordBtn ||
+        watched == m_startBtn ||
+        watched == m_pauseBtn ||
+        watched == m_resetBtn)
+    {
+        if (event->type() == QEvent::Enter || event->type() == QEvent::Leave) {
+            if (renderArea) {
+                renderArea->update();
+            }
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
 }

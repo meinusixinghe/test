@@ -60,12 +60,9 @@ void RenderArea::setData(const QVector<Hole> &h,const Hole &mPH,const QPolygonF 
 // 讲解：setHighlightedIndex，设置高亮孔洞索引
 // 核心：实现 “点击列表高亮绘图区对应孔洞 ”的核心逻辑，仅当索引变化时才重绘，优化性能
 // ----------------------------------------------------
-void RenderArea::setHighlightedIndex(int index)
-{
-    if (m_highlightIndex != index) {                    // 仅当索引变化时才重绘
-        m_highlightIndex = index;
+void RenderArea::setHighlightedPathIndices(const QList<int> &indices) {
+    m_highlightPathIndices = indices;
         update();                                       // 触发重绘以显示新的高亮状态
-    }
 }
 
 // ----------------------------------------------------
@@ -77,8 +74,6 @@ void RenderArea::paintEvent(QPaintEvent *event)
     QPainter painter(this);                                         // 2D绘图类
     painter.setRenderHint(QPainter::Antialiasing);                  // 开启抗锯齿，让图形更平滑
     painter.setRenderHint(QPainter::TextAntialiasing);              // 文字抗锯齿，更清晰
-
-    if (weldHoles.isEmpty() && m_mainPlatePolygon.isEmpty() && m_displayPaths.isEmpty()) return;
 
     // 首次加载：计算初始变换（适配窗口+居中）；后续：应用当前变换（缩放+平移）
     if (m_scaleFactor == 1.0 && m_initialContentOffset == QPointF(0.0, 0.0)) {
@@ -92,10 +87,10 @@ void RenderArea::paintEvent(QPaintEvent *event)
         if (contour.points.size() > 1) {
             QPen pen;
             if (m_selectedPathIndices.contains(i)) {
-                pen = QPen(Qt::green, 0);
+                pen = QPen(Qt::red, 0);
                 pen.setWidth(3);
             }
-            else if (i == m_highlightPathIndex) {
+            else if (m_highlightPathIndices.contains(i)) {
                 pen = QPen(Qt::yellow, 0);
                 pen.setWidth(6);
             }
@@ -206,15 +201,18 @@ void RenderArea::paintEvent(QPaintEvent *event)
     }
 
     if (m_isEraserMode && !m_isMiddlePanning) {
-        painter.save();
-        painter.setTransform(QTransform());
-        painter.drawPixmap(
-            QRect(m_currentMousePos.x() - m_eraserSize / 2,
-                  m_currentMousePos.y() - m_eraserSize / 2,
-                  m_eraserSize, m_eraserSize),
-            m_eraserPixmap
-            );
-        painter.restore();
+        QPoint localPos = mapFromGlobal(QCursor::pos());
+        if (rect().contains(localPos) && childAt(localPos) == nullptr) {
+            painter.save();
+            painter.setTransform(QTransform());
+            painter.drawPixmap(
+                QRect(localPos.x() - m_eraserSize / 2,
+                      localPos.y() - m_eraserSize / 2,
+                      m_eraserSize, m_eraserSize),
+                m_eraserPixmap
+                );
+            painter.restore();
+        }
     }
 
     // 绘制套索矩形框
@@ -502,7 +500,7 @@ void RenderArea::setShowUserCoordinate(bool show)
     update();
 }
 
-void RenderArea::setHighlightedPathIndex(int index) {
+void RenderArea::setHighlightedPathIndices(const QList<int> &indices) {
     if (m_highlightPathIndex != index) {
         m_highlightPathIndex = index;
         update();
