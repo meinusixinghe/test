@@ -12,6 +12,7 @@
         <file>images/restore.png</file>
         <file>images/eraser2.png</file>
         <file>images/DrawProcessing.png</file>
+        <file>images/shift.png</file>
     </qresource>
     <qresource prefix="/icon">
         <file>icons/ball_blue.ico</file>

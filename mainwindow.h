@@ -35,6 +35,7 @@ public:
     QPushButton *btnEraser;
     QPushButton *btnLasso;
     QPushButton *btnClose;
+    QPushButton *btnMove;
 
     QSlider *sliderEraserSize;
     QLabel *lblEraserSize;

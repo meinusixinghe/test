@@ -30,6 +30,45 @@ RenderArea::RenderArea(QWidget *parent): QWidget(parent),
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
     m_eraserPixmap = QPixmap(":/img/images/eraser2.png");
+
+    m_moveInputWidget = new QWidget(this);
+    m_moveInputWidget->setWindowFlags(Qt::Widget | Qt::FramelessWindowHint);
+    m_moveInputWidget->setStyleSheet(
+        "QWidget { background-color: rgba(250, 250, 250, 245); border: 2px solid #0078D7; border-radius: 6px; }"
+        "QLineEdit { border: 1px solid #ccc; border-radius: 3px; padding: 2px; background-color: white; }"
+        "QLineEdit:focus { border: 1px solid #0078D7; }"
+        );
+
+    m_moveInputWidget->setMinimumWidth(150);
+    m_moveInputWidget->setMinimumHeight(30);
+
+    QHBoxLayout *hLayout = new QHBoxLayout(m_moveInputWidget);
+    hLayout->setContentsMargins(6, 4, 6, 4);
+    hLayout->setSpacing(5);
+
+    m_editMoveX = new QLineEdit();
+    m_editMoveY = new QLineEdit();
+    m_editMoveX->setFixedWidth(45);
+    m_editMoveY->setFixedWidth(45);
+
+    QDoubleValidator *validator = new QDoubleValidator(this);
+    m_editMoveX->setValidator(validator);
+    m_editMoveY->setValidator(validator);
+
+    QLabel *lblX = new QLabel("X:");
+    lblX->setStyleSheet("border: none; font-weight: bold; color: #333; font-size: 12px;");
+    QLabel *lblY = new QLabel("Y:");
+    lblY->setStyleSheet("border: none; font-weight: bold; color: #333; font-size: 12px;");
+
+    hLayout->addWidget(lblX);
+    hLayout->addWidget(m_editMoveX);
+    hLayout->addWidget(lblY);
+    hLayout->addWidget(m_editMoveY);
+
+    m_moveInputWidget->hide();
+
+    connect(m_editMoveX, &QLineEdit::returnPressed, this, &RenderArea::executeMove);
+    connect(m_editMoveY, &QLineEdit::returnPressed, this, &RenderArea::executeMove);
 }
 
 // ----------------------------------------------------
@@ -60,9 +99,11 @@ void RenderArea::setData(const QVector<Hole> &h,const Hole &mPH,const QPolygonF 
 // 讲解：setHighlightedIndex，设置高亮孔洞索引
 // 核心：实现 “点击列表高亮绘图区对应孔洞 ”的核心逻辑，仅当索引变化时才重绘，优化性能
 // ----------------------------------------------------
-void RenderArea::setHighlightedPathIndices(const QList<int> &indices) {
-    m_highlightPathIndices = indices;
-        update();                                       // 触发重绘以显示新的高亮状态
+void RenderArea::setHighlightedIndex(int index) {
+    if (m_highlightIndex != index) {
+        m_highlightIndex = index;
+        update();
+    }
 }
 
 // ----------------------------------------------------
@@ -225,6 +266,15 @@ void RenderArea::paintEvent(QPaintEvent *event)
         painter.drawRect(rect);
         painter.restore();
     }
+
+    if (m_isMoveMode && m_moveState == MS_BasePoint && m_isSnapped) {
+        painter.save();
+        painter.setTransform(QTransform());
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(Qt::blue);
+        painter.drawEllipse(m_snappedScreenPos, 6, 6);
+        painter.restore();
+    }
 }
 
 // ----------------------------------------------------
@@ -266,6 +316,45 @@ void RenderArea::mousePressEvent(QMouseEvent *event)
         return;
     }
 
+    if (m_isMoveMode && event->button() == Qt::LeftButton) {
+        if (m_moveState == MS_Select) {
+            m_isLassoDragging = true;
+            m_lassoStartPos = event->pos();
+            m_lassoCurrentPos = event->pos();
+            m_selectedPathIndices.clear();
+            update();
+            event->accept();
+            return;
+        } else if (m_moveState == MS_BasePoint && m_isSnapped) {
+            m_moveState = MS_Input;
+
+            m_moveInputWidget->adjustSize();
+            int widgetW = m_moveInputWidget->width();
+            int widgetH = m_moveInputWidget->height();
+
+            int targetX = m_snappedScreenPos.x() + 10;
+            int targetY = m_snappedScreenPos.y() + 10;
+            if (targetX + widgetW > width()) {
+                targetX = m_snappedScreenPos.x() - widgetW - 10;
+            }
+            if (targetY + widgetH > height()) {
+                targetY = m_snappedScreenPos.y() - widgetH - 10;
+            }
+            targetX = std::max(0, targetX);
+            targetY = std::max(0, targetY);
+
+            m_moveInputWidget->move(targetX, targetY);
+
+            m_editMoveX->clear();
+            m_editMoveY->clear();
+            m_moveInputWidget->show();
+            m_editMoveX->setFocus();
+            update();
+            event->accept();
+            return;
+        }
+    }
+
     if (m_isLassoMode && event->button() == Qt::LeftButton) {
         m_isLassoDragging = true;
         m_lassoStartPos = event->pos();
@@ -287,9 +376,9 @@ void RenderArea::mousePressEvent(QMouseEvent *event)
         return;
     }
 
-    if (event->button() == Qt::LeftButton) {        // 触发条件是鼠标左键
-        m_lastMousePos = event->pos();              // 记录当前鼠标位置
-        if (!m_isEraserMode && !m_isLassoMode) {
+    if (event->button() == Qt::LeftButton) {
+        m_lastMousePos = event->pos();
+        if (!m_isEraserMode && !m_isLassoMode && !m_isMoveMode) {
             setCursor(Qt::ClosedHandCursor);
         }
         event->accept();
@@ -309,6 +398,20 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event)
         update();
         event->accept();
         return;
+    }
+    if (m_isMoveMode) {
+        if (m_moveState == MS_Select && m_isLassoDragging) {
+            m_lassoCurrentPos = event->pos();
+            updateLassoSelection();
+            update();
+            event->accept();
+            return;
+        } else if (m_moveState == MS_BasePoint) {
+            findSnapPoint(event->pos()); // 寻找附近吸附点
+            update();
+            event->accept();
+            return;
+        }
     }
     if (m_isEraserMode) {
         setCursor(Qt::BlankCursor);
@@ -381,7 +484,7 @@ void RenderArea::mouseReleaseEvent(QMouseEvent *event)
         return;
     }
     if (event->button() == Qt::LeftButton) {
-        if (!m_isEraserMode && !m_isLassoMode) {
+        if (!m_isEraserMode && !m_isLassoMode && !m_isMoveMode) {
             setCursor(Qt::OpenHandCursor);
         }
         event->accept();
@@ -501,10 +604,8 @@ void RenderArea::setShowUserCoordinate(bool show)
 }
 
 void RenderArea::setHighlightedPathIndices(const QList<int> &indices) {
-    if (m_highlightPathIndex != index) {
-        m_highlightPathIndex = index;
-        update();
-    }
+    m_highlightPathIndices = indices;
+    update();
 }
 
 void RenderArea::setEraserMode(bool enabled) {
@@ -551,21 +652,37 @@ void RenderArea::clearSelection() {
 }
 
 void RenderArea::keyPressEvent(QKeyEvent *event) {
-    // 1. 捕捉删除键：批量删除绿色高亮的线条
     if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) && !m_selectedPathIndices.isEmpty()) {
-        emit bulkPathsDeleted(m_selectedPathIndices.values());
-        clearSelection();
-    }
-    // 2. 捕捉 Esc 键：实现逐级取消
-    else if (event->key() == Qt::Key_Escape) {
-        if (m_isLassoMode && !m_selectedPathIndices.isEmpty()) {
+        if (m_moveState != MS_Input) { // 防止在输入坐标时误删线条
+            emit bulkPathsDeleted(m_selectedPathIndices.values());
             clearSelection();
         }
-        else {
+    }
+    else if (event->key() == Qt::Key_Escape) {
+        if (m_isMoveMode) { // 移动模式的逐级取消
+            if (m_moveState == MS_Input) {
+                m_moveInputWidget->hide();
+                m_moveState = MS_BasePoint;
+            } else if (m_moveState == MS_BasePoint) {
+                m_moveState = MS_Select;
+                clearSelection();
+            } else {
+                emit cancelModesRequested();
+            }
+            update();
+        }
+        else if (m_isLassoMode && !m_selectedPathIndices.isEmpty()) {
+            clearSelection();
+        } else {
             emit cancelModesRequested();
         }
     }
-    // 3. 其他按键交给系统默认处理
+    else if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+        if (m_isMoveMode && m_moveState == MS_Select && !m_selectedPathIndices.isEmpty()) {
+            m_moveState = MS_BasePoint;
+            update();
+        }
+    }
     else {
         QWidget::keyPressEvent(event);
     }
@@ -605,4 +722,99 @@ void RenderArea::updateLassoSelection() {
         }
         if (isInside) m_selectedPathIndices.insert(i);
     }
+}
+
+void RenderArea::setMoveMode(bool enabled) {
+    m_isMoveMode = enabled;
+    m_moveState = MS_Select;
+    if (m_moveInputWidget) m_moveInputWidget->hide();
+    m_isSnapped = false;
+
+    if (enabled) {
+        setCursor(Qt::CrossCursor);
+        setFocus();
+    } else {
+        clearSelection();
+        setCursor(Qt::OpenHandCursor);
+    }
+    update();
+}
+
+void RenderArea::findSnapPoint(const QPoint &pos) {
+    m_isSnapped = false;
+    double minDistance = 15.0; // 鼠标靠近 15 像素以内自动吸附
+    QPointF closestDxfPos;
+    QPoint closestScreenPos;
+
+    QTransform transform;
+    transform.translate(width() / 2.0, height() / 2.0);
+    transform.scale(m_scaleFactor, -m_scaleFactor);
+    transform.translate((m_initialContentOffset + m_panOffsetDXF).x(),
+                        (m_initialContentOffset + m_panOffsetDXF).y());
+
+    for (int idx : std::as_const(m_selectedPathIndices)) {
+        if (idx < 0 || idx >= m_displayPaths.size()) continue; // 安全检查
+
+        const auto& contour = m_displayPaths[idx];
+        if (contour.points.isEmpty()) continue;
+
+        QList<QPointF> candidates;
+        candidates << contour.points.first() << contour.points.last(); // 添加起点和终点
+
+        if (contour.type == "圆" && contour.points.size() >= 3) {
+            double minX = contour.points[0].x(), maxX = minX, minY = contour.points[0].y(), maxY = minY;
+            for (const QPointF& p : contour.points) {
+                if (p.x() < minX) minX = p.x(); if (p.x() > maxX) maxX = p.x();
+                if (p.y() < minY) minY = p.y(); if (p.y() > maxY) maxY = p.y();
+            }
+            candidates << QPointF((minX + maxX)/2.0, (minY + maxY)/2.0);
+        }
+
+        // 判断距离最近的吸附点
+        for (const QPointF& pt : candidates) {
+            QPoint screenPt = transform.map(pt).toPoint();
+            double dist = std::hypot(screenPt.x() - pos.x(), screenPt.y() - pos.y());
+            if (dist < minDistance) {
+                minDistance = dist;
+                m_isSnapped = true;
+                closestDxfPos = pt;
+                closestScreenPos = screenPt;
+            }
+        }
+    }
+
+    if (m_isSnapped) {
+        m_snappedDxfPos = closestDxfPos;
+        m_snappedScreenPos = closestScreenPos;
+    }
+}
+
+void RenderArea::executeMove() {
+    if (m_moveState != MS_Input) return;
+
+    bool okX, okY;
+    double targetX = m_editMoveX->text().toDouble(&okX);
+    double targetY = m_editMoveY->text().toDouble(&okY);
+
+    if (!okX || !okY) return; // 输入非法则不移动
+
+    // 计算移动增量
+    double dx = targetX - m_snappedDxfPos.x();
+    double dy = targetY - m_snappedDxfPos.y();
+
+    // 更新选中的线条坐标
+    for (int idx : m_selectedPathIndices) {
+        if (idx >= 0 && idx < m_displayPaths.size()) {
+            for (int i = 0; i < m_displayPaths[idx].points.size(); ++i) {
+                m_displayPaths[idx].points[i].setX(m_displayPaths[idx].points[i].x() + dx);
+                m_displayPaths[idx].points[i].setY(m_displayPaths[idx].points[i].y() + dy);
+            }
+        }
+    }
+    emit pathsMoved(m_displayPaths);
+    // 移动完成，重置状态回选择模式
+    m_moveInputWidget->hide();
+    m_moveState = MS_Select;
+    m_selectedPathIndices.clear();
+    update();
 }

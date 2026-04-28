@@ -75,9 +75,16 @@ FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     btnLasso->setToolTip("框选线条 (按 Delete 键删除)");
     btnLasso->setCheckable(true);
     btnLasso->setCursor(Qt::PointingHandCursor);
+    btnMove = new QPushButton();
+    btnMove->setIcon(QIcon(":/img/images/shift.png"));
+    btnMove->setFixedSize(50, 30);
+    btnMove->setToolTip("移动线条 (框选后按回车选基准点)");
+    btnMove->setCheckable(true);
+    btnMove->setCursor(Qt::PointingHandCursor);
 
     tools->addWidget(btnRestore);
     tools->addWidget(btnLasso);
+    tools->addWidget(btnMove);
     tools->addWidget(btnEraser);
 
     mainLayout->addLayout(header);
@@ -106,7 +113,7 @@ FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     mainLayout->addWidget(sliderContainer);
 
     sliderContainer->setVisible(false);
-    setFixedWidth(180);
+    setFixedWidth(240);
     adjustSize();
 
     setCursor(Qt::ArrowCursor);
@@ -464,6 +471,7 @@ void MainWindow::setupUi()
         m_floatingToolWidget->hide();
         m_floatingToolWidget->btnEraser->setChecked(false);
         m_floatingToolWidget->btnLasso->setChecked(false);
+        m_floatingToolWidget->btnMove->setChecked(false);
         m_floatingToolWidget->setSliderVisible(false);
     });
     connect(m_imageProcessAction, &QAction::triggered, this, [this](){
@@ -480,20 +488,28 @@ void MainWindow::setupUi()
         renderArea->setEraserSize(value);
     });
     connect(m_floatingToolWidget->btnLasso, &QPushButton::toggled, this, [this](bool checked){
-        if (checked) m_floatingToolWidget->btnEraser->setChecked(false);
+        if (checked) { m_floatingToolWidget->btnEraser->setChecked(false); m_floatingToolWidget->btnMove->setChecked(false); }
         renderArea->setLassoMode(checked);
     });
     connect(m_floatingToolWidget->btnEraser, &QPushButton::toggled, this, [this](bool checked){
-        if (checked) m_floatingToolWidget->btnLasso->setChecked(false);
+        if (checked) { m_floatingToolWidget->btnLasso->setChecked(false); m_floatingToolWidget->btnMove->setChecked(false); }
         m_floatingToolWidget->setSliderVisible(checked);
         renderArea->setEraserMode(checked);
+    });
+    connect(m_floatingToolWidget->btnMove, &QPushButton::toggled, this, [this](bool checked){
+        if (checked) { m_floatingToolWidget->btnLasso->setChecked(false); m_floatingToolWidget->btnEraser->setChecked(false); }
+        renderArea->setMoveMode(checked);
     });
     // 连接批量删除信号
     connect(renderArea, &RenderArea::bulkPathsDeleted, this, &MainWindow::handleBulkPathsDeleted);
     connect(renderArea, &RenderArea::cancelModesRequested, this, [this](){
         m_floatingToolWidget->btnLasso->setChecked(false);
         m_floatingToolWidget->btnEraser->setChecked(false);
+        m_floatingToolWidget->btnMove->setChecked(false);
         m_floatingToolWidget->setSliderVisible(false);
+    });
+    connect(renderArea, &RenderArea::pathsMoved, this, [this](const QVector<Contour> &updatedPaths){
+        this->m_displayPaths = updatedPaths;
     });
 
     m_floatingToolWidget->installEventFilter(this);

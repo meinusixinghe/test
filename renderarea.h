@@ -9,6 +9,10 @@
 #include "mainwindow.h"
 #include <QSet>
 #include <QPixmap>
+#include <QLineEdit>
+#include <QDoubleValidator>
+#include <QHBoxLayout>
+#include <QLabel>
 
 struct Hole;
 struct Contour;
@@ -35,6 +39,12 @@ public:
     void setEraserSize(int size);
     void setLassoMode(bool enabled);
     void clearSelection();
+
+    enum MoveState { MS_Select, MS_BasePoint, MS_Input };
+    void setMoveMode(bool enabled);
+    void findSnapPoint(const QPoint &pos);
+public slots:
+    void executeMove();
 protected:
     void paintEvent(QPaintEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
@@ -48,6 +58,7 @@ signals:
     void itemDeleted(const QPointF &dxfPos);
     void bulkPathsDeleted(QList<int> indices);
     void cancelModesRequested();
+    void pathsMoved(const QVector<Contour> &updatedPaths);
 private:
     // 管板数据
     QVector<Hole> weldHoles;                                // 仅焊接管孔（不含主体圆）
@@ -82,6 +93,7 @@ private:
 
     QVector<Contour> m_displayPaths;
     int m_highlightPathIndex = -1;
+    int m_highlightIndex = -1;
 
     bool m_isEraserMode = false;
     QPoint m_currentMousePos;
@@ -94,6 +106,16 @@ private:
     QSet<int> m_selectedPathIndices;
     QPixmap m_eraserPixmap;
     bool m_isMiddlePanning = false;
+
+    bool m_isMoveMode = false;
+    MoveState m_moveState = MS_Select;
+    bool m_isSnapped = false;
+    QPointF m_snappedDxfPos;
+    QPoint m_snappedScreenPos;
+
+    QWidget *m_moveInputWidget;
+    QLineEdit *m_editMoveX;
+    QLineEdit *m_editMoveY;
 };
 
 #endif // RENDERAREA_H
