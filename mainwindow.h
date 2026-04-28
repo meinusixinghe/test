@@ -91,9 +91,6 @@ private slots:
     void onPauseClicked();
     void onResetClicked();
 
-    // 定位方式选择
-    void onSelectPositioningMethod();
-
     // 响应伺服状态变化的槽函数
     void onServoStateChanged(bool enabled);
 
@@ -149,7 +146,6 @@ private:
     ModbusManager* m_modbusManager;
     QMenu* m_connectMenu;
     QAction* m_connectAction;
-    QAction* m_posMethodAction;                         // 选择定位方式
 
     QPushButton* m_startBtn;
     QPushButton* m_pauseBtn;
@@ -170,7 +166,6 @@ private:
     int m_currentWeldIndex = 0;                         // 当前正在焊接的管孔索引
     bool m_isWeldingProcessRunning = false;             // 是否正在连续焊接中
 
-    int m_positioningMethod = 0;                        // 保存用户选择的定位方式号，默认为 0
     bool m_isPathPlanned = false;
 
     QAction* m_imageProcessAction;                      // 图纸处理菜单按钮

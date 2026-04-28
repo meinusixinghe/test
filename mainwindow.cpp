@@ -356,14 +356,14 @@ void MainWindow::setupUi()
     m_manageProcessAction = new QAction("焊接工艺管理", this);
     m_manageProcessAction->setIcon(QIcon(":/img/images/icons4.png"));
     m_operationMenu->addAction(m_manageProcessAction);
-    m_posMethodAction = new QAction("选择定位方式", this);
-    m_posMethodAction->setIcon(QIcon(":/img/images/icons5.png"));
-    m_operationMenu->addAction(m_posMethodAction);
 
     m_toolsMenu = menuBar()->addMenu("工具");
     m_imageProcessAction = new QAction("图纸处理", this);
     m_imageProcessAction->setIcon(QIcon(":/img/images/DrawProcessing.png"));
     m_toolsMenu->addAction(m_imageProcessAction);
+    QAction* m_positioningAction = new QAction("建立定位", this);
+    m_toolsMenu->addAction(m_positioningAction);
+    toolBar->addAction(m_positioningAction);
 
     m_connectMenu = menuBar()->addMenu("连接");
     m_connectAction = new QAction("建立连接", this);
@@ -459,7 +459,6 @@ void MainWindow::setupUi()
 
     // 通信
     connect(m_connectAction, &QAction::triggered, this, &MainWindow::onConnectTriggered);
-    connect(m_posMethodAction, &QAction::triggered, this, &MainWindow::onSelectPositioningMethod);
     connect(m_startBtn, &QPushButton::clicked, this, &MainWindow::onStartClicked);
     connect(m_pauseBtn, &QPushButton::clicked, this, &MainWindow::onPauseClicked);
     connect(m_resetBtn, &QPushButton::clicked, this, &MainWindow::onResetClicked);
@@ -510,6 +509,13 @@ void MainWindow::setupUi()
     });
     connect(renderArea, &RenderArea::pathsMoved, this, [this](const QVector<Contour> &updatedPaths){
         this->m_displayPaths = updatedPaths;
+    });
+
+    connect(m_positioningAction, &QAction::triggered, this, [this](){
+        PositioningDialog dlg(this);
+        if(dlg.exec() == QDialog::Accepted) {
+            renderArea->setPositioningBlocks(dlg.getBlocks());
+        }
     });
 
     m_floatingToolWidget->installEventFilter(this);
@@ -737,13 +743,98 @@ void MainWindow::handleTableSelectionChanged()
             infoText = QString("【 圆 参数 】\n圆心：( %1,  %2 )\n半径： %3")
                            .arg((minX+maxX)/2.0, 0, 'f', 2).arg((minY+maxY)/2.0, 0, 'f', 2).arg((maxX-minX)/2.0, 0, 'f', 2);
         } else if (c.type == "圆弧" && c.points.size() >= 3) {
-            infoText = QString("【 圆弧参数 】\n起点：( %1, %2 )\n终点：( %3, %4 )")
+            double arcLength = 0.0;
+            for (int i = 0; i < c.points.size() - 1; ++i) {
+                arcLength += std::hypot(c.points[i+1].x() - c.points[i].x(), c.points[i+1].y() - c.points[i].y());
+            }
+            infoText = QString("【 圆弧参数 】\n起点：( %1,  %2 )\n终点：( %3,  %4 )\n近似弧长： %5")
                            .arg(c.points.first().x(), 0, 'f', 2).arg(c.points.first().y(), 0, 'f', 2)
-                           .arg(c.points.last().x(), 0, 'f', 2).arg(c.points.last().y(), 0, 'f', 2);
+                           .arg(c.points.last().x(), 0, 'f', 2).arg(c.points.last().y(), 0, 'f', 2)
+                           .arg(arcLength, 0, 'f', 2);
         } else {
-            infoText = QString("【 %1参数 】\n该曲线由 %2 个数据点拟合而成。").arg(c.type).arg(c.points.size());
-        }
+            struct ArcSegment { QPointF start, end, center; double radius; bool isLine; };
+            QList<ArcSegment> segments;
 
+            // 拟合误差阈值。数值越大，拟合的段数越少（圆弧越少），但会轻微失真。
+            // 建议：如果是毫米为单位，0.5是个不错的选择。
+            const double TOLERANCE = 0.5;
+
+            auto distToLine = [](const QPointF& p, const QPointF& a, const QPointF& b) {
+                double l2 = std::pow(a.x() - b.x(), 2) + std::pow(a.y() - b.y(), 2);
+                if (l2 == 0) return std::hypot(p.x() - a.x(), p.y() - a.y());
+                double t = ((p.x() - a.x()) * (b.x() - a.x()) + (p.y() - a.y()) * (b.y() - a.y())) / l2;
+                t = std::max(0.0, std::min(1.0, t));
+                return std::hypot(p.x() - (a.x() + t * (b.x() - a.x())), p.y() - (a.y() + t * (b.y() - a.y())));
+            };
+
+            int n = c.points.size();
+            int i = 0;
+
+            // 贪心搜索循环
+            while (i < n - 1) {
+                int best_j = i + 1;
+                ArcSegment best_arc = {c.points[i], c.points[i+1], QPointF(), 0, true};
+
+                for (int j = n - 1; j >= i + 2; --j) {
+                    int mid = i + (j - i) / 2;
+                    QPointF p1 = c.points[i], p2 = c.points[mid], p3 = c.points[j];
+
+                    double D = 2 * (p1.x()*(p2.y() - p3.y()) + p2.x()*(p3.y() - p1.y()) + p3.x()*(p1.y() - p2.y()));
+
+                    if (std::abs(D) < 1e-6) {
+                        bool goodLine = true;
+                        for(int k = i + 1; k < j; ++k) {
+                            if (distToLine(c.points[k], p1, p3) > TOLERANCE) { goodLine = false; break; }
+                        }
+                        if (goodLine) {
+                            best_j = j;
+                            best_arc = {p1, p3, QPointF(), 0, true};
+                            break;
+                        }
+                    } else {
+                        double xc = ((p1.x()*p1.x() + p1.y()*p1.y())*(p2.y() - p3.y()) +
+                                     (p2.x()*p2.x() + p2.y()*p2.y())*(p3.y() - p1.y()) +
+                                     (p3.x()*p3.x() + p3.y()*p3.y())*(p1.y() - p2.y())) / D;
+                        double yc = ((p1.x()*p1.x() + p1.y()*p1.y())*(p3.x() - p2.x()) +
+                                     (p2.x()*p2.x() + p2.y()*p2.y())*(p1.x() - p3.x()) +
+                                     (p3.x()*p3.x() + p3.y()*p3.y())*(p2.x() - p1.x())) / D;
+                        double R = std::hypot(p1.x() - xc, p1.y() - yc);
+
+                        bool goodArc = true;
+                        for(int k = i + 1; k < j; ++k) {
+                            double dist = std::abs(std::hypot(c.points[k].x() - xc, c.points[k].y() - yc) - R);
+                            if (dist > TOLERANCE) { goodArc = false; break; }
+                        }
+                        if (goodArc) {
+                            best_j = j;
+                            best_arc = {p1, p3, QPointF(xc, yc), R, false};
+                            break;
+                        }
+                    }
+                }
+
+                segments.append(best_arc);
+                i = best_j;
+            }
+
+            infoText = QString("【 %1 参数 (贪心圆弧拟合) 】\n将原始 %2 个密集离散点\n压缩拟合为了 %3 段轨迹：\n\n")
+                           .arg(c.type).arg(n).arg(segments.size());
+
+            for (int s = 0; s < segments.size(); ++s) {
+                const auto& seg = segments[s];
+                if (seg.isLine) {
+                    double len = std::hypot(seg.end.x() - seg.start.x(), seg.end.y() - seg.start.y());
+                    infoText += QString("段%1 [直线]\n 起点: (%2, %3)\n 终点: (%4, %5)\n 长度: %6\n\n")
+                                    .arg(s + 1).arg(seg.start.x(), 0, 'f', 2).arg(seg.start.y(), 0, 'f', 2)
+                                    .arg(seg.end.x(), 0, 'f', 2).arg(seg.end.y(), 0, 'f', 2).arg(len, 0, 'f', 2);
+                } else {
+                    infoText += QString("段%1 [圆弧]\n 起点: (%2, %3)\n 终点: (%4, %5)\n 半径: %6\n\n")
+                                    .arg(s + 1).arg(seg.start.x(), 0, 'f', 2).arg(seg.start.y(), 0, 'f', 2)
+                                    .arg(seg.end.x(), 0, 'f', 2).arg(seg.end.y(), 0, 'f', 2).arg(seg.radius, 0, 'f', 2);
+                }
+            }
+            infoText = infoText.trimmed();
+        }
         if (selectedRows.size() > 1) {
             infoText = QString("（当前共多选了 %1 条线条，仅显示第一条信息）\n\n").arg(selectedRows.size()) + infoText;
         }
@@ -1187,11 +1278,6 @@ void MainWindow::onStartClicked()
             return;
         }
 
-        if (m_positioningMethod == 0) {
-            QMessageBox::warning(this, "操作提示", "启动失败：未选择定位方式！\n请先在顶部菜单栏点击“操作 -> 选择定位方式”进行设置。");
-            return;
-        }
-
         // 到达启动之后，不再跑步骤2，而是持续跑步骤3！
         if (weldHoles.isEmpty()) {
             QMessageBox::warning(this, "警告", "没有管孔数据可供焊接！");
@@ -1207,8 +1293,7 @@ void MainWindow::onStartClicked()
         m_pauseBtn->setChecked(false); // 确保按钮处于没被按下的状态
         m_pauseBtn->setText("暂停");
 
-        ModbusManager::RobotCmd cmd = static_cast<ModbusManager::RobotCmd>(m_positioningMethod);
-        m_modbusManager->startWeldingProcess(cmd);
+        m_modbusManager->startWeldingProcess();
     }
 }
 
@@ -1234,28 +1319,6 @@ void MainWindow::onPauseClicked()
 void MainWindow::onResetClicked()
 {
     m_modbusManager->resetAlarm();
-}
-
-// =============================================================================
-// 选择定位方式
-// =============================================================================
-void MainWindow::onSelectPositioningMethod()
-{
-    QStringList items;
-    items << "10 - 无定位方式启动"
-          << "20 - 机械定位方式启动"
-          << "30 - 点激光定位方式启动"
-          << "40 - 线激光定位方式启动"
-          << "50 - 3D相机定位方式扫描启动"
-          << "51 - 3D相机定位方式管焊接启动";
-
-    bool ok;
-    QString item = QInputDialog::getItem(this, "选择定位方式",
-                                         "请选择机器人启动模式 (CMD):", items, 0, false, &ok);
-    if (ok && !item.isEmpty()) {
-        m_positioningMethod = item.split(" - ").first().toInt();
-        m_statusLabel->setText(QString("已成功选择定位方式 CMD: %1").arg(m_positioningMethod));
-    }
 }
 
 // ----------------------------------------------------
@@ -1347,10 +1410,9 @@ void MainWindow::sendNextWeldHole()
     data.processId = 1;
 
     dataTable->selectRow(m_currentWeldIndex);
-    m_statusLabel->setText(QString("正在下发并焊接第 %1 / %2 个管孔 (CMD: %3)...")
+    m_statusLabel->setText(QString("正在下发并焊接第 %1 / %2 个管孔...")
                                .arg(m_currentWeldIndex + 1)
-                               .arg(weldHoles.size())
-                               .arg(m_positioningMethod));
+                               .arg(weldHoles.size()));
 
     // 调用专属的管孔数据下发函数
     m_modbusManager->sendWeldHoleData(data);

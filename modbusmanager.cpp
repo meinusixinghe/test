@@ -359,15 +359,15 @@ void ModbusManager::prepareAndStart()
 // ==========================================================
 // 外部调用：步骤 3 - 下发总启动命令 (进行 40014 握手)
 // ==========================================================
-void ModbusManager::startWeldingProcess(RobotCmd cmd)
+void ModbusManager::startWeldingProcess()
 {
     if (m_modbus->state() != QModbusDevice::ConnectedState) return;
     if (m_isAlarmActive || !m_isAutoMode) return;
     if (m_jobState != JobIdle) return;
 
-    emit logMessage(QString("开始下发总启动命令 (CMD=%1)").arg(cmd));
+    emit logMessage(QString("开始下发总启动命令"));
 
-    writeRegister(Addr::PC_CMD, (quint16)cmd);
+    writeRegister(Addr::PC_CMD, 10);
     m_jobState = WaitingCmdAck;
 }
 

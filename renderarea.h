@@ -13,6 +13,7 @@
 #include <QDoubleValidator>
 #include <QHBoxLayout>
 #include <QLabel>
+#include "positioningdialog.h"
 
 struct Hole;
 struct Contour;
@@ -43,6 +44,8 @@ public:
     enum MoveState { MS_Select, MS_BasePoint, MS_Input };
     void setMoveMode(bool enabled);
     void findSnapPoint(const QPoint &pos);
+
+    void setPositioningBlocks(const QList<PositioningBlock> &blocks);
 public slots:
     void executeMove();
 protected:
@@ -116,6 +119,8 @@ private:
     QWidget *m_moveInputWidget;
     QLineEdit *m_editMoveX;
     QLineEdit *m_editMoveY;
+
+    QList<PositioningBlock> m_posBlocks;
 };
 
 #endif // RENDERAREA_H

@@ -123,6 +123,16 @@ void RenderArea::paintEvent(QPaintEvent *event)
         applyCurrentTransform(painter);
     }
 
+    painter.save();
+    for (const auto& block : std::as_const(m_posBlocks)) {
+        QPainterPath path = block.getPath();
+        painter.setPen(QPen(QColor(255, 105, 180), 2 / m_scaleFactor));
+        painter.setBrush(QColor(255, 182, 193, 150));
+
+        painter.drawPath(path);
+    }
+    painter.restore();
+
     for (int i = 0; i < m_displayPaths.size(); ++i) {
         const auto& contour = m_displayPaths[i];
         if (contour.points.size() > 1) {
@@ -816,5 +826,10 @@ void RenderArea::executeMove() {
     m_moveInputWidget->hide();
     m_moveState = MS_Select;
     m_selectedPathIndices.clear();
+    update();
+}
+
+void RenderArea::setPositioningBlocks(const QList<PositioningBlock> &blocks) {
+    m_posBlocks = blocks;
     update();
 }
