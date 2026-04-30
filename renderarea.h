@@ -26,7 +26,6 @@ public:
 
     void setData(const QVector<Hole> &h,const Hole &mPH,const QPolygonF &platePoly, bool isRect, bool resetView = true);
 
-    // 设置要高亮显示的孔洞索引
     void setHighlightedIndex(int index);
 
     void setUserCoordinatePoints(const QPointF& origin, const QPointF& xAxis, const QPointF& planePoint);
@@ -46,6 +45,7 @@ public:
     void findSnapPoint(const QPoint &pos);
 
     void setPositioningBlocks(const QList<PositioningBlock> &blocks);
+    void resetView();
 public slots:
     void executeMove();
 protected:
@@ -57,6 +57,7 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
+
 signals:
     void itemDeleted(const QPointF &dxfPos);
     void bulkPathsDeleted(QList<int> indices);
@@ -73,7 +74,6 @@ private:
     // 缩放和平移参数
     double m_scaleFactor;                                   // 总缩放比例 (包含初始自适应)
     QPointF m_panOffsetDXF;                                 // 用户累积的平移量 (DXF坐标单位)
-    QPointF m_initialContentOffset;                         // 初始自适应居中所需的偏移量 (DXF坐标单位)
 
     // DXF数据的边界 (用于限制平移)
     QPointF m_dxfMinBound;
@@ -84,8 +84,7 @@ private:
 
     // 鼠标拖拽
     QPoint m_lastMousePos;                                  // 记录鼠标上一次的位置 (Widget像素单位)
-
-    void calculateInitialTransform(QPainter &painter);
+    bool m_firstPaint = true;
     void applyCurrentTransform(QPainter &painter);          // 应用所有变换
 
     // 用户坐标系显示相关
@@ -107,6 +106,7 @@ private:
     QPoint m_lassoStartPos;
     QPoint m_lassoCurrentPos;
     QSet<int> m_selectedPathIndices;
+    QSet<int> m_baseSelectedIndices;
     QPixmap m_eraserPixmap;
     bool m_isMiddlePanning = false;
 

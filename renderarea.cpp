@@ -20,7 +20,7 @@ using std::max;
 // ----------------------------------------------------
 RenderArea::RenderArea(QWidget *parent): QWidget(parent),
     m_scaleFactor(1.0),                                 // 缩放因子（首次加载时自动计算，滚轮事件中修改）
-    m_panOffsetDXF(0.0, 0.0),                           // 用户拖拽产生的平移量（DXF坐标单位）
+    m_panOffsetDXF(0.0, 0.0)                           // 用户拖拽产生的平移量（DXF坐标单位）
 {
     setBackgroundRole(QPalette::Base);                  // 设置背景色为控件默认的基础色
     setAutoFillBackground(true);                        // 自动填充背景，避免透明
@@ -83,12 +83,8 @@ void RenderArea::setData(const QVector<Hole> &h,const Hole &mPH,const QPolygonF 
     m_mainPlatePolygon = platePoly;                     // 存多边形
     m_isRectangular = isRect;                           // 存标志位
     if (resetView) {
-        m_scaleFactor = 1.0;
-        m_panOffsetDXF = QPointF(0.0, 0.0);
-        m_dxfMinBound = QPointF(0.0, 0.0);
-        m_dxfMaxBound = QPointF(0.0, 0.0);
+        m_firstPaint = true;
     }
-
     // 触发重绘
     update();
 }
@@ -111,16 +107,16 @@ void RenderArea::setHighlightedIndex(int index) {
 // ----------------------------------------------------
 void RenderArea::paintEvent(QPaintEvent *event)
 {
+    Q_UNUSED(event);
     QPainter painter(this);                                         // 2D绘图类
     painter.setRenderHint(QPainter::Antialiasing);                  // 开启抗锯齿，让图形更平滑
     painter.setRenderHint(QPainter::TextAntialiasing);              // 文字抗锯齿，更清晰
 
-    // 首次加载：计算初始变换（适配窗口+居中）；后续：应用当前变换（缩放+平移）
-    if (m_scaleFactor == 1.0 && m_initialContentOffset == QPointF(0.0, 0.0)) {
-        calculateInitialTransform(painter);
-    } else {
-        applyCurrentTransform(painter);
+    if (m_firstPaint) {
+        resetView();
+        m_firstPaint = false;
     }
+    applyCurrentTransform(painter);
 
     painter.save();
     double safeScale = (m_scaleFactor > 0.001) ? m_scaleFactor : 1.0;
@@ -295,8 +291,7 @@ void RenderArea::paintEvent(QPaintEvent *event)
 void RenderArea::wheelEvent(QWheelEvent *event)
 {
     const double scaleStep = 1.15;              // 缩放步长（滚轮每滚一格，缩放15%）
-    const double MIN_SCALE = 0.1;               // 最小缩放（防止缩太小看不见）
-    const double MAX_SCALE = 2;                 // 最大缩放（防止缩太大）
+    const double MAX_SCALE = 4;                 // 最大缩放（防止缩太大）
     int degrees = event->angleDelta().y();      // 滚轮滚动的角度（正为向上，负为向下）
 
     // 计算新的缩放因子
@@ -305,9 +300,7 @@ void RenderArea::wheelEvent(QWheelEvent *event)
     }else if(degrees < 0) {m_scaleFactor /= scaleStep;}       // 向下滚：缩小
 
     // 限制缩放范围
-    if (m_scaleFactor < MIN_SCALE) {
-        m_scaleFactor = MIN_SCALE;
-    }else if(m_scaleFactor > MAX_SCALE)m_scaleFactor = MAX_SCALE;
+    if(m_scaleFactor > MAX_SCALE)m_scaleFactor = MAX_SCALE;
 
     update();
     event->accept();                            // 标记事件已处理
@@ -332,7 +325,12 @@ void RenderArea::mousePressEvent(QMouseEvent *event)
             m_isLassoDragging = true;
             m_lassoStartPos = event->pos();
             m_lassoCurrentPos = event->pos();
-            m_selectedPathIndices.clear();
+            if (event->modifiers() & Qt::ControlModifier) {
+                m_baseSelectedIndices = m_selectedPathIndices;
+            } else {
+                m_selectedPathIndices.clear();
+                m_baseSelectedIndices.clear();
+            }
             update();
             event->accept();
             return;
@@ -370,7 +368,12 @@ void RenderArea::mousePressEvent(QMouseEvent *event)
         m_isLassoDragging = true;
         m_lassoStartPos = event->pos();
         m_lassoCurrentPos = event->pos();
-        m_selectedPathIndices.clear();
+        if (event->modifiers() & Qt::ControlModifier) {
+            m_baseSelectedIndices = m_selectedPathIndices;
+        } else {
+            m_selectedPathIndices.clear();
+            m_baseSelectedIndices.clear();
+        }
         update();
         event->accept();
         return;
@@ -379,8 +382,7 @@ void RenderArea::mousePressEvent(QMouseEvent *event)
         QTransform transform;
         transform.translate(width() / 2.0, height() / 2.0);
         transform.scale(m_scaleFactor, -m_scaleFactor);
-        transform.translate((m_initialContentOffset + m_panOffsetDXF).x(),
-                            (m_initialContentOffset + m_panOffsetDXF).y());
+        transform.translate(m_panOffsetDXF.x(), m_panOffsetDXF.y());
         QPointF dxfPos = transform.inverted().map(QPointF(event->pos()));
 
         emit itemDeleted(dxfPos);
@@ -437,43 +439,11 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event)
         return;
     }
     if (event->buttons() & Qt::LeftButton) {
-        QPoint delta = event->pos() - m_lastMousePos;                       // 像素移动量
-
-        // 1.将像素移动量转换为 DXF坐标单位
+        QPoint delta = event->pos() - m_lastMousePos;
         double dx = delta.x() / m_scaleFactor;
         double dy = -delta.y() / m_scaleFactor;
-
-        // 2.计算潜在的新平移量
-        QPointF newPanOffset = m_panOffsetDXF + QPointF(dx, dy);
-
-        // 计算管板内容的实际物理尺寸 (DXF单位)
-        double contentW = m_dxfMaxBound.x() - m_dxfMinBound.x();
-        double contentH = m_dxfMaxBound.y() - m_dxfMinBound.y();
-        if (contentW < 1.0) contentW = 100.0;                               // 防止除零或空数据的安全检查
-        if (contentH < 1.0) contentH = 100.0;
-        // 定义限制范围：管板边界的 1.5 倍
-        double limitX = contentW * 0.75;
-        double limitY = contentH * 0.75;
-
-        // 3.平移限制
-        if (newPanOffset.x() > limitX) {
-            newPanOffset.setX(limitX);
-        }else if (newPanOffset.x() < -limitX) {
-            newPanOffset.setX(-limitX);
-        }
-        if (newPanOffset.y() > limitY) {
-            newPanOffset.setY(limitY);
-        }else if (newPanOffset.y() < -limitY) {
-            newPanOffset.setY(-limitY);
-        }
-
-        // 4.应用新的平移量
-        m_panOffsetDXF = newPanOffset;
-
-        // 5.更新上次鼠标位置
+        m_panOffsetDXF += QPointF(dx, dy);
         m_lastMousePos = event->pos();
-
-        // 6.触发重绘
         update();
         event->accept();
     }
@@ -513,36 +483,25 @@ void RenderArea::setDisplayPaths(const QVector<Contour>& paths) {
     m_displayPaths = paths;
 }
 
-// ----------------------------------------------------
-// 坐标变换：合并初始居中、缩放和用户平移
-// 解决了 DXF坐标与屏幕坐标的映射问题
-// ----------------------------------------------------
-void RenderArea::calculateInitialTransform(QPainter &painter)
+void RenderArea::resetView()
 {
     // 初始化 DXF边界
-    double minX = std::numeric_limits<double>::max();           // 返回其能表示的最大正有限值
-    double maxX = std::numeric_limits<double>::lowest();        // 返回其能表示的最小正有限值
+    double minX = std::numeric_limits<double>::max();
+    double maxX = std::numeric_limits<double>::lowest();
     double minY = std::numeric_limits<double>::max();
     double maxY = std::numeric_limits<double>::lowest();
-    m_dxfMinBound = QPointF(minX, minY);
-    m_dxfMaxBound = QPointF(maxX, maxY);
 
-    // 遍历所有孔洞中心和轮廓点，更新边界框
-    // 1.创建一个可复用的匿名函数，命名为 updateBounds，用于根据传入的坐标点 p更新绘图区域的边界范围
-    // [&]表示按引用捕获外部作用域的所有变量、(const QPointF& p)：参数列表
     auto updateBounds = [&](const QPointF& p) {
         if (p.x() < minX) minX = p.x();
         if (p.x() > maxX) maxX = p.x();
         if (p.y() < minY) minY = p.y();
         if (p.y() > maxY) maxY = p.y();
     };
-    // 2.遍历孔洞中心
+
     for(const auto& h : std::as_const(weldHoles)) updateBounds(h.center);
     if (m_isRectangular) {
-        for (const auto& p : std::as_const(m_mainPlatePolygon))                    // 如果是方形，遍历多边形的所有顶点
-            updateBounds(p);
+        for (const auto& p : std::as_const(m_mainPlatePolygon)) updateBounds(p);
     } else {
-        // 如果是圆形，加入圆的四个极点
         if (mainPlateHole.radius > 0) {
             updateBounds(QPointF(mainPlateHole.center.x() - mainPlateHole.radius, mainPlateHole.center.y()));
             updateBounds(QPointF(mainPlateHole.center.x() + mainPlateHole.radius, mainPlateHole.center.y()));
@@ -551,29 +510,33 @@ void RenderArea::calculateInitialTransform(QPainter &painter)
         }
     }
     for (const auto& contour : std::as_const(m_displayPaths)) {
-        for (const auto& p : contour.points) {
-            updateBounds(p);
-        }
+        for (const auto& p : contour.points) updateBounds(p);
     }
-    if (minX > maxX) { applyCurrentTransform(painter); return; }    // 无有效点
 
-    // 计算内容的宽高和适配窗口的缩放因子
-    double contentW = maxX - minX;                                  // 宽度
-    double contentH = maxY - minY;                                  // 高度
-    double padding = 20.0;
-    double scaleX = (width() - 2 * padding) / contentW;
-    double scaleY = (height() - 2 * padding) / contentH;
-    m_scaleFactor = min(scaleX, scaleY);                            // 取较小的缩放因子，保证内容完整显示
+    if (minX > maxX) {
+        m_scaleFactor = 1.0;
+        m_panOffsetDXF = QPointF(0, 0);
+        update();
+        return;
+    }
 
-    // 计算初始居中偏移量：将内容几何中心移到原点（绝大部分情况是(0,0)）
-    m_initialContentOffset = QPointF(-(minX + contentW / 2.0), -(minY + contentH / 2.0));
-
-    // DXF边界（用于后续平移限制）
     m_dxfMinBound = QPointF(minX, minY);
     m_dxfMaxBound = QPointF(maxX, maxY);
 
-    // 应用初始变换
-    applyCurrentTransform(painter);
+    double contentW = maxX - minX;
+    double contentH = maxY - minY;
+    double padding = 20.0;
+
+    if (width() > 10 && height() > 10) {
+        double scaleX = (width() - 2 * padding) / contentW;
+        double scaleY = (height() - 2 * padding) / contentH;
+        m_scaleFactor = std::min(scaleX, scaleY);
+    } else {
+        m_scaleFactor = 1.0;
+    }
+
+    m_panOffsetDXF = QPointF(-(minX + contentW / 2.0), -(minY + contentH / 2.0));
+    update();
 }
 
 // ----------------------------------------------------
@@ -581,17 +544,9 @@ void RenderArea::calculateInitialTransform(QPainter &painter)
 // ----------------------------------------------------
 void RenderArea::applyCurrentTransform(QPainter &painter)
 {
-    // 1. 平移到 Widget中心 (Widget坐标系)
-    // 是 QPainter最核心的坐标变换方法，移动绘图坐标系的原点
-    // width()：客户区宽度（像素）、height()：客户区高度（像素）
     painter.translate(width() / 2.0, height() / 2.0);
-
-    // 2. 应用总缩放因子 (m_scaleFactor)和 Y轴翻转(从 DXF坐标 Y轴向上到屏幕 Y轴向下)
     painter.scale(m_scaleFactor, -m_scaleFactor);
-
-    // 3. 应用总偏移量(初始居中 + 用户累积平移)
-    QPointF totalOffset = m_initialContentOffset + m_panOffsetDXF;
-    painter.translate(totalOffset);
+    painter.translate(m_panOffsetDXF);
 }
 
 // ----------------------------------------------------
@@ -663,8 +618,14 @@ void RenderArea::clearSelection() {
 }
 
 void RenderArea::keyPressEvent(QKeyEvent *event) {
+    if (event->key() == Qt::Key_Space) {
+        resetView();
+        event->accept();
+        return;
+    }
+
     if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) && !m_selectedPathIndices.isEmpty()) {
-        if (m_moveState != MS_Input) { // 防止在输入坐标时误删线条
+        if (m_moveState != MS_Input) {
             emit bulkPathsDeleted(m_selectedPathIndices.values());
             clearSelection();
         }
@@ -701,27 +662,21 @@ void RenderArea::keyPressEvent(QKeyEvent *event) {
 
 void RenderArea::updateLassoSelection() {
     QRect selectionRect = QRect(m_lassoStartPos, m_lassoCurrentPos).normalized();
-    m_selectedPathIndices.clear();
+    m_selectedPathIndices = m_baseSelectedIndices;
 
-    // 构建屏幕坐标到 DXF 坐标的映射矩阵
     QTransform transform;
     transform.translate(width() / 2.0, height() / 2.0);
     transform.scale(m_scaleFactor, -m_scaleFactor);
-    transform.translate((m_initialContentOffset + m_panOffsetDXF).x(),
-                        (m_initialContentOffset + m_panOffsetDXF).y());
-
+    transform.translate(m_panOffsetDXF.x(), m_panOffsetDXF.y());
     QPainterPath rectPath;
     rectPath.addRect(selectionRect);
 
-    // 遍历所有线条，检查是否在矩形内或与矩形相交
     for (int i = 0; i < m_displayPaths.size(); ++i) {
         const auto& contour = m_displayPaths[i];
         bool isInside = false;
         for (int j = 0; j < contour.points.size() - 1; ++j) {
             QPointF p1 = transform.map(contour.points[j]);
             QPointF p2 = transform.map(contour.points[j+1]);
-
-            // 只要端点在框内，或者线段与边框相交，就算选中
             if (selectionRect.contains(p1.toPoint()) || selectionRect.contains(p2.toPoint())) {
                 isInside = true; break;
             }
@@ -760,8 +715,7 @@ void RenderArea::findSnapPoint(const QPoint &pos) {
     QTransform transform;
     transform.translate(width() / 2.0, height() / 2.0);
     transform.scale(m_scaleFactor, -m_scaleFactor);
-    transform.translate((m_initialContentOffset + m_panOffsetDXF).x(),
-                        (m_initialContentOffset + m_panOffsetDXF).y());
+    transform.translate(m_panOffsetDXF.x(), m_panOffsetDXF.y());
 
     for (int idx : std::as_const(m_selectedPathIndices)) {
         if (idx < 0 || idx >= m_displayPaths.size()) continue; // 安全检查
@@ -827,6 +781,7 @@ void RenderArea::executeMove() {
     m_moveInputWidget->hide();
     m_moveState = MS_Select;
     m_selectedPathIndices.clear();
+    m_baseSelectedIndices.clear();
     update();
 }
 
