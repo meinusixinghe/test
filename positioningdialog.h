@@ -35,11 +35,22 @@ protected:
     void paintEvent(QPaintEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void contextMenuEvent(QContextMenuEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void wheelEvent(QWheelEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
 
 private:
+    void autoFit();
     QList<PositioningBlock> m_blocks;
     int m_selectedIndex = -1;
-    QTransform m_transform; // 记录缩放平移矩阵，用于反算鼠标点击
+    QTransform m_transform;
+
+    double m_scaleFactor = 1.0;
+    QPointF m_panOffset = QPointF(0, 0);
+    QPoint m_lastMousePos;
+    bool m_isPanning = false;
+    bool m_firstPaint = true;
 };
 
 // 浮动主窗口
@@ -59,11 +70,13 @@ private:
 
     // 参数输入框
     QDoubleSpinBox *m_lineLen, *m_lineWidth, *m_lineX, *m_lineY, *m_lineAngle;
-    QDoubleSpinBox *m_ptX, *m_ptY;
+    QDoubleSpinBox *m_ptX, *m_ptY, *m_ptAngle;
     QDoubleSpinBox *m_arcX, *m_arcY, *m_arcR, *m_arcAngle;
     QDoubleSpinBox *m_cirX, *m_cirY, *m_cirR;
 
     QDoubleSpinBox* createSpinBox(double min = -10000, double max = 10000, double val = 0);
+    QWidget *m_detailContainer;
+    void setupTypeButtons();
 };
 
 #endif

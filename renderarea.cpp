@@ -21,7 +21,6 @@ using std::max;
 RenderArea::RenderArea(QWidget *parent): QWidget(parent),
     m_scaleFactor(1.0),                                 // 缩放因子（首次加载时自动计算，滚轮事件中修改）
     m_panOffsetDXF(0.0, 0.0),                           // 用户拖拽产生的平移量（DXF坐标单位）
-    m_initialContentOffset(0.0, 0.0)                    // 首次加载时，将内容几何中心移到原点的偏移量（实现居中的核心）
 {
     setBackgroundRole(QPalette::Base);                  // 设置背景色为控件默认的基础色
     setAutoFillBackground(true);                        // 自动填充背景，避免透明
@@ -69,6 +68,7 @@ RenderArea::RenderArea(QWidget *parent): QWidget(parent),
 
     connect(m_editMoveX, &QLineEdit::returnPressed, this, &RenderArea::executeMove);
     connect(m_editMoveY, &QLineEdit::returnPressed, this, &RenderArea::executeMove);
+    setFocusPolicy(Qt::StrongFocus);
 }
 
 // ----------------------------------------------------
@@ -85,7 +85,6 @@ void RenderArea::setData(const QVector<Hole> &h,const Hole &mPH,const QPolygonF 
     if (resetView) {
         m_scaleFactor = 1.0;
         m_panOffsetDXF = QPointF(0.0, 0.0);
-        m_initialContentOffset = QPointF(0.0, 0.0);
         m_dxfMinBound = QPointF(0.0, 0.0);
         m_dxfMaxBound = QPointF(0.0, 0.0);
     }
@@ -124,13 +123,15 @@ void RenderArea::paintEvent(QPaintEvent *event)
     }
 
     painter.save();
+    double safeScale = (m_scaleFactor > 0.001) ? m_scaleFactor : 1.0;
     for (const auto& block : std::as_const(m_posBlocks)) {
         QPainterPath path = block.getPath();
-        painter.setPen(QPen(QColor(255, 105, 180), 2 / m_scaleFactor));
+        painter.setPen(QPen(QColor(255, 105, 180), 2.0 / safeScale));
         painter.setBrush(QColor(255, 182, 193, 150));
 
         painter.drawPath(path);
     }
+    painter.restore();
     painter.restore();
 
     for (int i = 0; i < m_displayPaths.size(); ++i) {

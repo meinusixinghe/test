@@ -363,7 +363,6 @@ void MainWindow::setupUi()
     m_toolsMenu->addAction(m_imageProcessAction);
     QAction* m_positioningAction = new QAction("建立定位", this);
     m_toolsMenu->addAction(m_positioningAction);
-    toolBar->addAction(m_positioningAction);
 
     m_connectMenu = menuBar()->addMenu("连接");
     m_connectAction = new QAction("建立连接", this);

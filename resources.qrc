@@ -13,6 +13,10 @@
         <file>images/eraser2.png</file>
         <file>images/DrawProcessing.png</file>
         <file>images/shift.png</file>
+        <file>images/arc_pos.png</file>
+        <file>images/circle_pos.png</file>
+        <file>images/line_pos.png</file>
+        <file>images/point_pos.png</file>
     </qresource>
     <qresource prefix="/icon">
         <file>icons/ball_blue.ico</file>
