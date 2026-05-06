@@ -59,6 +59,7 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
 
+    void contextMenuEvent(QContextMenuEvent *event) override;
 signals:
     void itemDeleted(const QPointF &dxfPos);
     void bulkPathsDeleted(QList<int> indices);
@@ -122,6 +123,8 @@ private:
     QLineEdit *m_editMoveY;
 
     QList<PositioningBlock> m_posBlocks;
+
+    int m_lineWidth = 2;
 };
 
 #endif // RENDERAREA_H

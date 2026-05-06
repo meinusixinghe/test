@@ -177,6 +177,7 @@ private:
     Hole m_originalMainPlateHole;
     QPolygonF m_originalMainPlateContour;
     QTextEdit* m_detailContentText;
+
 };
 
 #endif // MAINWINDOW_H

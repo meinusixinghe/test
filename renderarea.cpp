@@ -9,6 +9,9 @@
 #include <QtMath>
 #include <QPainterPath>
 #include <QKeyEvent>
+#include <QContextMenuEvent>
+#include <QMenu>
+#include <QInputDialog>
 
 using std::min;
 using std::max;
@@ -136,15 +139,15 @@ void RenderArea::paintEvent(QPaintEvent *event)
             QPen pen;
             if (m_selectedPathIndices.contains(i)) {
                 pen = QPen(Qt::red, 0);
-                pen.setWidth(3);
+                pen.setWidth(m_lineWidth);
             }
             else if (m_highlightPathIndices.contains(i)) {
                 pen = QPen(Qt::yellow, 0);
-                pen.setWidth(6);
+                pen.setWidth(m_lineWidth+2);
             }
             else {
                 pen = QPen(Qt::black, 0);
-                pen.setWidth(4);
+                pen.setWidth(m_lineWidth);
             }
             pen.setCosmetic(true);
             painter.setPen(pen);
@@ -788,4 +791,21 @@ void RenderArea::executeMove() {
 void RenderArea::setPositioningBlocks(const QList<PositioningBlock> &blocks) {
     m_posBlocks = blocks;
     update();
+}
+
+void RenderArea::contextMenuEvent(QContextMenuEvent *event) {
+    QMenu menu(this);
+    QAction *actSetWidth = menu.addAction("设置线宽");
+
+    // 在鼠标点击的位置弹出菜单
+    QAction *res = menu.exec(event->globalPos());
+
+    if (res == actSetWidth) {
+        bool ok;
+        int newWidth = QInputDialog::getInt(this, "设置线宽", "请输入图纸显示的线宽值:", m_lineWidth, 1, 50, 1, &ok);
+        if (ok) {
+            m_lineWidth = newWidth;
+            update();
+        }
+    }
 }
