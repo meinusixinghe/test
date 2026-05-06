@@ -27,6 +27,7 @@
 #include <QSettings>
 #include <QCloseEvent>
 #include <QTimer>
+#include <QShortcut>
 
 FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     setAttribute(Qt::WA_StyledBackground, true);
@@ -61,6 +62,13 @@ FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     btnRestore->setFixedSize(50, 30);
     btnRestore->setToolTip("还原图纸");
     btnRestore->setCursor(Qt::PointingHandCursor);
+    btnUndo = new QPushButton();
+    btnUndo->setIcon(QIcon(":/img/images/undo.png"));
+    btnUndo->setIconSize(QSize(20, 20));
+    btnUndo->setFixedSize(50, 30);
+    btnUndo->setToolTip("撤销操作 (Ctrl+Z)");
+    btnUndo->setCursor(Qt::PointingHandCursor);
+    btnUndo->setEnabled(false);
     btnEraser = new QPushButton();
     btnEraser->setIcon(QIcon(":/img/images/eraser.png"));
     btnEraser->setIconSize(QSize(20, 20));
@@ -83,6 +91,7 @@ FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     btnMove->setCursor(Qt::PointingHandCursor);
 
     tools->addWidget(btnRestore);
+    tools->addWidget(btnUndo);
     tools->addWidget(btnLasso);
     tools->addWidget(btnMove);
     tools->addWidget(btnEraser);
@@ -113,7 +122,7 @@ FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     mainLayout->addWidget(sliderContainer);
 
     sliderContainer->setVisible(false);
-    setFixedWidth(240);
+    setFixedWidth(300);
     adjustSize();
 
     setCursor(Qt::ArrowCursor);
@@ -462,6 +471,9 @@ void MainWindow::setupUi()
     connect(m_pauseBtn, &QPushButton::clicked, this, &MainWindow::onPauseClicked);
     connect(m_resetBtn, &QPushButton::clicked, this, &MainWindow::onResetClicked);
     connect(m_floatingToolWidget->btnRestore, &QPushButton::clicked, this, &MainWindow::restoreDrawing);
+    connect(m_floatingToolWidget->btnUndo, &QPushButton::clicked, this, &MainWindow::undo);
+    QShortcut *undoShortcut = new QShortcut(QKeySequence::Undo, this);
+    connect(undoShortcut, &QShortcut::activated, this, &MainWindow::undo);
     connect(m_floatingToolWidget->btnEraser, &QPushButton::toggled, this, [this](bool checked){
         renderArea->setEraserMode(checked);
     });
@@ -507,6 +519,7 @@ void MainWindow::setupUi()
         m_floatingToolWidget->setSliderVisible(false);
     });
     connect(renderArea, &RenderArea::pathsMoved, this, [this](const QVector<Contour> &updatedPaths){
+        saveUndoState();
         this->m_displayPaths = updatedPaths;
     });
 
@@ -701,6 +714,8 @@ void MainWindow::loadDrawingData(const QString &filePath)
     m_originalWeldHoles = weldHoles;
     m_originalMainPlateHole = mainPlateHole;
     m_originalMainPlateContour = mainPlateContour;
+    m_undoStack.clear();
+    m_floatingToolWidget->btnUndo->setEnabled(false);
 }
 
 // ----------------------------------------------------
@@ -1435,6 +1450,7 @@ void MainWindow::restoreDrawing()
     m_floatingToolWidget->btnRestore->update();
 
     if (reply == QMessageBox::Yes) {
+        saveUndoState();
         m_displayPaths = m_originalDisplayPaths;
         weldHoles = m_originalWeldHoles;
         mainPlateHole = m_originalMainPlateHole;
@@ -1460,6 +1476,7 @@ void MainWindow::restoreDrawing()
 
 void MainWindow::handleItemDeleted(const QPointF &pos)
 {
+    saveUndoState();
     double tolerance = 15.0 / renderArea->scaleFactor(); // 碰撞容差
 
     // --- 1. 删除基础线条 (m_displayPaths) ---
@@ -1509,6 +1526,7 @@ void MainWindow::handleBulkPathsDeleted(QList<int> indices)
 {
     // 为了防止数组越界，必须将索引从大到小排序，从尾部开始删
     std::sort(indices.begin(), indices.end(), std::greater<int>());
+    saveUndoState();
 
     // 暂停表格的变动监听，提升性能
     disconnect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
@@ -1545,4 +1563,50 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         }
     }
     return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::saveUndoState() {
+    DrawingState state;
+    state.displayPaths = m_displayPaths;
+    state.weldHoles = weldHoles;
+    state.mainPlateHole = mainPlateHole;
+    state.mainPlateContour = mainPlateContour;
+
+    m_undoStack.append(state);
+
+    if (m_undoStack.size() > 10) {
+        m_undoStack.removeFirst();
+    }
+    m_floatingToolWidget->btnUndo->setEnabled(true);
+}
+
+void MainWindow::undo() {
+    if (m_undoStack.isEmpty()) return;
+
+    DrawingState state = m_undoStack.takeLast();
+
+    m_displayPaths = state.displayPaths;
+    weldHoles = state.weldHoles;
+    mainPlateHole = state.mainPlateHole;
+    mainPlateContour = state.mainPlateContour;
+
+    disconnect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
+    dataTable->setRowCount(0);
+    for (int i = 0; i < m_displayPaths.size(); ++i) {
+        dataTable->insertRow(i);
+        QTableWidgetItem* item = new QTableWidgetItem(m_displayPaths[i].type);
+        item->setTextAlignment(Qt::AlignCenter);
+        item->setFlags(item->flags() & ~Qt::ItemIsEditable);
+        dataTable->setItem(i, 0, item);
+    }
+    connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
+
+    detailWidget->hide();
+    renderArea->setHighlightedPathIndices(QList<int>());
+    renderArea->setDisplayPaths(m_displayPaths);
+    renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate, false);
+
+    if (m_undoStack.isEmpty()) {
+        m_floatingToolWidget->btnUndo->setEnabled(false);
+    }
 }

@@ -17,6 +17,7 @@
         <file>images/circle_pos.png</file>
         <file>images/line_pos.png</file>
         <file>images/point_pos.png</file>
+        <file>images/undo.png</file>
     </qresource>
     <qresource prefix="/icon">
         <file>icons/ball_blue.ico</file>

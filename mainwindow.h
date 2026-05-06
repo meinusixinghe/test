@@ -26,7 +26,13 @@ class RenderArea;
 class usercoordinatemanager;
 
 struct Hole { QPointF center; QVector3D center3D; double radius = 0.0; };             // 管孔的二维坐标（二维点类，浮点型）、管孔的三维坐标（三维点类，浮点型）、管孔的半径
-struct Contour { QString type; QVector<QPointF> points; };                                    // 多段线（目前未启用）
+struct Contour { QString type; QVector<QPointF> points; };
+struct DrawingState {
+    QVector<Contour> displayPaths;
+    QVector<Hole> weldHoles;
+    Hole mainPlateHole;
+    QPolygonF mainPlateContour;
+};
 
 class FloatingToolWidget : public QWidget {
     Q_OBJECT
@@ -36,6 +42,7 @@ public:
     QPushButton *btnLasso;
     QPushButton *btnClose;
     QPushButton *btnMove;
+    QPushButton *btnUndo;
 
     QSlider *sliderEraserSize;
     QLabel *lblEraserSize;
@@ -178,6 +185,9 @@ private:
     QPolygonF m_originalMainPlateContour;
     QTextEdit* m_detailContentText;
 
+    QList<DrawingState> m_undoStack;                    // 存储历史图纸数据的栈
+    void saveUndoState();                               // 保存当前状态
+    void undo();                                        // 执行撤销
 };
 
 #endif // MAINWINDOW_H
