@@ -512,6 +512,7 @@ void MainWindow::setupUi()
 
     connect(m_positioningAction, &QAction::triggered, this, [this](){
         PositioningDialog dlg(this);
+        dlg.setInitialBlocks(renderArea->getPositioningBlocks());
         if(dlg.exec() == QDialog::Accepted) {
             renderArea->setPositioningBlocks(dlg.getBlocks());
         }

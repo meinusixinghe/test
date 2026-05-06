@@ -30,6 +30,7 @@ public:
     explicit PreviewArea(QWidget *parent = nullptr);
     void addBlock(const PositioningBlock& block);
     QList<PositioningBlock> getBlocks() const { return m_blocks; }
+    void setInitialBlocks(const QList<PositioningBlock>& blocks);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -59,6 +60,7 @@ class PositioningDialog : public QDialog {
 public:
     explicit PositioningDialog(QWidget *parent = nullptr);
     QList<PositioningBlock> getBlocks() const { return m_previewArea->getBlocks(); }
+    void setInitialBlocks(const QList<PositioningBlock>& blocks);
 
 private slots:
     void onAddClicked();

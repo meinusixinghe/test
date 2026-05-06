@@ -81,6 +81,7 @@ void PreviewArea::addBlock(const PositioningBlock& block) {
 }
 
 void PreviewArea::paintEvent(QPaintEvent *event) {
+    Q_UNUSED(event);
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
 
@@ -372,4 +373,17 @@ void PreviewArea::keyPressEvent(QKeyEvent *event) {
     } else {
         QWidget::keyPressEvent(event);
     }
+}
+
+void PreviewArea::setInitialBlocks(const QList<PositioningBlock>& blocks) {
+    m_blocks = blocks;
+    if (!m_blocks.isEmpty()) {
+        m_selectedIndex = m_blocks.size() - 1;
+        autoFit();
+    }
+    update();
+}
+
+void PositioningDialog::setInitialBlocks(const QList<PositioningBlock>& blocks) {
+    m_previewArea->setInitialBlocks(blocks);
 }
