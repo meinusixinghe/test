@@ -267,13 +267,40 @@ MainWindow::~MainWindow() {
 void MainWindow::setupUi()
 {
     QSplitter *splitter = new QSplitter(Qt::Horizontal, this);                                  // 水平分割器
+    splitter->setObjectName("mainSplitter");
     setCentralWidget(splitter);
 
-    // 1. 先创建左侧：渲染区域 (RenderArea)
-    renderArea = new RenderArea(this);
+    splitter->setContentsMargins(10, 10, 10, 10);
+    splitter->setHandleWidth(12);
+    splitter->setStyleSheet(
+        "#mainSplitter { background-color: #F5F6F7; }"
+        "#mainSplitter::handle { background: transparent; }"
+        );
+    QWidget *renderContainer = new QWidget(splitter);
+    renderContainer->setObjectName("renderPanel");
+    renderContainer->setAttribute(Qt::WA_StyledBackground, true);
+    renderContainer->setStyleSheet(
+        "#renderPanel {"
+        "   background-color: #FFFFFF;"
+        "   border: 1px solid #E4E4E4;"
+        "   border-radius: 8px;"
+        "}"
+        );
+    QGraphicsDropShadowEffect *renderShadow = new QGraphicsDropShadowEffect(renderContainer);
+    renderShadow->setOffset(0, 4);
+    renderShadow->setColor(QColor(0, 0, 0, 40));
+    renderShadow->setBlurRadius(15);
+    renderContainer->setGraphicsEffect(renderShadow);
+    QVBoxLayout *renderLayout = new QVBoxLayout(renderContainer);
+    renderLayout->setContentsMargins(0, 0, 0, 0);
+    renderLayout->setSpacing(0);
+    renderArea = new RenderArea(renderContainer);
     renderArea->setMinimumSize(800, 400);
     renderArea->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    splitter->addWidget(renderArea);
+    renderArea->setAutoFillBackground(false);
+    renderArea->setStyleSheet("background: transparent; border-radius: 8px;");
+    renderLayout->addWidget(renderArea);
+    splitter->addWidget(renderContainer);
 
     // 显示/隐藏用户坐标系
     QVBoxLayout* overlayLayout = new QVBoxLayout(renderArea);
@@ -897,9 +924,13 @@ void MainWindow::handleTableSelectionChanged()
 
     // 2. 如果有选中行，处理右下角的详细信息面板
     if (!selectedRows.isEmpty()) {
+        int firstRow = selectedRows.first(); // 取第一条线来计算参数
+        if (firstRow < 0 || firstRow >= m_displayPaths.size()) {
+            detailWidget->hide();
+            return;
+        }
         detailWidget->show();
 
-        int firstRow = selectedRows.first(); // 取第一条线来计算参数
         const Contour& c = m_displayPaths[firstRow];
         m_bevelAngleSpin->blockSignals(true);
         m_rootFaceSpin->blockSignals(true);
@@ -1572,7 +1603,7 @@ void MainWindow::handleItemDeleted(const QPointF &pos)
 {
     saveUndoState();
     double tolerance = 15.0 / renderArea->scaleFactor(); // 碰撞容差
-
+    dataTable->clearSelection();
     // --- 1. 删除基础线条 (m_displayPaths) ---
     for (int i = m_displayPaths.size() - 1; i >= 0; --i) {
         bool hit = false;
@@ -1621,8 +1652,7 @@ void MainWindow::handleBulkPathsDeleted(QList<int> indices)
     // 为了防止数组越界，必须将索引从大到小排序，从尾部开始删
     std::sort(indices.begin(), indices.end(), std::greater<int>());
     saveUndoState();
-
-    // 暂停表格的变动监听，提升性能
+    dataTable->clearSelection();
     disconnect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
 
     for (int idx : indices) {
@@ -1748,8 +1778,10 @@ void MainWindow::onBevelParametersChanged()
     double face = m_rootFaceSpin->value();
 
     for (int row : selectedRows) {
-        m_displayPaths[row].bevelAngle = angle;
-        m_displayPaths[row].rootFace = face;
+        if (row >= 0 && row < m_displayPaths.size()) {
+            m_displayPaths[row].bevelAngle = angle;
+            m_displayPaths[row].rootFace = face;
+        }
     }
 }
 
