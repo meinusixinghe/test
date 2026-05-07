@@ -30,64 +30,67 @@
 #include <QShortcut>
 #include <QFormLayout>
 #include <QGraphicsDropShadowEffect>
+#include <QActionGroup>
 
 FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     setAttribute(Qt::WA_StyledBackground, true);
     // 设置工具箱的现代 UI 风格
     setStyleSheet("FloatingToolWidget { background-color: rgba(245, 246, 247, 230); border: 1px solid #C0C0C0; border-radius: 6px; }"
-                  "QPushButton { background-color: white; border: 1px solid #D0D0D0; border-radius: 4px; padding: 6px; color: #333; font-weight: bold; }"
+                  "QPushButton { background-color: white; border: 1px solid #D0D0D0; border-radius: 4px; padding: 4px; color: #333; font-weight: bold; }"
                   "QPushButton:hover { background-color: #E8F0FE; border: 1px solid #A0C8F0; }"
                   "QPushButton:checked { background-color: #DDEEFE; border: 1px solid #80B8FF; color: #0055A4; }");
 
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(8, 4, 8, 8);
-    mainLayout->setSpacing(6);
+    mainLayout->setContentsMargins(6, 4, 6, 6);
+    mainLayout->setSpacing(0);
 
     // 顶部标题栏和关闭按钮
     QHBoxLayout *header = new QHBoxLayout();
     header->setContentsMargins(0, 0, 0, 0);
     QLabel *title = new QLabel("图纸处理工具");
-    title->setStyleSheet("font-size: 12px; color: #666; font-weight: normal; border: none; background: transparent;");
+    title->setStyleSheet("font-size: 11px; color: #666; font-weight: normal; border: none; background: transparent;");
     btnClose = new QPushButton("×");
-    btnClose->setFixedSize(20, 20);
+    btnClose->setFixedSize(18, 18);
     btnClose->setStyleSheet("QPushButton { font-size: 14px; font-weight: bold; color: #999; padding: 0px; border: none; background: transparent; }"
-                            "QPushButton:hover { color: white; background-color: #FF4444; border-radius: 10px; }");
+                            "QPushButton:hover { color: white; background-color: #FF4444; border-radius: 9px; }");
     header->addWidget(title);
     header->addStretch();
     header->addWidget(btnClose);
 
     // 底部工具按钮
     QHBoxLayout *tools = new QHBoxLayout();
+    tools->setSpacing(4);
     btnRestore = new QPushButton();
     btnRestore->setIcon(QIcon(":/img/images/restore.png"));
-    btnRestore->setIconSize(QSize(20, 20));
-    btnRestore->setFixedSize(50, 30);
+    btnRestore->setIconSize(QSize(16, 16));
+    btnRestore->setFixedSize(36, 24);
     btnRestore->setToolTip("还原图纸");
     btnRestore->setCursor(Qt::PointingHandCursor);
     btnUndo = new QPushButton();
     btnUndo->setIcon(QIcon(":/img/images/undo.png"));
-    btnUndo->setIconSize(QSize(20, 20));
-    btnUndo->setFixedSize(50, 30);
+    btnUndo->setIconSize(QSize(16, 16));
+    btnUndo->setFixedSize(36, 24);
     btnUndo->setToolTip("撤销操作 (Ctrl+Z)");
     btnUndo->setCursor(Qt::PointingHandCursor);
     btnUndo->setEnabled(false);
     btnEraser = new QPushButton();
     btnEraser->setIcon(QIcon(":/img/images/eraser.png"));
-    btnEraser->setIconSize(QSize(20, 20));
-    btnEraser->setFixedSize(50, 30);
+    btnEraser->setIconSize(QSize(16, 16));
+    btnEraser->setFixedSize(36, 24);
     btnEraser->setToolTip("橡皮擦");
     btnEraser->setCheckable(true);
     btnEraser->setCursor(Qt::PointingHandCursor);
     btnLasso = new QPushButton();
     btnLasso->setIcon(QIcon(":/img/images/lasso.png"));
-    btnLasso->setIconSize(QSize(20, 20));
-    btnLasso->setFixedSize(50, 30);
+    btnLasso->setIconSize(QSize(16, 16));
+    btnLasso->setFixedSize(36, 24);
     btnLasso->setToolTip("框选线条 (按 Delete 键删除)");
     btnLasso->setCheckable(true);
     btnLasso->setCursor(Qt::PointingHandCursor);
     btnMove = new QPushButton();
     btnMove->setIcon(QIcon(":/img/images/shift.png"));
-    btnMove->setFixedSize(50, 30);
+    btnMove->setIconSize(QSize(16, 16));
+    btnMove->setFixedSize(36, 24);
     btnMove->setToolTip("移动线条 (框选后按回车选基准点)");
     btnMove->setCheckable(true);
     btnMove->setCursor(Qt::PointingHandCursor);
@@ -103,19 +106,43 @@ FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
 
     sliderContainer = new QWidget(this);
     QHBoxLayout *sliderLayout = new QHBoxLayout(sliderContainer);
-    sliderLayout->setContentsMargins(0, 5, 0, 0);
+    sliderLayout->setContentsMargins(0, 0, 0, 0);
     sliderLayout->setSpacing(6);
 
     QLabel *lblSliderTitle = new QLabel("大小:");
-    lblSliderTitle->setStyleSheet("font-size: 12px; color: #555; border: none; background: transparent;");
+    lblSliderTitle->setStyleSheet("font-size: 11px; color: #555; border: none; background: transparent;");
 
     sliderEraserSize = new QSlider(Qt::Horizontal);
-    sliderEraserSize->setRange(5, 80); // 橡皮擦大小范围：5像素 ~ 80像素
+    sliderEraserSize->setRange(15, 25); // 橡皮擦大小范围
     sliderEraserSize->setValue(20);    // 默认 20
-
+    sliderEraserSize->setStyleSheet(
+        "QSlider {"
+        "   background: transparent;"
+        "}"
+        "QSlider::groove:horizontal {"
+        "   height: 4px;"                /* 细细的灰色滑轨 */
+        "   background: #E0E0E0;"
+        "   border-radius: 2px;"
+        "}"
+        "QSlider::sub-page:horizontal {"
+        "   background: #2196F3;"        /* 划过部分的蓝色轨迹 */
+        "   border-radius: 2px;"
+        "}"
+        "QSlider::handle:horizontal {"
+        "   background: #2196F3;"        /* 纯蓝色的圆形小滑块 */
+        "   border: none;"
+        "   width: 12px;"                /* 宽度和高度缩小到 12px */
+        "   height: 12px;"
+        "   margin: -4px 0;"             /* 上下偏移，让滑块完美跨在 4px 的滑轨中心 */
+        "   border-radius: 6px;"         /* 圆角设为高的一半，变成纯圆 */
+        "}"
+        "QSlider::handle:horizontal:hover {"
+        "   background: #42A5F5;"        /* 鼠标放上去时颜色稍微变亮 */
+        "}"
+        );
     lblEraserSize = new QLabel("20");
     lblEraserSize->setFixedWidth(20);
-    lblEraserSize->setStyleSheet("font-size: 12px; color: #333; border: none; background: transparent;");
+    lblEraserSize->setStyleSheet("font-size: 11px; color: #333; border: none; background: transparent;");
 
     sliderLayout->addWidget(lblSliderTitle);
     sliderLayout->addWidget(sliderEraserSize);
@@ -124,7 +151,7 @@ FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     mainLayout->addWidget(sliderContainer);
 
     sliderContainer->setVisible(false);
-    setFixedWidth(300);
+    setFixedWidth(220);
     adjustSize();
 
     setCursor(Qt::ArrowCursor);
@@ -295,7 +322,7 @@ void MainWindow::setupUi()
 
     // 2. 右侧垂直分割器 (上：表格，下：详细信息)
     rightSplitter = new QSplitter(Qt::Vertical, splitter);
-    rightSplitter->setHandleWidth(12);
+    rightSplitter->setHandleWidth(8);
     rightSplitter->setStyleSheet(
         "QSplitter::handle { background: transparent; }"
         "QScrollBar:vertical {"
@@ -363,13 +390,13 @@ void MainWindow::setupUi()
         "   color: #1976D2;"             // 选中的深蓝字体
         "}"
         "QHeaderView::section {"
-        "   background-color: #FAFAFB;"  // 表头淡灰背景
+        "   background-color: #F0F4F8;"  // 表头淡灰背景
         "   border: none;"
-        "   border-bottom: 1px solid #E4E4E4;"
+        "   border-bottom: 1px solid #D0D5DD;"
         "   font-weight: bold;"
         "   font-size: 15px;"
         "   color: #333;"
-        "   padding: 2px;"
+        "   padding: 6px;"
         "}"
         );
     tableLayout->addWidget(dataTable);
@@ -381,7 +408,7 @@ void MainWindow::setupUi()
     detailWidget->setAttribute(Qt::WA_StyledBackground, true);
     detailWidget->setStyleSheet(
         "#detailPanel {"
-        "   background-color: #FAFAFB;"  // 极淡的灰白色，视觉上非常舒适且不突兀
+        "   background-color: #FFFFFF;"  // 极淡的灰白色，视觉上非常舒适且不突兀
         "   border: 1px solid #E4E4E4;"  // 淡灰边框勾勒轮廓
         "   border-radius: 8px;"         // 现代化的圆角
         "}"
@@ -415,18 +442,27 @@ void MainWindow::setupUi()
     m_detailContentText->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
     m_detailContentText->setMaximumHeight(160);
     QWidget* bevelWidget = new QWidget(detailWidget);
-    QFormLayout* bevelLayout = new QFormLayout(bevelWidget);
-    bevelLayout->setContentsMargins(5, 0, 5, 0);
+    QHBoxLayout* bevelLayout = new QHBoxLayout(bevelWidget);
+    bevelLayout->setContentsMargins(0, 5, 0, 0);
+    bevelLayout->setSpacing(10);
+    QLabel* lblBevel = new QLabel("坡口角度:", bevelWidget);
+    lblBevel->setStyleSheet("color: #333; font-size: 12px;");
     m_bevelAngleSpin = new QDoubleSpinBox(bevelWidget);
     m_bevelAngleSpin->setRange(-90.0, 90.0);
     m_bevelAngleSpin->setSuffix(" °");
     m_bevelAngleSpin->setDecimals(1);
+    m_bevelAngleSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    QLabel* lblRootFace = new QLabel("顿边高度:", bevelWidget);
+    lblRootFace->setStyleSheet("color: #333; font-size: 12px;");
     m_rootFaceSpin = new QDoubleSpinBox(bevelWidget);
     m_rootFaceSpin->setRange(0.0, 100.0);
     m_rootFaceSpin->setSuffix(" mm");
     m_rootFaceSpin->setDecimals(2);
-    bevelLayout->addRow("坡口角度:", m_bevelAngleSpin);
-    bevelLayout->addRow("顿边高度:", m_rootFaceSpin);
+    m_rootFaceSpin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    bevelLayout->addWidget(lblBevel);
+    bevelLayout->addWidget(m_bevelAngleSpin);
+    bevelLayout->addWidget(lblRootFace);
+    bevelLayout->addWidget(m_rootFaceSpin);
     connect(m_bevelAngleSpin, &QDoubleSpinBox::valueChanged, this, &MainWindow::onBevelParametersChanged);
     connect(m_rootFaceSpin, &QDoubleSpinBox::valueChanged, this, &MainWindow::onBevelParametersChanged);
     detailLayout->addWidget(detailTitleWidget);
@@ -452,43 +488,68 @@ void MainWindow::setupUi()
     splitter->setStretchFactor(1, 1);
 
     // 4. 创建菜单栏
-    fileMenu = menuBar()->addMenu("文件");
-    loadAction = new QAction("导入DXF", this);
-    loadAction->setIcon(QIcon(":/img/images/dxf.jpg"));
-    fileMenu->addAction(loadAction);
-
-    m_operationMenu = menuBar()->addMenu("操作");
+    menuBar()->hide();
+    // --- 提前创建好所有的功能 Action (有图标就传图标，没有就只传文字) ---
+    loadAction = new QAction(QIcon(":/img/images/dxf.jpg"), "导入DXF", this);
     rotateAction = new QAction("应用旋转矩阵", this);
-    m_operationMenu->addAction(rotateAction);
-    m_setupCoordAction = new QAction("建立用户坐标系", this);
-    m_setupCoordAction->setIcon(QIcon(":/img/images/icons1.png"));
-    m_operationMenu->addAction(m_setupCoordAction);
-    m_pathPlanningAction = new QAction("自动焊接路径规划", this);
-    m_pathPlanningAction->setIcon(QIcon(":/img/images/icons3.png"));
-    m_operationMenu->addAction(m_pathPlanningAction);
-    m_manageProcessAction = new QAction("焊接工艺管理", this);
-    m_manageProcessAction->setIcon(QIcon(":/img/images/icons4.png"));
-    m_operationMenu->addAction(m_manageProcessAction);
-
-    m_toolsMenu = menuBar()->addMenu("工具");
-    m_imageProcessAction = new QAction("图纸处理", this);
-    m_imageProcessAction->setIcon(QIcon(":/img/images/DrawProcessing.png"));
-    m_toolsMenu->addAction(m_imageProcessAction);
+    m_setupCoordAction = new QAction(QIcon(":/img/images/icons1.png"), "建立用户坐标系", this);
+    m_pathPlanningAction = new QAction(QIcon(":/img/images/icons3.png"), "自动焊接路径规划", this);
+    m_manageProcessAction = new QAction(QIcon(":/img/images/icons4.png"), "焊接工艺管理", this);
+    m_imageProcessAction = new QAction(QIcon(":/img/images/DrawProcessing.png"), "图纸处理", this);
     QAction* m_positioningAction = new QAction("建立定位", this);
-    m_toolsMenu->addAction(m_positioningAction);
+    m_connectAction = new QAction(QIcon(":/img/images/icons6.png"), "建立连接", this);
+    // --- 创建第一层：“选项卡”栏 ---
+    QToolBar* tabBar = addToolBar("选项卡");
+    tabBar->setMovable(false); // 禁止拖动
+    tabBar->setStyleSheet(
+        "QToolBar { background-color: #FFFFFF; border-bottom: 1px solid #E4E4E4; padding: 0px; margin: 0px; }"
+        "QToolButton { padding: 4px 20px; font-size: 14px; border: none; background: transparent; color: #555; }"
+        "QToolButton:checked { border-bottom: 3px solid #2196F3; color: #2196F3; font-weight: bold; }"
+        "QToolButton:hover:!checked { background-color: #F5F5F5; color: #333; }"
+        );
+    QActionGroup* tabGroup = new QActionGroup(this);
+    tabGroup->setExclusive(true);
+    QAction* tabFile = new QAction("文件", this); tabFile->setCheckable(true); tabGroup->addAction(tabFile);
+    QAction* tabOperation = new QAction("操作", this); tabOperation->setCheckable(true); tabGroup->addAction(tabOperation);
+    QAction* tabTools = new QAction("工具", this); tabTools->setCheckable(true); tabGroup->addAction(tabTools);
+    QAction* tabConnect = new QAction("连接", this); tabConnect->setCheckable(true); tabGroup->addAction(tabConnect);
+    tabBar->addAction(tabFile);
+    tabBar->addAction(tabOperation);
+    tabBar->addAction(tabTools);
+    tabBar->addAction(tabConnect);
+    // --- 创建第二层：动态内容工具栏 ---
+    addToolBarBreak();
+    toolBar = addToolBar("内容工具栏");
+    toolBar->setMovable(false);
+    toolBar->setIconSize(QSize(30, 30)); // 图标大小
+    toolBar->setToolButtonStyle(Qt::ToolButtonTextUnderIcon); // 文字在图标下方
+    toolBar->setStyleSheet(
+        "QToolBar { background-color: #FAFAFB; border-bottom: 1px solid #E4E4E4; padding: 4px; }"
+        "QToolButton { padding: 6px; border: 1px solid transparent; border-radius: 4px; }"
+        "QToolButton:hover { background-color: #E3F2FD; border: 1px solid #90CAF9; }"
+        );
 
-    m_connectMenu = menuBar()->addMenu("连接");
-    m_connectAction = new QAction("建立连接", this);
-    m_connectAction->setIcon(QIcon(":/img/images/icons6.png"));
-    m_connectMenu->addAction(m_connectAction);
-
-    // 5. 创建工具栏
-    toolBar = addToolBar("工具栏");
-    toolBar->setIconSize(QSize(32, 32));                                                        // 设置工具栏图标统一大小
-    toolBar->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);                                   // 设置工具栏按钮样式为文字在图标下方
-    toolBar->addAction(m_setupCoordAction);
-    toolBar->addAction(m_pathPlanningAction);
-    toolBar->addAction(m_manageProcessAction);
+    // 5. 绑定选项卡点击逻辑，动态切换下方工具栏的内容
+    auto switchTab = [=](QAction* currentTab) {
+        toolBar->clear(); // 切换时先清空下方工具栏
+        if (currentTab == tabFile) {
+            toolBar->addAction(loadAction);
+        } else if (currentTab == tabOperation) {
+            toolBar->addAction(rotateAction);
+            toolBar->addAction(m_setupCoordAction);
+            toolBar->addAction(m_pathPlanningAction);
+            toolBar->addAction(m_manageProcessAction);
+        } else if (currentTab == tabTools) {
+            toolBar->addAction(m_imageProcessAction);
+            toolBar->addAction(m_positioningAction);
+        } else if (currentTab == tabConnect) {
+            toolBar->addAction(m_connectAction);
+        }
+    };
+    connect(tabGroup, &QActionGroup::triggered, this, switchTab);
+    // 打开软件默认处于“文件”状态
+    tabFile->setChecked(true);
+    switchTab(tabFile);
 
     // 6. 状态标签
     m_statusLabel = new QLabel("就绪", this);
