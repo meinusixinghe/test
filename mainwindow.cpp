@@ -296,7 +296,29 @@ void MainWindow::setupUi()
     // 2. 右侧垂直分割器 (上：表格，下：详细信息)
     rightSplitter = new QSplitter(Qt::Vertical, splitter);
     rightSplitter->setHandleWidth(12);
-    rightSplitter->setStyleSheet("QSplitter::handle { background: transparent; }");
+    rightSplitter->setStyleSheet(
+        "QSplitter::handle { background: transparent; }"
+        "QScrollBar:vertical {"
+        "   border: none;"
+        "   background: transparent;"
+        "   width: 8px;"                /* 滚动条宽度变细 */
+        "   margin: 0px;"
+        "}"
+        "QScrollBar::handle:vertical {"
+        "   background: #D0D0D0;"       /* 滚动条滑块颜色 */
+        "   min-height: 20px;"
+        "   border-radius: 4px;"        /* 滑块圆角 */
+        "}"
+        "QScrollBar::handle:vertical:hover {"
+        "   background: #A0A0A0;"       /* 鼠标悬浮时颜色加深 */
+        "}"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {"
+        "   height: 0px;"               /* 隐藏上下箭头按钮 */
+        "}"
+        "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {"
+        "   background: transparent;"   /* 滚动条滑轨背景透明 */
+        "}"
+        );
     splitter->addWidget(rightSplitter);
     QWidget *tableContainer = new QWidget(rightSplitter);
     tableContainer->setObjectName("tablePanel");
@@ -328,9 +350,8 @@ void MainWindow::setupUi()
     dataTable->setFocusPolicy(Qt::NoFocus);
     dataTable->setStyleSheet(
         "QTableWidget {"
-        "   border: none;"               // 去掉原生边框
+        "   border: none;"
         "   background-color: transparent;"
-        "}"
         "   outline: none;"
         "}"
         "QTableWidget::item {"
@@ -346,8 +367,9 @@ void MainWindow::setupUi()
         "   border: none;"
         "   border-bottom: 1px solid #E4E4E4;"
         "   font-weight: bold;"
+        "   font-size: 15px;"
         "   color: #333;"
-        "   padding: 8px;"
+        "   padding: 2px;"
         "}"
         );
     tableLayout->addWidget(dataTable);
@@ -378,9 +400,10 @@ void MainWindow::setupUi()
     titleLayout->setContentsMargins(0, 0, 0, 0);
     QLabel* detailTitle = new QLabel("详细信息", detailTitleWidget);
     detailTitle->setStyleSheet("font-size: 16px; font-weight: bold; color: #333;");
-    QPushButton* closeDetailBtn = new QPushButton("X", detailTitleWidget);
-    closeDetailBtn->setFixedSize(24, 24);
-    closeDetailBtn->setStyleSheet("QPushButton { color: red; font-weight: bold; border: none; } QPushButton:hover { background-color: #ffe6e6; }");
+    QPushButton* closeDetailBtn = new QPushButton("✕", detailTitleWidget);
+    closeDetailBtn->setFixedSize(26, 26);
+    closeDetailBtn->setStyleSheet("QPushButton { color: #FF4444; font-size: 16px; font-weight: bold; border: none; border-radius: 4px; } "
+                                  "QPushButton:hover { background-color: #FFE6E6; }");
     titleLayout->addWidget(detailTitle);
     titleLayout->addStretch();
     titleLayout->addWidget(closeDetailBtn);
@@ -833,8 +856,8 @@ void MainWindow::handleTableSelectionChanged()
         if (c.type == "直线" && c.points.size() >= 2) {
             QPointF p1 = c.points.first(), p2 = c.points.last();
             double length = std::hypot(p2.x() - p1.x(), p2.y() - p1.y());
-            infoText = QString("<div style='font-size:14px; font-weight:bold; color:#333; margin-bottom:4px;'>【 直线参数 】</div>"
-                               "<span>起点: (%1, %2) &nbsp;&nbsp; 终点: (%3, %4) &nbsp;&nbsp; 长度: %5</span>")
+            infoText = QString("<span style='font-size:14px; font-weight:bold; color:#333;'>【 直线参数 】</span><br>"
+                               "起点:(%1, %2) &nbsp;&nbsp;&nbsp; 终点:(%3, %4) &nbsp;&nbsp;&nbsp; 长度:%5")
                            .arg(p1.x(), 0, 'f', 2).arg(p1.y(), 0, 'f', 2)
                            .arg(p2.x(), 0, 'f', 2).arg(p2.y(), 0, 'f', 2).arg(length, 0, 'f', 2);
         } else if (c.type == "圆" && c.points.size() >= 3) {
@@ -843,16 +866,16 @@ void MainWindow::handleTableSelectionChanged()
                 if (p.x() < minX) minX = p.x(); if (p.x() > maxX) maxX = p.x();
                 if (p.y() < minY) minY = p.y(); if (p.y() > maxY) maxY = p.y();
             }
-            infoText = QString("<div style='font-size:14px; font-weight:bold; color:#333; margin-bottom:4px;'>【 圆 参数 】</div>"
-                               "<span>圆心: (%1, %2) &nbsp;&nbsp; 半径: %3</span>")
+            infoText = QString("<span style='font-size:14px; font-weight:bold; color:#333;'>【 圆 参数 】</span><br>"
+                               "圆心:(%1, %2) &nbsp;&nbsp;&nbsp; 半径:%3")
                            .arg((minX+maxX)/2.0, 0, 'f', 2).arg((minY+maxY)/2.0, 0, 'f', 2).arg((maxX-minX)/2.0, 0, 'f', 2);
         } else if (c.type == "圆弧" && c.points.size() >= 3) {
             double arcLength = 0.0;
             for (int i = 0; i < c.points.size() - 1; ++i) {
                 arcLength += std::hypot(c.points[i+1].x() - c.points[i].x(), c.points[i+1].y() - c.points[i].y());
             }
-            infoText = QString("<div style='font-size:14px; font-weight:bold; color:#333; margin-bottom:4px;'>【 圆弧参数 】</div>"
-                               "<span>起点: (%1, %2) &nbsp;&nbsp; 终点: (%3, %4) &nbsp;&nbsp; 近似弧长: %5</span>")
+            infoText = QString("<span style='font-size:14px; font-weight:bold; color:#333;'>【 圆弧参数 】</span><br>"
+                               "起点:(%1, %2) &nbsp;&nbsp;&nbsp; 终点:(%3, %4) &nbsp;&nbsp;&nbsp; 近似弧长:%5")
                            .arg(c.points.first().x(), 0, 'f', 2).arg(c.points.first().y(), 0, 'f', 2)
                            .arg(c.points.last().x(), 0, 'f', 2).arg(c.points.last().y(), 0, 'f', 2)
                            .arg(arcLength, 0, 'f', 2);
@@ -922,27 +945,27 @@ void MainWindow::handleTableSelectionChanged()
                 i = best_j;
             }
 
-            infoText = QString("<div style='font-size:14px; font-weight:bold; color:#333; margin-bottom:4px;'>【 %1 参数 (拟合) 】</div>"
-                               "<div style='margin-bottom:4px;'>将原始 %2 个离散点拟合为 %3 段轨迹：</div>")
+            infoText = QString("<span style='font-size:14px; font-weight:bold; color:#333;'>【 %1 参数 (拟合) 】</span><br>"
+                               "原始点数:%2 &nbsp;&nbsp;&nbsp; 拟合段数:%3<br>")
                            .arg(c.type).arg(n).arg(segments.size());
 
             for (int s = 0; s < segments.size(); ++s) {
                 const auto& seg = segments[s];
                 if (seg.isLine) {
-                    double len = std::hypot(seg.end.x() - seg.start.x(), seg.end.y() - seg.start.y());
-                    infoText += QString("<div style='margin-bottom:2px;'><b>段%1 [直线]</b> &nbsp;起点: (%2, %3) &nbsp;&nbsp;终点: (%4, %5) &nbsp;&nbsp;长度: %6</div>")
-                                    .arg(s + 1).arg(seg.start.x(), 0, 'f', 2).arg(seg.start.y(), 0, 'f', 2)
-                                    .arg(seg.end.x(), 0, 'f', 2).arg(seg.end.y(), 0, 'f', 2).arg(len, 0, 'f', 2);
+                    infoText += QString("<b>段%1 [直线]</b> 起点:(%2,%3) &nbsp;终点:(%4,%5) &nbsp;长度:%6<br>")
+                                    .arg(s+1).arg(seg.start.x(), 0, 'f', 1).arg(seg.start.y(), 0, 'f', 1)
+                                    .arg(seg.end.x(), 0, 'f', 1).arg(seg.end.y(), 0, 'f', 1)
+                                    .arg(std::hypot(seg.end.x()-seg.start.x(), seg.end.y()-seg.start.y()), 0, 'f', 1);
                 } else {
-                    infoText += QString("段%1 [圆弧]\n 起点: (%2, %3)\n 终点: (%4, %5)\n 半径: %6\n\n")
-                                    .arg(s + 1).arg(seg.start.x(), 0, 'f', 2).arg(seg.start.y(), 0, 'f', 2)
-                                    .arg(seg.end.x(), 0, 'f', 2).arg(seg.end.y(), 0, 'f', 2).arg(seg.radius, 0, 'f', 2);
+                    infoText += QString("<b>段%1 [圆弧]</b> 起点:(%2,%3) &nbsp;终点:(%4,%5) &nbsp;半径:%6<br>")
+                                    .arg(s+1).arg(seg.start.x(), 0, 'f', 1).arg(seg.start.y(), 0, 'f', 1)
+                                    .arg(seg.end.x(), 0, 'f', 1).arg(seg.end.y(), 0, 'f', 1).arg(seg.radius, 0, 'f', 1);
                 }
             }
             infoText = infoText.trimmed();
         }
         if (selectedRows.size() > 1) {
-            infoText = QString("<div style='color:#999; font-size:11px; margin-bottom:6px;'>（当前共多选了 %1 条，仅显示第一条信息）</div>").arg(selectedRows.size()) + infoText;
+            infoText = QString("<span style='color:#999; font-size:11px;'>（多选 %1 条，仅显首条）</span><br>").arg(selectedRows.size()) + infoText;
         }
 
         m_detailContentText->setHtml(infoText);
