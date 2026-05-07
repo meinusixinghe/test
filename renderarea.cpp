@@ -12,6 +12,9 @@
 #include <QContextMenuEvent>
 #include <QMenu>
 #include <QInputDialog>
+#include <QStyleOption>
+#include <QStyle>
+#include <QTimer>
 
 using std::min;
 using std::max;
@@ -86,10 +89,10 @@ void RenderArea::setData(const QVector<Hole> &h,const Hole &mPH,const QPolygonF 
     m_mainPlatePolygon = platePoly;                     // 存多边形
     m_isRectangular = isRect;                           // 存标志位
     if (resetView) {
-        m_firstPaint = true;
+        QTimer::singleShot(50, this, &RenderArea::resetView);
+    } else {
+        update();
     }
-    // 触发重绘
-    update();
 }
 
 // ----------------------------------------------------
@@ -115,10 +118,9 @@ void RenderArea::paintEvent(QPaintEvent *event)
     painter.setRenderHint(QPainter::Antialiasing);                  // 开启抗锯齿，让图形更平滑
     painter.setRenderHint(QPainter::TextAntialiasing);              // 文字抗锯齿，更清晰
 
-    if (m_firstPaint) {
-        resetView();
-        m_firstPaint = false;
-    }
+    QStyleOption opt;
+    opt.initFrom(this);
+    style()->drawPrimitive(QStyle::PE_Widget, &opt, &painter, this);
     applyCurrentTransform(painter);
 
     painter.save();
@@ -526,8 +528,8 @@ void RenderArea::resetView()
     m_dxfMinBound = QPointF(minX, minY);
     m_dxfMaxBound = QPointF(maxX, maxY);
 
-    double contentW = maxX - minX;
-    double contentH = maxY - minY;
+    double contentW = std::max(maxX - minX, 1.0);
+    double contentH = std::max(maxY - minY, 1.0);
     double padding = 20.0;
 
     if (width() > 10 && height() > 10) {
@@ -538,6 +540,9 @@ void RenderArea::resetView()
         m_scaleFactor = 1.0;
     }
 
+    if (m_scaleFactor < 0.0001) {
+        m_scaleFactor = 0.0001;
+    }
     m_panOffsetDXF = QPointF(-(minX + contentW / 2.0), -(minY + contentH / 2.0));
     update();
 }

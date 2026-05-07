@@ -276,32 +276,24 @@ void MainWindow::setupUi()
         "#mainSplitter { background-color: #F5F6F7; }"
         "#mainSplitter::handle { background: transparent; }"
         );
-    QWidget *renderContainer = new QWidget(splitter);
-    renderContainer->setObjectName("renderPanel");
-    renderContainer->setAttribute(Qt::WA_StyledBackground, true);
-    renderContainer->setStyleSheet(
+    renderArea = new RenderArea(splitter);
+    renderArea->setObjectName("renderPanel");
+    renderArea->setMinimumSize(800, 400);
+    renderArea->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    renderArea->setAttribute(Qt::WA_StyledBackground, true);
+    renderArea->setStyleSheet(
         "#renderPanel {"
         "   background-color: #FFFFFF;"
         "   border: 1px solid #E4E4E4;"
         "   border-radius: 8px;"
         "}"
         );
-    QGraphicsDropShadowEffect *renderShadow = new QGraphicsDropShadowEffect(renderContainer);
+    QGraphicsDropShadowEffect *renderShadow = new QGraphicsDropShadowEffect(renderArea);
     renderShadow->setOffset(0, 4);
     renderShadow->setColor(QColor(0, 0, 0, 40));
     renderShadow->setBlurRadius(15);
-    renderContainer->setGraphicsEffect(renderShadow);
-    QVBoxLayout *renderLayout = new QVBoxLayout(renderContainer);
-    renderLayout->setContentsMargins(0, 0, 0, 0);
-    renderLayout->setSpacing(0);
-    renderArea = new RenderArea(renderContainer);
-    renderArea->setMinimumSize(800, 400);
-    renderArea->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    renderArea->setAutoFillBackground(false);
-    renderArea->setAttribute(Qt::WA_StyledBackground, true);
-    renderArea->setStyleSheet("background-color: #FFFFFF; border-radius: 8px;");
-    renderLayout->addWidget(renderArea);
-    splitter->addWidget(renderContainer);
+    renderArea->setGraphicsEffect(renderShadow);
+    splitter->addWidget(renderArea);
 
     // 显示/隐藏用户坐标系
     QVBoxLayout* overlayLayout = new QVBoxLayout(renderArea);
