@@ -298,7 +298,8 @@ void MainWindow::setupUi()
     renderArea->setMinimumSize(800, 400);
     renderArea->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     renderArea->setAutoFillBackground(false);
-    renderArea->setStyleSheet("background: transparent; border-radius: 8px;");
+    renderArea->setAttribute(Qt::WA_StyledBackground, true);
+    renderArea->setStyleSheet("background-color: #FFFFFF; border-radius: 8px;");
     renderLayout->addWidget(renderArea);
     splitter->addWidget(renderContainer);
 
@@ -896,7 +897,7 @@ void MainWindow::loadDrawingData(const QString &filePath)
     renderArea->setHighlightedPathIndices(QList<int>());
 
     renderArea->setDisplayPaths(m_displayPaths);
-    renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate);
+    renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate, true);
 
     m_originalDisplayPaths = m_displayPaths;
     m_originalWeldHoles = weldHoles;
