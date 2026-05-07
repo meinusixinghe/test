@@ -295,8 +295,27 @@ void MainWindow::setupUi()
 
     // 2. 右侧垂直分割器 (上：表格，下：详细信息)
     rightSplitter = new QSplitter(Qt::Vertical, splitter);
+    rightSplitter->setHandleWidth(12);
+    rightSplitter->setStyleSheet("QSplitter::handle { background: transparent; }");
     splitter->addWidget(rightSplitter);
-
+    QWidget *tableContainer = new QWidget(rightSplitter);
+    tableContainer->setObjectName("tablePanel");
+    tableContainer->setAttribute(Qt::WA_StyledBackground, true);
+    tableContainer->setStyleSheet(
+        "#tablePanel {"
+        "   background-color: #FFFFFF;"  // 纯白背景
+        "   border: 1px solid #E4E4E4;"  // 淡灰边框
+        "   border-radius: 8px;"         // 圆角
+        "}"
+        );
+    QGraphicsDropShadowEffect *tableShadow = new QGraphicsDropShadowEffect(tableContainer);
+    tableShadow->setOffset(0, 4);
+    tableShadow->setColor(QColor(0, 0, 0, 40));
+    tableShadow->setBlurRadius(15);
+    tableContainer->setGraphicsEffect(tableShadow);
+    QVBoxLayout *tableLayout = new QVBoxLayout(tableContainer);
+    tableLayout->setContentsMargins(2, 2, 2, 6); // 留一点内边距，让内部表格不溢出圆角
+    tableLayout->setSpacing(0);
     dataTable = new QTableWidget(rightSplitter);
     dataTable->setMinimumSize(200, 200);
     dataTable->setColumnCount(1);
@@ -305,7 +324,34 @@ void MainWindow::setupUi()
     dataTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     dataTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     dataTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    rightSplitter->addWidget(dataTable);
+    dataTable->setShowGrid(false);
+    dataTable->setFocusPolicy(Qt::NoFocus);
+    dataTable->setStyleSheet(
+        "QTableWidget {"
+        "   border: none;"               // 去掉原生边框
+        "   background-color: transparent;"
+        "}"
+        "   outline: none;"
+        "}"
+        "QTableWidget::item {"
+        "   border-bottom: 1px solid #F0F0F0;" // 极淡的行间分割线
+        "   padding: 4px;"
+        "}"
+        "QTableWidget::item:selected {"
+        "   background-color: #E3F2FD;"  // 选中的淡蓝背景
+        "   color: #1976D2;"             // 选中的深蓝字体
+        "}"
+        "QHeaderView::section {"
+        "   background-color: #FAFAFB;"  // 表头淡灰背景
+        "   border: none;"
+        "   border-bottom: 1px solid #E4E4E4;"
+        "   font-weight: bold;"
+        "   color: #333;"
+        "   padding: 8px;"
+        "}"
+        );
+    tableLayout->addWidget(dataTable);
+    rightSplitter->addWidget(tableContainer);
 
     // 创建底部的详细信息视窗
     detailWidget = new QWidget(rightSplitter);
@@ -331,7 +377,7 @@ void MainWindow::setupUi()
     QHBoxLayout* titleLayout = new QHBoxLayout(detailTitleWidget);
     titleLayout->setContentsMargins(0, 0, 0, 0);
     QLabel* detailTitle = new QLabel("详细信息", detailTitleWidget);
-    QFont f = detailTitle->font(); f.setBold(true); detailTitle->setFont(f);
+    detailTitle->setStyleSheet("font-size: 16px; font-weight: bold; color: #333;");
     QPushButton* closeDetailBtn = new QPushButton("X", detailTitleWidget);
     closeDetailBtn->setFixedSize(24, 24);
     closeDetailBtn->setStyleSheet("QPushButton { color: red; font-weight: bold; border: none; } QPushButton:hover { background-color: #ffe6e6; }");
@@ -342,10 +388,12 @@ void MainWindow::setupUi()
     // 详细信息占位符内容
     m_detailContentText = new QTextEdit(detailWidget);
     m_detailContentText->setReadOnly(true);
-    m_detailContentText->setStyleSheet("color: #333; font-size: 13px; line-height: 1.8; font-weight: bold; border: none; background: transparent;");
+    m_detailContentText->setStyleSheet("color: #555; font-size: 12px; line-height: 1.6; font-weight: normal; border: none; background: transparent;");
+    m_detailContentText->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
+    m_detailContentText->setMaximumHeight(160);
     QWidget* bevelWidget = new QWidget(detailWidget);
     QFormLayout* bevelLayout = new QFormLayout(bevelWidget);
-    bevelLayout->setContentsMargins(5, 10, 5, 0);
+    bevelLayout->setContentsMargins(5, 0, 5, 0);
     m_bevelAngleSpin = new QDoubleSpinBox(bevelWidget);
     m_bevelAngleSpin->setRange(-90.0, 90.0);
     m_bevelAngleSpin->setSuffix(" °");
@@ -361,6 +409,7 @@ void MainWindow::setupUi()
     detailLayout->addWidget(detailTitleWidget);
     detailLayout->addWidget(m_detailContentText);
     detailLayout->addWidget(bevelWidget);
+    detailLayout->addStretch();
     rightSplitter->addWidget(detailWidget);
     rightSplitter->setStretchFactor(0, 3);
     rightSplitter->setStretchFactor(1, 1);
@@ -784,7 +833,8 @@ void MainWindow::handleTableSelectionChanged()
         if (c.type == "直线" && c.points.size() >= 2) {
             QPointF p1 = c.points.first(), p2 = c.points.last();
             double length = std::hypot(p2.x() - p1.x(), p2.y() - p1.y());
-            infoText = QString("【 直线参数 】\n起点：( %1,  %2 )\n终点：( %3,  %4 )\n长度： %5")
+            infoText = QString("<div style='font-size:14px; font-weight:bold; color:#333; margin-bottom:4px;'>【 直线参数 】</div>"
+                               "<span>起点: (%1, %2) &nbsp;&nbsp; 终点: (%3, %4) &nbsp;&nbsp; 长度: %5</span>")
                            .arg(p1.x(), 0, 'f', 2).arg(p1.y(), 0, 'f', 2)
                            .arg(p2.x(), 0, 'f', 2).arg(p2.y(), 0, 'f', 2).arg(length, 0, 'f', 2);
         } else if (c.type == "圆" && c.points.size() >= 3) {
@@ -793,14 +843,16 @@ void MainWindow::handleTableSelectionChanged()
                 if (p.x() < minX) minX = p.x(); if (p.x() > maxX) maxX = p.x();
                 if (p.y() < minY) minY = p.y(); if (p.y() > maxY) maxY = p.y();
             }
-            infoText = QString("【 圆 参数 】\n圆心：( %1,  %2 )\n半径： %3")
+            infoText = QString("<div style='font-size:14px; font-weight:bold; color:#333; margin-bottom:4px;'>【 圆 参数 】</div>"
+                               "<span>圆心: (%1, %2) &nbsp;&nbsp; 半径: %3</span>")
                            .arg((minX+maxX)/2.0, 0, 'f', 2).arg((minY+maxY)/2.0, 0, 'f', 2).arg((maxX-minX)/2.0, 0, 'f', 2);
         } else if (c.type == "圆弧" && c.points.size() >= 3) {
             double arcLength = 0.0;
             for (int i = 0; i < c.points.size() - 1; ++i) {
                 arcLength += std::hypot(c.points[i+1].x() - c.points[i].x(), c.points[i+1].y() - c.points[i].y());
             }
-            infoText = QString("【 圆弧参数 】\n起点：( %1,  %2 )\n终点：( %3,  %4 )\n近似弧长： %5")
+            infoText = QString("<div style='font-size:14px; font-weight:bold; color:#333; margin-bottom:4px;'>【 圆弧参数 】</div>"
+                               "<span>起点: (%1, %2) &nbsp;&nbsp; 终点: (%3, %4) &nbsp;&nbsp; 近似弧长: %5</span>")
                            .arg(c.points.first().x(), 0, 'f', 2).arg(c.points.first().y(), 0, 'f', 2)
                            .arg(c.points.last().x(), 0, 'f', 2).arg(c.points.last().y(), 0, 'f', 2)
                            .arg(arcLength, 0, 'f', 2);
@@ -870,14 +922,15 @@ void MainWindow::handleTableSelectionChanged()
                 i = best_j;
             }
 
-            infoText = QString("【 %1 参数 (贪心圆弧拟合) 】\n将原始 %2 个密集离散点\n压缩拟合为了 %3 段轨迹：\n\n")
+            infoText = QString("<div style='font-size:14px; font-weight:bold; color:#333; margin-bottom:4px;'>【 %1 参数 (拟合) 】</div>"
+                               "<div style='margin-bottom:4px;'>将原始 %2 个离散点拟合为 %3 段轨迹：</div>")
                            .arg(c.type).arg(n).arg(segments.size());
 
             for (int s = 0; s < segments.size(); ++s) {
                 const auto& seg = segments[s];
                 if (seg.isLine) {
                     double len = std::hypot(seg.end.x() - seg.start.x(), seg.end.y() - seg.start.y());
-                    infoText += QString("段%1 [直线]\n 起点: (%2, %3)\n 终点: (%4, %5)\n 长度: %6\n\n")
+                    infoText += QString("<div style='margin-bottom:2px;'><b>段%1 [直线]</b> &nbsp;起点: (%2, %3) &nbsp;&nbsp;终点: (%4, %5) &nbsp;&nbsp;长度: %6</div>")
                                     .arg(s + 1).arg(seg.start.x(), 0, 'f', 2).arg(seg.start.y(), 0, 'f', 2)
                                     .arg(seg.end.x(), 0, 'f', 2).arg(seg.end.y(), 0, 'f', 2).arg(len, 0, 'f', 2);
                 } else {
@@ -889,10 +942,10 @@ void MainWindow::handleTableSelectionChanged()
             infoText = infoText.trimmed();
         }
         if (selectedRows.size() > 1) {
-            infoText = QString("（当前共多选了 %1 条线条，仅显示第一条信息）\n\n").arg(selectedRows.size()) + infoText;
+            infoText = QString("<div style='color:#999; font-size:11px; margin-bottom:6px;'>（当前共多选了 %1 条，仅显示第一条信息）</div>").arg(selectedRows.size()) + infoText;
         }
 
-        m_detailContentText->setPlainText(infoText);
+        m_detailContentText->setHtml(infoText);
     } else {
         detailWidget->hide(); // 没有选中时隐藏面板
     }
@@ -1622,6 +1675,24 @@ void MainWindow::undo() {
     if (m_undoStack.isEmpty()) return;
 
     DrawingState state = m_undoStack.takeLast();
+
+    for (int i = 0; i < state.displayPaths.size(); ++i) {
+        if (state.displayPaths.size() == m_displayPaths.size()) {
+            state.displayPaths[i].bevelAngle = m_displayPaths[i].bevelAngle;
+            state.displayPaths[i].rootFace = m_displayPaths[i].rootFace;
+        } else {
+            for (int j = 0; j < m_displayPaths.size(); ++j) {
+                if (state.displayPaths[i].type == m_displayPaths[j].type &&
+                    state.displayPaths[i].points.first() == m_displayPaths[j].points.first() &&
+                    state.displayPaths[i].points.last() == m_displayPaths[j].points.last())
+                {
+                    state.displayPaths[i].bevelAngle = m_displayPaths[j].bevelAngle;
+                    state.displayPaths[i].rootFace = m_displayPaths[j].rootFace;
+                    break;
+                }
+            }
+        }
+    }
 
     m_displayPaths = state.displayPaths;
     weldHoles = state.weldHoles;
