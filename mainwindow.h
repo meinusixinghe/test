@@ -22,6 +22,23 @@
 #include <QSlider>
 #include <QTextEdit>
 #include <QDoubleSpinBox>
+#include <QDate>
+#include <QDialog>
+
+class QCalendarWidget;
+class QTextEdit;
+class LogViewerDialog : public QDialog {
+    Q_OBJECT
+public:
+    explicit LogViewerDialog(QWidget *parent = nullptr);
+private slots:
+    void onDateChanged(const QDate &date);
+private:
+    QCalendarWidget* m_calendar;
+    QTextEdit* m_textEdit;
+    void loadLogForDate(const QDate& date);
+    QDate findEarliestLogDate();
+};
 
 class RenderArea;
 class usercoordinatemanager;
@@ -111,6 +128,9 @@ private slots:
 
     void onBevelParametersChanged();
 
+    void showAndSaveLog(const QString& msg);
+    void showLogViewer();
+
 private:
     void loadDrawingData(const QString &filePath);      // 核心数据加载函数
     void setupUi();                                     // UI初始化函数
@@ -188,6 +208,9 @@ private:
 
     QDoubleSpinBox* m_bevelAngleSpin;
     QDoubleSpinBox* m_rootFaceSpin;
+
+    void appendLogToFile(const QString& msg);
+    LogViewerDialog* m_logViewerDialog = nullptr;
 };
 
-#endif // MAINWINDOW_H
+#endif

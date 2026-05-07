@@ -29,6 +29,10 @@
 #include <QFormLayout>
 #include <QGraphicsDropShadowEffect>
 #include <QActionGroup>
+#include <QCalendarWidget>
+#include <QDir>
+#include <QDateTime>
+#include <QTextStream>
 
 FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     setAttribute(Qt::WA_StyledBackground, true);
@@ -193,9 +197,7 @@ MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
 
     // 3. 基础状态与日志信号绑定
     connect(m_modbusManager, &ModbusManager::connectionStateChanged, this, &MainWindow::onModbusStateChanged);
-    connect(m_modbusManager, &ModbusManager::logMessage, this, [this](QString msg){
-        m_statusLabel->setText(msg);
-    });
+    connect(m_modbusManager, &ModbusManager::logMessage, this, &MainWindow::showAndSaveLog);
     connect(m_modbusManager, &ModbusManager::servoStateChanged, this, &MainWindow::onServoStateChanged);
     connect(m_modbusManager, &ModbusManager::autoStateChanged, this, &MainWindow::onAutoStateChanged);
 
@@ -203,10 +205,8 @@ MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
 
     // 4.1 错误拦截：断网或急停时，除了弹窗，还必须中断连续焊接状态
     connect(m_modbusManager, &ModbusManager::errorOccurred, this, [this](QString msg){
-        m_statusLabel->setText("错误: " + msg);
+        showAndSaveLog("错误: " + msg);
         QMessageBox::warning(this, "通讯错误", msg);
-
-        // 如果正在连续焊接，强制打断并恢复按钮
         if (m_isWeldingProcessRunning) {
             m_isWeldingProcessRunning = false;
             m_startBtn->setText("预约");
@@ -549,6 +549,9 @@ void MainWindow::setupUi()
 
     // 6. 状态标签
     m_statusLabel = new QLabel("就绪", this);
+    m_statusLabel->setCursor(Qt::PointingHandCursor);
+    m_statusLabel->setToolTip("点击查看历史日志");
+    m_statusLabel->installEventFilter(this);
     statusBar()->addWidget(m_statusLabel);
 
     // 工具栏上的状态指示器容器 (网络 + 伺服)
@@ -1641,6 +1644,10 @@ void MainWindow::handleBulkPathsDeleted(QList<int> indices)
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
+    if (watched == m_statusLabel && event->type() == QEvent::MouseButtonPress) {
+        showLogViewer();
+        return true;
+    }
     if (watched == m_floatingToolWidget ||
         watched == m_toggleCoordBtn ||
         watched == m_startBtn ||
@@ -1744,4 +1751,129 @@ void MainWindow::onBevelParametersChanged()
         m_displayPaths[row].bevelAngle = angle;
         m_displayPaths[row].rootFace = face;
     }
+}
+
+// ========================================================
+// 日志查看器对话框实现
+// ========================================================
+LogViewerDialog::LogViewerDialog(QWidget *parent) : QDialog(parent) {
+    setWindowTitle("系统运行日志查看器");
+    setMinimumSize(700, 450);
+    setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
+
+    QHBoxLayout* layout = new QHBoxLayout(this);
+
+    // 左侧：日历选择器
+    m_calendar = new QCalendarWidget(this);
+    m_calendar->setGridVisible(true);
+    m_calendar->setMaximumWidth(350);
+    m_calendar->setMinimumDate(findEarliestLogDate());
+    m_calendar->setMaximumDate(QDate::currentDate());
+
+    // 右侧：日志文本显示
+    m_textEdit = new QTextEdit(this);
+    m_textEdit->setReadOnly(true);
+    m_textEdit->setStyleSheet("font-size: 13px; line-height: 1.5; background-color: #FAFAFA; border: 1px solid #CCC;");
+
+    layout->addWidget(m_calendar);
+    layout->addWidget(m_textEdit);
+
+    connect(m_calendar, &QCalendarWidget::clicked, this, &LogViewerDialog::onDateChanged);
+
+    // 打开时默认加载当天的日志
+    loadLogForDate(QDate::currentDate());
+}
+
+void LogViewerDialog::onDateChanged(const QDate &date) {
+    loadLogForDate(date);
+}
+
+void LogViewerDialog::loadLogForDate(const QDate& date) {
+    QString yearMonth = date.toString("yyyy-MM");
+    QString dateStr = date.toString("yyyy-MM-dd");
+
+    // 拼接文件路径：程序的运行目录/log/yyyy-MM/yyyy-MM-dd.txt
+    QString path = QCoreApplication::applicationDirPath() + "/log/" + yearMonth + "/" + dateStr + ".txt";
+    QFile file(path);
+
+    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QTextStream in(&file);
+        m_textEdit->setPlainText(in.readAll());
+        file.close();
+    } else {
+        m_textEdit->setPlainText(QString("【 %1 】 没有查找到日志记录。").arg(dateStr));
+    }
+}
+
+// ========================================================
+// MainWindow 里的日志读写功能
+// ========================================================
+void MainWindow::appendLogToFile(const QString& msg) {
+    QDateTime now = QDateTime::currentDateTime();
+    QString yearMonth = now.toString("yyyy-MM");
+    QString dateStr = now.toString("yyyy-MM-dd");
+    QString timeStr = now.toString("HH:mm:ss");
+
+    QDir dir(QCoreApplication::applicationDirPath());
+
+    // 检查并创建根目录 log/
+    if (!dir.exists("log")) dir.mkdir("log");
+    dir.cd("log");
+
+    // 检查并创建子目录 年月/
+    if (!dir.exists(yearMonth)) dir.mkdir(yearMonth);
+    dir.cd(yearMonth);
+
+    // 以追加模式打开当天的 txt 文件
+    QFile file(dir.absoluteFilePath(dateStr + ".txt"));
+    if (file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        QTextStream out(&file);
+        out << "[" << timeStr << "] " << msg << "\n";
+        file.close();
+    }
+}
+
+void MainWindow::showAndSaveLog(const QString& msg) {
+    if (m_statusLabel) {
+        m_statusLabel->setText(msg);
+    }
+    appendLogToFile(msg);
+}
+
+void MainWindow::showLogViewer() {
+    if (!m_logViewerDialog) {
+        m_logViewerDialog = new LogViewerDialog(this);
+    }
+
+    m_logViewerDialog->show();
+    m_logViewerDialog->raise();
+    m_logViewerDialog->activateWindow();
+}
+
+// ========================================================
+// 自动扫描 log 文件夹，找出最早的日志文件日期
+// ========================================================
+QDate LogViewerDialog::findEarliestLogDate() {
+    QDir logDir(QCoreApplication::applicationDirPath() + "/log");
+    if (!logDir.exists()) return QDate::currentDate();
+
+    // 获取按名称排序的月份文件夹列表
+    QStringList monthDirs = logDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    if (monthDirs.isEmpty()) return QDate::currentDate();
+
+    QString earliestMonth = monthDirs.first();
+    QDir monthDir(logDir.absoluteFilePath(earliestMonth));
+
+    // 获取该月份下按名称排序的 txt 文件列表
+    QStringList logFiles = monthDir.entryList(QStringList() << "*.txt", QDir::Files, QDir::Name);
+    if (logFiles.isEmpty()) return QDate::currentDate();
+
+    QString earliestFile = logFiles.first();
+    earliestFile.chop(4);
+
+    QDate earliestDate = QDate::fromString(earliestFile, "yyyy-MM-dd");
+    if (earliestDate.isValid()) {
+        return earliestDate;
+    }
+    return QDate::currentDate();
 }
