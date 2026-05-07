@@ -21,12 +21,13 @@
 #include <QHBoxLayout>
 #include <QSlider>
 #include <QTextEdit>
+#include <QDoubleSpinBox>
 
 class RenderArea;
 class usercoordinatemanager;
 
 struct Hole { QPointF center; QVector3D center3D; double radius = 0.0; };             // 管孔的二维坐标（二维点类，浮点型）、管孔的三维坐标（三维点类，浮点型）、管孔的半径
-struct Contour { QString type; QVector<QPointF> points; };
+struct Contour { QString type; QVector<QPointF> points; double bevelAngle = 0.0; double rootFace = 0.0;};
 struct DrawingState {
     QVector<Contour> displayPaths;
     QVector<Hole> weldHoles;
@@ -110,6 +111,9 @@ private slots:
     void restoreDrawing();
     void handleItemDeleted(const QPointF &pos);
     void handleBulkPathsDeleted(QList<int> indices);
+
+    void onBevelParametersChanged();
+
 private:
     void loadDrawingData(const QString &filePath);      // 核心数据加载函数
     void setupUi();                                     // UI初始化函数
@@ -188,6 +192,9 @@ private:
     QList<DrawingState> m_undoStack;                    // 存储历史图纸数据的栈
     void saveUndoState();                               // 保存当前状态
     void undo();                                        // 执行撤销
+
+    QDoubleSpinBox* m_bevelAngleSpin;
+    QDoubleSpinBox* m_rootFaceSpin;
 };
 
 #endif // MAINWINDOW_H

@@ -28,6 +28,8 @@
 #include <QCloseEvent>
 #include <QTimer>
 #include <QShortcut>
+#include <QFormLayout>
+#include <QGraphicsDropShadowEffect>
 
 FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     setAttribute(Qt::WA_StyledBackground, true);
@@ -307,9 +309,23 @@ void MainWindow::setupUi()
 
     // 创建底部的详细信息视窗
     detailWidget = new QWidget(rightSplitter);
+    detailWidget->setObjectName("detailPanel");
+    detailWidget->setAttribute(Qt::WA_StyledBackground, true);
+    detailWidget->setStyleSheet(
+        "#detailPanel {"
+        "   background-color: #FAFAFB;"  // 极淡的灰白色，视觉上非常舒适且不突兀
+        "   border: 1px solid #E4E4E4;"  // 淡灰边框勾勒轮廓
+        "   border-radius: 8px;"         // 现代化的圆角
+        "}"
+        );
+    // 创建图形阴影效果
+    QGraphicsDropShadowEffect *shadowEffect = new QGraphicsDropShadowEffect(detailWidget);
+    shadowEffect->setOffset(0, 0);                  // 偏移量设为 0，让阴影向四周均匀发散
+    shadowEffect->setColor(QColor(0, 0, 0, 30));    // 颜色为极淡的半透明黑色 (Alpha 30)
+    shadowEffect->setBlurRadius(15);                // 较大的模糊半径，呈现悬浮的层次感
+    detailWidget->setGraphicsEffect(shadowEffect);
     QVBoxLayout* detailLayout = new QVBoxLayout(detailWidget);
     detailLayout->setContentsMargins(10, 10, 10, 10);
-
     // 带有 X 关闭按钮的表头
     QWidget* detailTitleWidget = new QWidget(detailWidget);
     QHBoxLayout* titleLayout = new QHBoxLayout(detailTitleWidget);
@@ -327,8 +343,24 @@ void MainWindow::setupUi()
     m_detailContentText = new QTextEdit(detailWidget);
     m_detailContentText->setReadOnly(true);
     m_detailContentText->setStyleSheet("color: #333; font-size: 13px; line-height: 1.8; font-weight: bold; border: none; background: transparent;");
+    QWidget* bevelWidget = new QWidget(detailWidget);
+    QFormLayout* bevelLayout = new QFormLayout(bevelWidget);
+    bevelLayout->setContentsMargins(5, 10, 5, 0);
+    m_bevelAngleSpin = new QDoubleSpinBox(bevelWidget);
+    m_bevelAngleSpin->setRange(-90.0, 90.0);
+    m_bevelAngleSpin->setSuffix(" °");
+    m_bevelAngleSpin->setDecimals(1);
+    m_rootFaceSpin = new QDoubleSpinBox(bevelWidget);
+    m_rootFaceSpin->setRange(0.0, 100.0);
+    m_rootFaceSpin->setSuffix(" mm");
+    m_rootFaceSpin->setDecimals(2);
+    bevelLayout->addRow("坡口角度:", m_bevelAngleSpin);
+    bevelLayout->addRow("顿边高度:", m_rootFaceSpin);
+    connect(m_bevelAngleSpin, &QDoubleSpinBox::valueChanged, this, &MainWindow::onBevelParametersChanged);
+    connect(m_rootFaceSpin, &QDoubleSpinBox::valueChanged, this, &MainWindow::onBevelParametersChanged);
     detailLayout->addWidget(detailTitleWidget);
     detailLayout->addWidget(m_detailContentText);
+    detailLayout->addWidget(bevelWidget);
     rightSplitter->addWidget(detailWidget);
     rightSplitter->setStretchFactor(0, 3);
     rightSplitter->setStretchFactor(1, 1);
@@ -740,6 +772,12 @@ void MainWindow::handleTableSelectionChanged()
 
         int firstRow = selectedRows.first(); // 取第一条线来计算参数
         const Contour& c = m_displayPaths[firstRow];
+        m_bevelAngleSpin->blockSignals(true);
+        m_rootFaceSpin->blockSignals(true);
+        m_bevelAngleSpin->setValue(c.bevelAngle);
+        m_rootFaceSpin->setValue(c.rootFace);
+        m_bevelAngleSpin->blockSignals(false);
+        m_rootFaceSpin->blockSignals(false);
         QString infoText;
 
         // --- 几何参数计算逻辑（保留原样） ---
@@ -1608,5 +1646,31 @@ void MainWindow::undo() {
 
     if (m_undoStack.isEmpty()) {
         m_floatingToolWidget->btnUndo->setEnabled(false);
+    }
+}
+
+// ========================================================
+// 更新选中线条的坡口与顿边参数
+// ========================================================
+void MainWindow::onBevelParametersChanged()
+{
+    // 获取当前表格中所有被选中的行号 (支持按住 Ctrl 多选批量修改)
+    QList<int> selectedRows;
+    QList<QTableWidgetItem*> selectedItems = dataTable->selectedItems();
+    for (auto item : std::as_const(selectedItems)) {
+        int row = item->row();
+        if (!selectedRows.contains(row)) {
+            selectedRows.append(row);
+        }
+    }
+
+    if (selectedRows.isEmpty()) return;
+
+    double angle = m_bevelAngleSpin->value();
+    double face = m_rootFaceSpin->value();
+
+    for (int row : selectedRows) {
+        m_displayPaths[row].bevelAngle = angle;
+        m_displayPaths[row].rootFace = face;
     }
 }
