@@ -15,8 +15,6 @@ SOURCES += \
     main.cpp \
     mainwindow.cpp \
     modbusmanager.cpp \
-    pathplanner.cpp \
-    pathplanningdialog.cpp \
     positioningdialog.cpp \
     renderarea.cpp \
     rotationmatrixdialog.cpp \
@@ -27,8 +25,6 @@ HEADERS += \
     connectiondialog.h \
     mainwindow.h \
     modbusmanager.h \
-    pathplanner.h \
-    pathplanningdialog.h \
     positioningdialog.h \
     renderarea.h \
     rotationmatrixdialog.h \

@@ -86,9 +86,6 @@ private slots:
     // 建立用户坐标系向导
     void setupCoordinateWizard();
 
-    // 路径规划
-    void onPathPlanningTriggered();
-
     // 管理焊接工艺
     void onManageWeldingProcess();
 
@@ -149,8 +146,6 @@ private:
     QLabel* m_statusLabel;                              // 状态栏标签
     QMenu* m_operationMenu;
 
-    QAction* m_pathPlanningAction;                      // 路径规划菜单项
-
     QVector<WeldingProcess> m_weldingProcesses;         // 存储所有的焊接工艺数据
     QAction* m_manageProcessAction;                     // 菜单动作
 
@@ -176,8 +171,6 @@ private:
 
     int m_currentWeldIndex = 0;                         // 当前正在焊接的管孔索引
     bool m_isWeldingProcessRunning = false;             // 是否正在连续焊接中
-
-    bool m_isPathPlanned = false;
 
     QAction* m_imageProcessAction;                      // 图纸处理菜单按钮
     FloatingToolWidget* m_floatingToolWidget;           // 悬浮工具箱

@@ -2,8 +2,6 @@
 #include "renderarea.h"
 #include "usercoordinatemanager.h"
 #include "rotationmatrixdialog.h"
-#include "pathplanner.h"
-#include "pathplanningdialog.h"
 #include "connectiondialog.h"
 #include <QFileDialog>
 #include <QMessageBox>
@@ -493,7 +491,6 @@ void MainWindow::setupUi()
     loadAction = new QAction(QIcon(":/img/images/dxf.jpg"), "导入DXF", this);
     rotateAction = new QAction("应用旋转矩阵", this);
     m_setupCoordAction = new QAction(QIcon(":/img/images/icons1.png"), "建立用户坐标系", this);
-    m_pathPlanningAction = new QAction(QIcon(":/img/images/icons3.png"), "自动焊接路径规划", this);
     m_manageProcessAction = new QAction(QIcon(":/img/images/icons4.png"), "焊接工艺管理", this);
     m_imageProcessAction = new QAction(QIcon(":/img/images/DrawProcessing.png"), "图纸处理", this);
     QAction* m_positioningAction = new QAction("建立定位", this);
@@ -537,7 +534,6 @@ void MainWindow::setupUi()
         } else if (currentTab == tabOperation) {
             toolBar->addAction(rotateAction);
             toolBar->addAction(m_setupCoordAction);
-            toolBar->addAction(m_pathPlanningAction);
             toolBar->addAction(m_manageProcessAction);
         } else if (currentTab == tabTools) {
             toolBar->addAction(m_imageProcessAction);
@@ -620,9 +616,6 @@ void MainWindow::setupUi()
         m_coordManager->toggleCoordinateDisplay(checked);
         m_toggleCoordBtn->setText(checked ? "隐藏用户坐标系" : "显示用户坐标系");
     });
-
-    // 路径规划
-    connect(m_pathPlanningAction, &QAction::triggered, this, &MainWindow::onPathPlanningTriggered);
 
     // 焊接工艺
     connect(m_manageProcessAction, &QAction::triggered, this, &MainWindow::onManageWeldingProcess);
@@ -1278,77 +1271,6 @@ void MainWindow::setupCoordinateWizard()
 }
 
 // ----------------------------------------------------
-// 功能：自动焊接路径规划
-// ----------------------------------------------------
-void MainWindow::onPathPlanningTriggered()
-{
-    // 1. 前置检查
-    if (weldHoles.isEmpty()) {
-        QMessageBox::warning(this, "警告", "没有管孔数据，无法进行规划。");
-        return;
-    }
-
-    // 检查是否建立了用户坐标系
-    if (!m_coordManager || !m_coordManager->isSetupComplete()) {
-        QMessageBox::warning(this, "警告", "请先建立用户坐标系后再进行路径规划。");
-        return;
-    }
-
-    // 2. 弹出算法选择对话框
-    PathPlanningDialog dialog(this);
-    if (dialog.exec() != QDialog::Accepted) return;
-
-    PathPlanner::AlgorithmType selectedAlgo = dialog.getSelectedAlgorithm();
-
-    // 3. 执行路径规划 (传入当前 weldingHoles和主体圆)
-    QVector<Hole> sortedHoles = PathPlanner::planPath(weldHoles, mainPlateHole, selectedAlgo);
-
-    // 4. 更新底层数据
-    weldHoles = sortedHoles;
-    m_isPathPlanned = true;
-
-    // 5. 刷新界面
-    // 注意：这里【绝对不要】再操作 dataTable！因为表格现在属于 m_displayPaths（线条类型）
-    // 只需要通知左侧绘图区更新管孔数据的内部排序即可
-    renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate, false);
-
-    // 提示语修改，去掉编号相关的字眼
-    QMessageBox::information(this, "成功", "管孔路径规划已完成！");
-
-    // 6. 保存为 JSON (给下位机或机器人使用)
-    QString savePath = QFileDialog::getSaveFileName(this, "保存规划结果", "", "JSON Files (*.json)");
-    if (savePath.isEmpty()) return;
-
-    QJsonObject rootObj;
-    QJsonArray holeArray;
-    for (const auto& h : std::as_const(weldHoles)) {
-        QJsonObject hObj;
-        hObj["radius"] = h.radius;
-
-        // 保存三维坐标
-        QJsonArray center3DArr;
-        center3DArr.append(h.center3D.x());
-        center3DArr.append(h.center3D.y());
-        center3DArr.append(h.center3D.z());
-        hObj["center3D"] = center3DArr;
-
-        holeArray.append(hObj);
-    }
-    rootObj["holes"] = holeArray;
-    rootObj["algorithm"] = static_cast<int>(selectedAlgo);
-
-    QJsonDocument doc(rootObj);
-    QFile file(savePath);
-    if (file.open(QIODevice::WriteOnly)) {
-        file.write(doc.toJson());
-        file.close();
-        QMessageBox::information(this, "保存成功", "规划坐标文件已保存至:\n" + savePath);
-    } else {
-        QMessageBox::critical(this, "错误", "无法写入文件");
-    }
-}
-
-// ----------------------------------------------------
 // 功能：打开焊接工艺管理对话框
 // ----------------------------------------------------
 void MainWindow::onManageWeldingProcess()
@@ -1462,12 +1384,6 @@ void MainWindow::onStartClicked()
         m_modbusManager->prepareAndStart();
     }
     else if (m_startBtn->text() == "启动") {
-        // 如果是点击启动，严格检查是否做过路径规划！
-        if (!m_isPathPlanned) {
-            QMessageBox::warning(this, "操作提示", "启动失败：必须先完成管孔排序！\n请点击上方工具栏或“操作”菜单中的“自动焊接路径规划”。");
-            return;
-        }
-
         // 到达启动之后，不再跑步骤2，而是持续跑步骤3！
         if (weldHoles.isEmpty()) {
             QMessageBox::warning(this, "警告", "没有管孔数据可供焊接！");
