@@ -89,10 +89,9 @@ void RenderArea::setData(const QVector<Hole> &h,const Hole &mPH,const QPolygonF 
     m_mainPlatePolygon = platePoly;                     // 存多边形
     m_isRectangular = isRect;                           // 存标志位
     if (resetView) {
-        QTimer::singleShot(50, this, &RenderArea::resetView);
-    } else {
-        update();
+        m_firstPaint = true;
     }
+    update();
 }
 
 // ----------------------------------------------------
@@ -121,6 +120,10 @@ void RenderArea::paintEvent(QPaintEvent *event)
     QStyleOption opt;
     opt.initFrom(this);
     style()->drawPrimitive(QStyle::PE_Widget, &opt, &painter, this);
+    if (m_firstPaint && width() > 10 && height() > 10) {
+        resetView();
+        m_firstPaint = false;
+    }
     applyCurrentTransform(painter);
 
     painter.save();
@@ -521,7 +524,6 @@ void RenderArea::resetView()
     if (minX > maxX) {
         m_scaleFactor = 1.0;
         m_panOffsetDXF = QPointF(0, 0);
-        update();
         return;
     }
 
@@ -544,7 +546,6 @@ void RenderArea::resetView()
         m_scaleFactor = 0.0001;
     }
     m_panOffsetDXF = QPointF(-(minX + contentW / 2.0), -(minY + contentH / 2.0));
-    update();
 }
 
 // ----------------------------------------------------

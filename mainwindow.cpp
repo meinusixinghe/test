@@ -277,22 +277,10 @@ void MainWindow::setupUi()
         "#mainSplitter::handle { background: transparent; }"
         );
     renderArea = new RenderArea(splitter);
-    renderArea->setObjectName("renderPanel");
     renderArea->setMinimumSize(800, 400);
     renderArea->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    renderArea->setAttribute(Qt::WA_StyledBackground, true);
-    renderArea->setStyleSheet(
-        "#renderPanel {"
-        "   background-color: #FFFFFF;"
-        "   border: 1px solid #E4E4E4;"
-        "   border-radius: 8px;"
-        "}"
-        );
-    QGraphicsDropShadowEffect *renderShadow = new QGraphicsDropShadowEffect(renderArea);
-    renderShadow->setOffset(0, 4);
-    renderShadow->setColor(QColor(0, 0, 0, 40));
-    renderShadow->setBlurRadius(15);
-    renderArea->setGraphicsEffect(renderShadow);
+    renderArea->setAutoFillBackground(true);
+    renderArea->setBackgroundRole(QPalette::Base);
     splitter->addWidget(renderArea);
 
     // 显示/隐藏用户坐标系
