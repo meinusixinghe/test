@@ -131,11 +131,19 @@ private slots:
     void showAndSaveLog(const QString& msg);
     void showLogViewer();
 
+    void showTableContextMenu(const QPoint &pos);
+    void moveSelectedRowsUp();
+    void moveSelectedRowsDown();
+    void moveSelectedRowsToTop();
+    void moveSelectedRowsToBottom();
+
 private:
     void loadDrawingData(const QString &filePath);      // 核心数据加载函数
     void setupUi();                                     // UI初始化函数
 
     void loadWeldingProcesses();                        // 从 JSON文件加载焊接工艺
+
+    void updateTableIndices();
 
     QVector<Hole> allHoles;                             // 所有圆（含主体圆+焊接管孔）
     QVector<Hole> weldHoles;                            // 仅焊接管孔（不含主体圆）

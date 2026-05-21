@@ -277,10 +277,18 @@ void MainWindow::setupUi()
         "#mainSplitter::handle { background: transparent; }"
         );
     renderArea = new RenderArea(splitter);
+    renderArea->setObjectName("renderPanel");
     renderArea->setMinimumSize(800, 400);
     renderArea->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    renderArea->setAutoFillBackground(true);
-    renderArea->setBackgroundRole(QPalette::Base);
+    renderArea->setAutoFillBackground(false);
+    renderArea->setAttribute(Qt::WA_StyledBackground, true);
+    renderArea->setStyleSheet(
+        "#renderPanel {"
+        "   background-color: #FFFFFF;"  /* 纯白背景 */
+        "   border: 1px solid #E4E4E4;"  /* 与右侧一致的淡灰边框 */
+        "   border-radius: 8px;"         /* 8px 圆角 */
+        "}"
+        );
     splitter->addWidget(renderArea);
 
     // 显示/隐藏用户坐标系
@@ -330,6 +338,7 @@ void MainWindow::setupUi()
     rightSplitter = new QSplitter(Qt::Vertical, splitter);
     rightSplitter->setHandleWidth(8);
     rightSplitter->setStyleSheet(
+        "QSplitter { background: transparent; }"
         "QSplitter::handle { background: transparent; }"
         "QScrollBar:vertical {"
         "   border: none;"
@@ -373,10 +382,12 @@ void MainWindow::setupUi()
     tableLayout->setSpacing(0);
     dataTable = new QTableWidget(rightSplitter);
     dataTable->setMinimumSize(200, 200);
-    dataTable->setColumnCount(1);
-    dataTable->setHorizontalHeaderLabels({"线条类型"});
+    dataTable->setColumnCount(2);
+    dataTable->setHorizontalHeaderLabels({"序号", "线条类型"});
     dataTable->verticalHeader()->setVisible(false);
-    dataTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    dataTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Fixed);
+    dataTable->setColumnWidth(0, 50);
+    dataTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     dataTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     dataTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
     dataTable->setShowGrid(false);
@@ -405,6 +416,8 @@ void MainWindow::setupUi()
         "   padding: 6px;"
         "}"
         );
+    dataTable->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(dataTable, &QTableWidget::customContextMenuRequested, this, &MainWindow::showTableContextMenu);
     tableLayout->addWidget(dataTable);
     rightSplitter->addWidget(tableContainer);
 
@@ -496,9 +509,9 @@ void MainWindow::setupUi()
     // 4. 创建菜单栏
     menuBar()->hide();
     // --- 提前创建好所有的功能 Action (有图标就传图标，没有就只传文字) ---
-    loadAction = new QAction(QIcon(":/img/images/dxf.jpg"), "导入DXF", this);
+    loadAction = new QAction(QIcon(":/img/images/import.png"), "导入DXF", this);
     rotateAction = new QAction("应用旋转矩阵", this);
-    m_setupCoordAction = new QAction(QIcon(":/img/images/icons1.png"), "建立用户坐标系", this);
+    m_setupCoordAction = new QAction(QIcon(":/img/images/chuangjianzuobiaoxi.png"), "建立用户坐标系", this);
     m_manageProcessAction = new QAction(QIcon(":/img/images/icons4.png"), "焊接工艺管理", this);
     m_imageProcessAction = new QAction(QIcon(":/img/images/DrawProcessing.png"), "图纸处理", this);
     QAction* m_positioningAction = new QAction("建立定位", this);
@@ -866,10 +879,14 @@ void MainWindow::loadDrawingData(const QString &filePath)
     dataTable->setRowCount(0);
     for (int i = 0; i < m_displayPaths.size(); ++i) {
         dataTable->insertRow(i);
+        QTableWidgetItem* indexItem = new QTableWidgetItem(QString::number(i + 1));
+        indexItem->setTextAlignment(Qt::AlignCenter);
+        indexItem->setFlags(indexItem->flags() & ~Qt::ItemIsEditable);
+        dataTable->setItem(i, 0, indexItem);
         QTableWidgetItem* item = new QTableWidgetItem(m_displayPaths[i].type);
         item->setTextAlignment(Qt::AlignCenter);
-        item->setFlags(item->flags() & ~Qt::ItemIsEditable); // 不允许用户编辑文字
-        dataTable->setItem(i, 0, item);
+        item->setFlags(item->flags() & ~Qt::ItemIsEditable);
+        dataTable->setItem(i, 1, item);
     }
     connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
 
@@ -1566,10 +1583,14 @@ void MainWindow::restoreDrawing()
         dataTable->setRowCount(0);
         for (int i = 0; i < m_displayPaths.size(); ++i) {
             dataTable->insertRow(i);
+            QTableWidgetItem* indexItem = new QTableWidgetItem(QString::number(i + 1));
+            indexItem->setTextAlignment(Qt::AlignCenter);
+            indexItem->setFlags(indexItem->flags() & ~Qt::ItemIsEditable);
+            dataTable->setItem(i, 0, indexItem);
             QTableWidgetItem* item = new QTableWidgetItem(m_displayPaths[i].type);
             item->setTextAlignment(Qt::AlignCenter);
             item->setFlags(item->flags() & ~Qt::ItemIsEditable);
-            dataTable->setItem(i, 0, item);
+            dataTable->setItem(i, 1, item);
         }
         connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
 
@@ -1599,7 +1620,7 @@ void MainWindow::handleItemDeleted(const QPointF &pos)
             dataTable->removeRow(i); // 同步删除表格
         }
     }
-
+    updateTableIndices();
     // --- 2. 删除管孔 (weldHoles) ---
     for (int i = weldHoles.size() - 1; i >= 0; --i) {
         double d = std::abs(std::hypot(pos.x() - weldHoles[i].center.x(), pos.y() - weldHoles[i].center.y()) - weldHoles[i].radius);
@@ -1638,13 +1659,12 @@ void MainWindow::handleBulkPathsDeleted(QList<int> indices)
 
     for (int idx : indices) {
         if (idx >= 0 && idx < m_displayPaths.size()) {
-            m_displayPaths.removeAt(idx); // 删内存
-            dataTable->removeRow(idx);    // 删UI
+            m_displayPaths.removeAt(idx);
+            dataTable->removeRow(idx);
         }
     }
     connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
-
-    // 状态清理并刷新
+    updateTableIndices();
     dataTable->clearSelection();
     detailWidget->hide();
     renderArea->setHighlightedPathIndices(QList<int>());
@@ -1721,10 +1741,14 @@ void MainWindow::undo() {
     dataTable->setRowCount(0);
     for (int i = 0; i < m_displayPaths.size(); ++i) {
         dataTable->insertRow(i);
+        QTableWidgetItem* indexItem = new QTableWidgetItem(QString::number(i + 1));
+        indexItem->setTextAlignment(Qt::AlignCenter);
+        indexItem->setFlags(indexItem->flags() & ~Qt::ItemIsEditable);
+        dataTable->setItem(i, 0, indexItem);
         QTableWidgetItem* item = new QTableWidgetItem(m_displayPaths[i].type);
         item->setTextAlignment(Qt::AlignCenter);
         item->setFlags(item->flags() & ~Qt::ItemIsEditable);
-        dataTable->setItem(i, 0, item);
+        dataTable->setItem(i, 1, item);
     }
     connect(dataTable, &QTableWidget::cellChanged, this, &MainWindow::handleTableCellChanged);
 
@@ -1889,4 +1913,218 @@ QDate LogViewerDialog::findEarliestLogDate() {
         return earliestDate;
     }
     return QDate::currentDate();
+}
+
+// ========================================================
+// 右键菜单与移动行功能 (支持单行或多行选中)
+// ========================================================
+void MainWindow::showTableContextMenu(const QPoint &pos)
+{
+    QModelIndex index = dataTable->indexAt(pos);
+    if (!index.isValid()) return;
+
+    int row = index.row();
+    // 如果右键点击的行不在当前的选中列表中，则清空其他选中，单独选中该行
+    if (!dataTable->selectionModel()->isSelected(index)) {
+        dataTable->clearSelection();
+        dataTable->selectRow(row);
+    }
+
+    QMenu menu(this);
+    QAction* moveUpAct = menu.addAction("上移一行");
+    QAction* moveDownAct = menu.addAction("下移一行");
+    menu.addSeparator();
+    QAction* moveToTopAct = menu.addAction("移动到表头 (置顶)");
+    QAction* moveToBottomAct = menu.addAction("移动到表尾 (置底)");
+
+    QAction* res = menu.exec(dataTable->viewport()->mapToGlobal(pos));
+    if (!res) return;
+
+    if (res == moveUpAct) moveSelectedRowsUp();
+    else if (res == moveDownAct) moveSelectedRowsDown();
+    else if (res == moveToTopAct) moveSelectedRowsToTop();
+    else if (res == moveToBottomAct) moveSelectedRowsToBottom();
+}
+
+void MainWindow::updateTableIndices()
+{
+    for (int i = 0; i < dataTable->rowCount(); ++i) {
+        if (QTableWidgetItem* item = dataTable->item(i, 0)) {
+            item->setText(QString::number(i + 1));
+        }
+    }
+}
+
+void MainWindow::moveSelectedRowsUp()
+{
+    QList<int> rows;
+    for (auto item : dataTable->selectedItems()) {
+        if (item->column() == 0 && !rows.contains(item->row())) rows.append(item->row());
+    }
+    std::sort(rows.begin(), rows.end());
+    if (rows.isEmpty()) return;
+
+    saveUndoState(); // 保存状态，支持撤销
+    disconnect(dataTable, &QTableWidget::itemSelectionChanged, this, &MainWindow::handleTableSelectionChanged);
+
+    int minAvailableRow = 0;
+    for (int row : rows) {
+        if (row > minAvailableRow) {
+            int targetRow = row - 1;
+            m_displayPaths.swapItemsAt(row, targetRow); // 更新底层数据
+
+            // 交换 UI 表格文本
+            QString typeTarget = dataTable->item(targetRow, 1)->text();
+            QString typeCurrent = dataTable->item(row, 1)->text();
+            dataTable->item(targetRow, 1)->setText(typeCurrent);
+            dataTable->item(row, 1)->setText(typeTarget);
+
+            // 交换 UI 选中状态
+            dataTable->item(targetRow, 0)->setSelected(true);
+            dataTable->item(targetRow, 1)->setSelected(true);
+            dataTable->item(row, 0)->setSelected(false);
+            dataTable->item(row, 1)->setSelected(false);
+
+            minAvailableRow = targetRow + 1;
+        } else {
+            minAvailableRow = row + 1;
+        }
+    }
+
+    updateTableIndices(); // 刷新序号列
+    connect(dataTable, &QTableWidget::itemSelectionChanged, this, &MainWindow::handleTableSelectionChanged);
+    renderArea->setDisplayPaths(m_displayPaths);
+    renderArea->update();
+    handleTableSelectionChanged();
+}
+
+void MainWindow::moveSelectedRowsDown()
+{
+    QList<int> rows;
+    for (auto item : dataTable->selectedItems()) {
+        if (item->column() == 0 && !rows.contains(item->row())) rows.append(item->row());
+    }
+    std::sort(rows.begin(), rows.end(), std::greater<int>()); // 从下往上遍历
+    if (rows.isEmpty()) return;
+
+    saveUndoState();
+    disconnect(dataTable, &QTableWidget::itemSelectionChanged, this, &MainWindow::handleTableSelectionChanged);
+
+    int maxAvailableRow = m_displayPaths.size() - 1;
+    for (int row : rows) {
+        if (row < maxAvailableRow) {
+            int targetRow = row + 1;
+            m_displayPaths.swapItemsAt(row, targetRow);
+
+            QString typeTarget = dataTable->item(targetRow, 1)->text();
+            QString typeCurrent = dataTable->item(row, 1)->text();
+            dataTable->item(targetRow, 1)->setText(typeCurrent);
+            dataTable->item(row, 1)->setText(typeTarget);
+
+            dataTable->item(targetRow, 0)->setSelected(true);
+            dataTable->item(targetRow, 1)->setSelected(true);
+            dataTable->item(row, 0)->setSelected(false);
+            dataTable->item(row, 1)->setSelected(false);
+
+            maxAvailableRow = targetRow - 1;
+        } else {
+            maxAvailableRow = row - 1;
+        }
+    }
+
+    updateTableIndices();
+    connect(dataTable, &QTableWidget::itemSelectionChanged, this, &MainWindow::handleTableSelectionChanged);
+    renderArea->setDisplayPaths(m_displayPaths);
+    renderArea->update();
+    handleTableSelectionChanged();
+}
+
+void MainWindow::moveSelectedRowsToTop()
+{
+    QList<int> rows;
+    for (auto item : dataTable->selectedItems()) {
+        if (item->column() == 0 && !rows.contains(item->row())) rows.append(item->row());
+    }
+    std::sort(rows.begin(), rows.end());
+    if (rows.isEmpty()) return;
+
+    saveUndoState();
+    disconnect(dataTable, &QTableWidget::itemSelectionChanged, this, &MainWindow::handleTableSelectionChanged);
+
+    int insertPos = 0;
+    for (int row : rows) {
+        if (row > insertPos) {
+            Contour c = m_displayPaths.takeAt(row);
+            m_displayPaths.insert(insertPos, c);
+
+            QString typeStr = dataTable->item(row, 1)->text();
+            dataTable->removeRow(row);
+            dataTable->insertRow(insertPos);
+
+            QTableWidgetItem* indexItem = new QTableWidgetItem();
+            indexItem->setTextAlignment(Qt::AlignCenter);
+            indexItem->setFlags(indexItem->flags() & ~Qt::ItemIsEditable);
+            dataTable->setItem(insertPos, 0, indexItem);
+
+            QTableWidgetItem* item = new QTableWidgetItem(typeStr);
+            item->setTextAlignment(Qt::AlignCenter);
+            item->setFlags(item->flags() & ~Qt::ItemIsEditable);
+            dataTable->setItem(insertPos, 1, item);
+
+            dataTable->item(insertPos, 0)->setSelected(true);
+            dataTable->item(insertPos, 1)->setSelected(true);
+        }
+        insertPos++;
+    }
+
+    updateTableIndices();
+    connect(dataTable, &QTableWidget::itemSelectionChanged, this, &MainWindow::handleTableSelectionChanged);
+    renderArea->setDisplayPaths(m_displayPaths);
+    renderArea->update();
+    handleTableSelectionChanged();
+}
+
+void MainWindow::moveSelectedRowsToBottom()
+{
+    QList<int> rows;
+    for (auto item : dataTable->selectedItems()) {
+        if (item->column() == 0 && !rows.contains(item->row())) rows.append(item->row());
+    }
+    std::sort(rows.begin(), rows.end(), std::greater<int>());
+    if (rows.isEmpty()) return;
+
+    saveUndoState();
+    disconnect(dataTable, &QTableWidget::itemSelectionChanged, this, &MainWindow::handleTableSelectionChanged);
+
+    int insertPos = m_displayPaths.size() - 1;
+    for (int row : rows) {
+        if (row < insertPos) {
+            Contour c = m_displayPaths.takeAt(row);
+            m_displayPaths.insert(insertPos, c);
+
+            QString typeStr = dataTable->item(row, 1)->text();
+            dataTable->removeRow(row);
+            dataTable->insertRow(insertPos);
+
+            QTableWidgetItem* indexItem = new QTableWidgetItem();
+            indexItem->setTextAlignment(Qt::AlignCenter);
+            indexItem->setFlags(indexItem->flags() & ~Qt::ItemIsEditable);
+            dataTable->setItem(insertPos, 0, indexItem);
+
+            QTableWidgetItem* item = new QTableWidgetItem(typeStr);
+            item->setTextAlignment(Qt::AlignCenter);
+            item->setFlags(item->flags() & ~Qt::ItemIsEditable);
+            dataTable->setItem(insertPos, 1, item);
+
+            dataTable->item(insertPos, 0)->setSelected(true);
+            dataTable->item(insertPos, 1)->setSelected(true);
+        }
+        insertPos--;
+    }
+
+    updateTableIndices();
+    connect(dataTable, &QTableWidget::itemSelectionChanged, this, &MainWindow::handleTableSelectionChanged);
+    renderArea->setDisplayPaths(m_displayPaths);
+    renderArea->update();
+    handleTableSelectionChanged();
 }

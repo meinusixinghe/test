@@ -18,6 +18,8 @@
         <file>images/line_pos.png</file>
         <file>images/point_pos.png</file>
         <file>images/undo.png</file>
+        <file>images/import.png</file>
+        <file>images/chuangjianzuobiaoxi.png</file>
     </qresource>
     <qresource prefix="/icon">
         <file>icons/ball_blue.ico</file>
