@@ -14,20 +14,76 @@
 #include "modbusmanager.h"
 #include <QCloseEvent>
 #include <QSettings>
+#include <QSplitter>
+#include <QWidget>
+#include <QMouseEvent>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QSlider>
+#include <QTextEdit>
+#include <QDoubleSpinBox>
+#include <QDate>
+#include <QDialog>
+
+class QCalendarWidget;
+class QTextEdit;
+class LogViewerDialog : public QDialog {
+    Q_OBJECT
+public:
+    explicit LogViewerDialog(QWidget *parent = nullptr);
+private slots:
+    void onDateChanged(const QDate &date);
+private:
+    QCalendarWidget* m_calendar;
+    QTextEdit* m_textEdit;
+    void loadLogForDate(const QDate& date);
+    QDate findEarliestLogDate();
+};
 
 class RenderArea;
 class usercoordinatemanager;
 
-struct Hole { int id; QPointF center; QVector3D center3D; double radius; };     // 管孔的唯一编号、管孔的二维坐标（二维点类，浮点型）、管孔的三维坐标（三维点类，浮点型）、管孔的半径
-struct Contour { QVector<QPointF> points; };                                    // 多段线（目前未启用）
+struct Hole { QPointF center; QVector3D center3D; double radius = 0.0; };             // 管孔的二维坐标（二维点类，浮点型）、管孔的三维坐标（三维点类，浮点型）、管孔的半径
+struct Contour { QString type; QVector<QPointF> points; double bevelAngle = 0.0; double rootFace = 0.0;};
+struct DrawingState {
+    QVector<Contour> displayPaths;
+    QVector<Hole> weldHoles;
+    Hole mainPlateHole;
+    QPolygonF mainPlateContour;
+};
+
+class FloatingToolWidget : public QWidget {
+    Q_OBJECT
+public:
+    QPushButton *btnRestore;
+    QPushButton *btnEraser;
+    QPushButton *btnLasso;
+    QPushButton *btnClose;
+    QPushButton *btnMove;
+    QPushButton *btnUndo;
+
+    QSlider *sliderEraserSize;
+    QLabel *lblEraserSize;
+
+    explicit FloatingToolWidget(QWidget *parent = nullptr);
+    void setSliderVisible(bool visible);
+
+protected:
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+
+private:
+    QPoint m_dragPosition;
+    QWidget *sliderContainer;
+};
 
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
 
 protected:
-    // 拦截窗口关闭事件，确保安全断开连接
     void closeEvent(QCloseEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 public:
     explicit MainWindow(QWidget *parent = nullptr);
@@ -36,7 +92,6 @@ public:
 private slots:
     // 导入DXF的触发
     void importDxf();
-    // void loadJSONData(); // 备用，如果想直接加载 JSON
 
     // 处理右侧列表点击的槽函数
     void handleTableSelectionChanged();
@@ -44,14 +99,9 @@ private slots:
     void handleTableCellChanged(int row, int column);
 
     void applyRotationMatrix();
-    void updateTableItem(int row, int column);
-    void updateTableFromData();
 
     // 建立用户坐标系向导
     void setupCoordinateWizard();
-
-    // 路径规划
-    void onPathPlanningTriggered();
 
     // 管理焊接工艺
     void onManageWeldingProcess();
@@ -63,9 +113,6 @@ private slots:
     void onPauseClicked();
     void onResetClicked();
 
-    // 定位方式选择
-    void onSelectPositioningMethod();
-
     // 响应伺服状态变化的槽函数
     void onServoStateChanged(bool enabled);
 
@@ -74,11 +121,29 @@ private slots:
 
     // 持续发送下一个管孔的函数
     void sendNextWeldHole();
+
+    void restoreDrawing();
+    void handleItemDeleted(const QPointF &pos);
+    void handleBulkPathsDeleted(QList<int> indices);
+
+    void onBevelParametersChanged();
+
+    void showAndSaveLog(const QString& msg);
+    void showLogViewer();
+
+    void showTableContextMenu(const QPoint &pos);
+    void moveSelectedRowsUp();
+    void moveSelectedRowsDown();
+    void moveSelectedRowsToTop();
+    void moveSelectedRowsToBottom();
+
 private:
     void loadDrawingData(const QString &filePath);      // 核心数据加载函数
     void setupUi();                                     // UI初始化函数
 
     void loadWeldingProcesses();                        // 从 JSON文件加载焊接工艺
+
+    void updateTableIndices();
 
     QVector<Hole> allHoles;                             // 所有圆（含主体圆+焊接管孔）
     QVector<Hole> weldHoles;                            // 仅焊接管孔（不含主体圆）
@@ -90,11 +155,13 @@ private:
     RenderArea* renderArea;                             // 左侧绘图区
     QTableWidget* dataTable;                            // 右侧数据表格
 
+    QSplitter* rightSplitter;
+    QWidget* detailWidget;
+    QVector<Contour> m_displayPaths;
+
     QAction* loadAction;
     QMenu* fileMenu;
     QToolBar* toolBar;
-    QLabel* mainPlateRadiusLabel;                       // 显示主体圆半径
-    QLabel* weldHoleCountLabel;                         // 显示焊接管孔数量
 
     int m_currentSelectedIndex = -1;                    // 存储当前选中的孔洞索引 (-1表示未选中)
 
@@ -107,15 +174,12 @@ private:
     QLabel* m_statusLabel;                              // 状态栏标签
     QMenu* m_operationMenu;
 
-    QAction* m_pathPlanningAction;                      // 路径规划菜单项
-
     QVector<WeldingProcess> m_weldingProcesses;         // 存储所有的焊接工艺数据
     QAction* m_manageProcessAction;                     // 菜单动作
 
     ModbusManager* m_modbusManager;
     QMenu* m_connectMenu;
     QAction* m_connectAction;
-    QAction* m_posMethodAction;                         // 选择定位方式
 
     QPushButton* m_startBtn;
     QPushButton* m_pauseBtn;
@@ -136,8 +200,25 @@ private:
     int m_currentWeldIndex = 0;                         // 当前正在焊接的管孔索引
     bool m_isWeldingProcessRunning = false;             // 是否正在连续焊接中
 
-    int m_positioningMethod = 0;                        // 保存用户选择的定位方式号，默认为 0
-    bool m_isPathPlanned = false;
+    QAction* m_imageProcessAction;                      // 图纸处理菜单按钮
+    FloatingToolWidget* m_floatingToolWidget;           // 悬浮工具箱
+
+    QMenu* m_toolsMenu;
+    QVector<Contour> m_originalDisplayPaths;
+    QVector<Hole> m_originalWeldHoles;
+    Hole m_originalMainPlateHole;
+    QPolygonF m_originalMainPlateContour;
+    QTextEdit* m_detailContentText;
+
+    QList<DrawingState> m_undoStack;                    // 存储历史图纸数据的栈
+    void saveUndoState();                               // 保存当前状态
+    void undo();                                        // 执行撤销
+
+    QDoubleSpinBox* m_bevelAngleSpin;
+    QDoubleSpinBox* m_rootFaceSpin;
+
+    void appendLogToFile(const QString& msg);
+    LogViewerDialog* m_logViewerDialog = nullptr;
 };
 
-#endif // MAINWINDOW_H
+#endif

@@ -21,17 +21,6 @@ class ModbusManager : public QObject
 {
     Q_OBJECT
 public:
-    enum RobotCmd {
-        Cmd_Standby             = 0,   // 待机 / 复位
-        Cmd_Start_NoLoc         = 10,  // 无定位方式启动
-        Cmd_Start_MechLoc       = 20,  // 机械定位方式启动
-        Cmd_Start_PointLaser    = 30,  // 点激光定位方式启动
-        Cmd_Start_LineLaser     = 40,  // 线激光定位方式启动
-        Cmd_Start_3DScan        = 50,  // 3D相机定位方式扫描启动
-        Cmd_Start_3DWeld        = 51   // 3D相机定位方式管焊接启动
-    };
-    Q_ENUM(RobotCmd)
-
     struct Addr {
         // --- PC 写入 ---
         static const int PC_CONTROL_WORD = 128; // 40129 (位控制: 伺服/运行/加载)
@@ -60,7 +49,7 @@ public:
         static const int ALARM_RESET     = 3;  // Bit 3: 报警复位
         static const int EXT_ALARM       = 6;  // Bit 6: 外部报警 (用于强制下电)
         static const int RESERVE_CONFIRM = 9;  // Bit 9: 确定程序预约
-        static const int RESERVE_CANCEL = 10; // Bit 10: 取消程序预约
+        static const int RESERVE_CANCEL  = 10; // Bit 10: 取消程序预约
         static const int RESERVE_ENABLE  = 11; // Bit 11: 程序启停
         static const int SERVO_ENABLE    = 12; // Bit 12: 伺服使能脉冲
     };
@@ -74,7 +63,7 @@ public:
     // 核心功能接口
     void prepareAndStart();                                                 // 执行步骤1和步骤2 (系统就绪与启动)
     void resetAlarm();                                                      // 解除报警
-    void startWeldingProcess(RobotCmd cmd);                                 // 步骤3：仅下发总启动命令
+    void startWeldingProcess();                                 // 步骤3：仅下发总启动命令
     void sendWeldHoleData(const WeldingData &data);                         // 步骤4：下发管孔数据并置位 40143=0
     void sendWeldingFinished();                                             // 结束：所有管子完成后下发全 0
     // 暂停程序
