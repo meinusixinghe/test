@@ -1,5 +1,5 @@
 #include "mainwindow.h"
-#include "EfortSdkNet.h"
+#include "EfortSdk.h"
 #include "renderarea.h"
 #include "usercoordinatemanager.h"
 #include "rotationmatrixdialog.h"
@@ -245,24 +245,37 @@ MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
     // 5. 初始化数据与自动连接
     loadWeldingProcesses();  // 启动时自动加载焊接工艺数据
 
+    QDir::setCurrent(QCoreApplication::applicationDirPath());
+
     // 读取本地保存的 IP 和 端口配置，并尝试自动连接
     QSettings settings(QCoreApplication::applicationDirPath() + "/config.ini", QSettings::IniFormat);
     m_lastIp = settings.value("RobotIP", "").toString();
     m_lastPort = settings.value("RobotPort", 502).toInt();
+
     if (!m_lastIp.isEmpty()) {
-        // 如果之前存过 IP，软件打开直接自动连接
+        // 1. 如果之前存过 IP，软件打开直接自动连接底层的 Modbus
         m_modbusManager->connectToRobot(m_lastIp, m_lastPort);
-        QByteArray logPathBa = (QCoreApplication::applicationDirPath() + "/log").toLocal8Bit();
-        RobotAPINet::SetLogPath(logPathBa.data());
+
+        // 2. 强制创建 log 文件夹，防止 SDK 内部找不到路径而崩溃
+        QString logDir = QCoreApplication::applicationDirPath() + "/log";
+        QDir().mkpath(logDir);
+
+        // 3. 设置日志路径 (必须保证 char* 永久存活)
+        static QByteArray logPathBa = logDir.toLocal8Bit();
+        RobotAPI::SetLogPath(logPathBa.data());
+
+        // 4. 恢复为 EfortSdk.h 要求的 std::string 类型！
         std::string ipStr = m_lastIp.toStdString();
-        int ret = RobotAPINet::ConnectRobot(m_lastIp.toStdString().c_str(), m_currentDevId);
+        int ret = RobotAPI::ConnectRobot(ipStr, m_currentDevId);
+
         if (ret == 0 || ret == 10021) {
-            // 0 是成功，10021 是设备已存在（说明之前连着没断开）
-            RobotAPINet::SelectRobot(m_currentDevId); // 顺手调用一下官方推荐的 Select 接口激活
+            RobotAPI::SelectRobot(m_currentDevId);
             qDebug() << "SDK 自动连接成功，设备 ID:" << m_currentDevId;
+        } else {
+            qDebug() << "SDK 自动连接失败，错误码:" << ret;
         }
     } else {
-        // 如果是第一次运行，给个默认值，等用户手动去点“建立连接”
+        // 如果是第一次运行，给个默认值
         m_lastIp = "192.168.1.10";
         m_lastPort = 502;
     }
@@ -1371,9 +1384,6 @@ void MainWindow::onConnectTriggered()
         int action = dlg.getAction();
 
         if (action == 1) {
-            // -----------------------------
-            // 点击【连接】
-            // -----------------------------
             m_lastIp = dlg.getIp();
             m_lastPort = dlg.getPort();
 
@@ -1382,15 +1392,21 @@ void MainWindow::onConnectTriggered()
             settings.setValue("RobotPort", m_lastPort);
 
             m_modbusManager->connectToRobot(m_lastIp, m_lastPort);
-            QByteArray logPathBa = (QCoreApplication::applicationDirPath() + "/log").toLocal8Bit();
-            RobotAPINet::SetLogPath(logPathBa.data());
-            // 👇【核心修复 2】：手动连接 SDK，并处理已存在的兼容状态
+
+            // 👇【救命代码 2】：手动连接时也必须强切工作目录！
+            QDir::setCurrent(QCoreApplication::applicationDirPath());
+
+            QString logDir = QCoreApplication::applicationDirPath() + "/log";
+            QDir().mkpath(logDir);
+            static QByteArray logPathBa = logDir.toLocal8Bit();
+            RobotAPI::SetLogPath(logPathBa.data());
+
+            // 恢复使用 std::string
             std::string ipStr = m_lastIp.toStdString();
-            int ret = RobotAPINet::ConnectRobot(m_lastIp.toStdString().c_str(), m_currentDevId);
+            int ret = RobotAPI::ConnectRobot(ipStr, m_currentDevId);
 
             if (ret == 0 || ret == 10021) {
-                // 成功 或 提示已存在(10021) 都可以视作连接正常
-                RobotAPINet::SelectRobot(m_currentDevId); // 强行选定该设备为当前操作对象
+                RobotAPI::SelectRobot(m_currentDevId);
                 showAndSaveLog(QString("SDK连接就绪！当前操作设备ID为: %1").arg(m_currentDevId));
             } else {
                 showAndSaveLog(QString("SDK连接失败！错误码: %1").arg(ret));
@@ -1398,15 +1414,13 @@ void MainWindow::onConnectTriggered()
             }
 
         } else if (action == 2) {
-            // -----------------------------
-            // 点击【断开连接】
-            // -----------------------------
             m_modbusManager->disconnectFromRobot();
 
             if (m_currentDevId != 0) {
-                RobotAPINet::DisconnectRobot(m_currentDevId);
+                // 恢复为 RobotAPI
+                RobotAPI::DisconnectRobot(m_currentDevId);
                 showAndSaveLog(QString("SDK连接已断开 (Id: %1)").arg(m_currentDevId));
-                m_currentDevId = 0; // 核心：断开后必须把 ID 清零！
+                m_currentDevId = 0;
             }
         }
     }
@@ -2179,7 +2193,7 @@ void MainWindow::toggleRobotPower()
         showAndSaveLog(QString("正在尝试为机器人(Id: %1)上电...").arg(m_currentDevId));
 
         // 👇 传入刚才 ConnectRobot 拿到的那个 m_currentDevId
-        int ret = RobotAPINet::PowerOn(m_currentDevId);
+        int ret = RobotAPI::PowerOn(m_currentDevId);
 
         if (ret == 0) {
             m_isRobotPoweredOn = true;
@@ -2198,7 +2212,7 @@ void MainWindow::toggleRobotPower()
         showAndSaveLog(QString("正在尝试关闭机器人(Id: %1)伺服...").arg(m_currentDevId));
 
         // 👇 同样传入获取到的 ID
-        int ret = RobotAPINet::PowerOff(m_currentDevId);
+        int ret = RobotAPI::PowerOff(m_currentDevId);
 
         if (ret == 0) {
             m_isRobotPoweredOn = false;

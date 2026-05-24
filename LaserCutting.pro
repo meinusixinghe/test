@@ -135,10 +135,10 @@ RESOURCES += \
 TARGET = MXEditer
 
 RC_ICONS=icons1.ico
-
+DEFINES += NOMINMAX
 INCLUDEPATH += $$PWD
 CONFIG(debug, debug|release) {
-    LIBS += "$$PWD/libs/x64/EfortSdkNetd.lib"  # 注意看你本地是不是叫这个名字
+    LIBS += "$$PWD/libs/x64/EftSdk.lib"  # 注意看你本地是不是叫这个名字
 } else {
-    LIBS += "$$PWD/libs/x64/EfortSdkNet.lib"
+    LIBS += "$$PWD/libs/x64/EftSdk.lib"
 }

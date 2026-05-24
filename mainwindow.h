@@ -24,7 +24,7 @@
 #include <QDoubleSpinBox>
 #include <QDate>
 #include <QDialog>
-#include "EfortSdkNet.h"
+#include "EfortSdk.h"
 
 class QCalendarWidget;
 class QTextEdit;
