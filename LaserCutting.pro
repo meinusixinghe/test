@@ -137,4 +137,8 @@ TARGET = MXEditer
 RC_ICONS=icons1.ico
 
 INCLUDEPATH += $$PWD
-LIBS += -L$$PWD/lib/x64/EfortSdk
+CONFIG(debug, debug|release) {
+    LIBS += "$$PWD/libs/x64/EfortSdkNetd.lib"  # 注意看你本地是不是叫这个名字
+} else {
+    LIBS += "$$PWD/libs/x64/EfortSdkNet.lib"
+}

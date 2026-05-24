@@ -1,5 +1,5 @@
 #include "mainwindow.h"
-#include "EfortSdk.h"
+#include "EfortSdkNet.h"
 #include "renderarea.h"
 #include "usercoordinatemanager.h"
 #include "rotationmatrixdialog.h"
@@ -252,6 +252,15 @@ MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
     if (!m_lastIp.isEmpty()) {
         // 如果之前存过 IP，软件打开直接自动连接
         m_modbusManager->connectToRobot(m_lastIp, m_lastPort);
+        QByteArray logPathBa = (QCoreApplication::applicationDirPath() + "/log").toLocal8Bit();
+        RobotAPINet::SetLogPath(logPathBa.data());
+        std::string ipStr = m_lastIp.toStdString();
+        int ret = RobotAPINet::ConnectRobot(m_lastIp.toStdString().c_str(), m_currentDevId);
+        if (ret == 0 || ret == 10021) {
+            // 0 是成功，10021 是设备已存在（说明之前连着没断开）
+            RobotAPINet::SelectRobot(m_currentDevId); // 顺手调用一下官方推荐的 Select 接口激活
+            qDebug() << "SDK 自动连接成功，设备 ID:" << m_currentDevId;
+        }
     } else {
         // 如果是第一次运行，给个默认值，等用户手动去点“建立连接”
         m_lastIp = "192.168.1.10";
@@ -1359,25 +1368,46 @@ void MainWindow::onConnectTriggered()
     dlg.setPort(m_lastPort);
 
     if (dlg.exec() == QDialog::Accepted) {
-
         int action = dlg.getAction();
 
         if (action == 1) {
-            // 点击连接
+            // -----------------------------
+            // 点击【连接】
+            // -----------------------------
             m_lastIp = dlg.getIp();
             m_lastPort = dlg.getPort();
 
-            // 保存到 config.ini 配置文件
             QSettings settings(QCoreApplication::applicationDirPath() + "/config.ini", QSettings::IniFormat);
             settings.setValue("RobotIP", m_lastIp);
             settings.setValue("RobotPort", m_lastPort);
 
-            // 发起连接
             m_modbusManager->connectToRobot(m_lastIp, m_lastPort);
+            QByteArray logPathBa = (QCoreApplication::applicationDirPath() + "/log").toLocal8Bit();
+            RobotAPINet::SetLogPath(logPathBa.data());
+            // 👇【核心修复 2】：手动连接 SDK，并处理已存在的兼容状态
+            std::string ipStr = m_lastIp.toStdString();
+            int ret = RobotAPINet::ConnectRobot(m_lastIp.toStdString().c_str(), m_currentDevId);
+
+            if (ret == 0 || ret == 10021) {
+                // 成功 或 提示已存在(10021) 都可以视作连接正常
+                RobotAPINet::SelectRobot(m_currentDevId); // 强行选定该设备为当前操作对象
+                showAndSaveLog(QString("SDK连接就绪！当前操作设备ID为: %1").arg(m_currentDevId));
+            } else {
+                showAndSaveLog(QString("SDK连接失败！错误码: %1").arg(ret));
+                QMessageBox::critical(this, "SDK 错误", QString("无法建立 SDK 核心连接，错误码: %1").arg(ret));
+            }
 
         } else if (action == 2) {
-            // 点击断开连接
+            // -----------------------------
+            // 点击【断开连接】
+            // -----------------------------
             m_modbusManager->disconnectFromRobot();
+
+            if (m_currentDevId != 0) {
+                RobotAPINet::DisconnectRobot(m_currentDevId);
+                showAndSaveLog(QString("SDK连接已断开 (Id: %1)").arg(m_currentDevId));
+                m_currentDevId = 0; // 核心：断开后必须把 ID 清零！
+            }
         }
     }
 }
@@ -2139,18 +2169,19 @@ void MainWindow::moveSelectedRowsToBottom()
 
 void MainWindow::toggleRobotPower()
 {
-    // 1. 如果尚未连接机器人，m_currentDevId 默认为 0
-    // 为了防止未连接真实机器时测试闪退，此处直接透传 m_currentDevId
+    // 如果 ID 还是 0，说明压根还没点“建立连接”
+    if (m_currentDevId == 0) {
+        QMessageBox::warning(this, "未连接", "请先在上方菜单中建立机器人连接！");
+        return;
+    }
 
     if (!m_isRobotPoweredOn) {
-        // ----------------------------------------------------
-        // 执行【自动模式下：上电】逻辑
-        // ----------------------------------------------------
-        showAndSaveLog(QString("正在尝试通过 SDK 为机器人控制器(Id: %1)上电...").arg(m_currentDevId));
+        showAndSaveLog(QString("正在尝试为机器人(Id: %1)上电...").arg(m_currentDevId));
 
-        int ret = RobotAPI::PowerOn();
+        // 👇 传入刚才 ConnectRobot 拿到的那个 m_currentDevId
+        int ret = RobotAPINet::PowerOn(m_currentDevId);
 
-        if (ret == 0) { // 假设 0 代表成功（请参考你的附录1错误码）
+        if (ret == 0) {
             m_isRobotPoweredOn = true;
             m_powerBtn->setText("机器人断电");
             m_powerBtn->setStyleSheet(
@@ -2159,18 +2190,15 @@ void MainWindow::toggleRobotPower()
                 "}"
                 "QPushButton:hover { background-color: #EF5350; }"
                 );
-            showAndSaveLog("机器人上电成功，伺服系统已在自动模式下就绪。");
+            showAndSaveLog("机器人上电成功！");
         } else {
-            showAndSaveLog(QString("机器人上电失败！SDK 错误码: %1").arg(ret));
-            QMessageBox::critical(this, "控制错误", QString("无法为机器人上电，错误码: %1\n请检查是否处于自动模式或存在安全报警。").arg(ret));
+            showAndSaveLog(QString("上电失败！错误码: %1").arg(ret));
         }
     } else {
-        // ----------------------------------------------------
-        // 执行【断电】逻辑
-        // ----------------------------------------------------
-        showAndSaveLog(QString("正在尝试通过 SDK 关闭机器人(Id: %1)伺服电源...").arg(m_currentDevId));
+        showAndSaveLog(QString("正在尝试关闭机器人(Id: %1)伺服...").arg(m_currentDevId));
 
-        int ret = RobotAPI::PowerOff();
+        // 👇 同样传入获取到的 ID
+        int ret = RobotAPINet::PowerOff(m_currentDevId);
 
         if (ret == 0) {
             m_isRobotPoweredOn = false;
@@ -2181,10 +2209,9 @@ void MainWindow::toggleRobotPower()
                 "}"
                 "QPushButton:hover { background-color: #42A5F5; }"
                 );
-            showAndSaveLog("机器人伺服电源已断开，成功进入安全状态。");
+            showAndSaveLog("机器人断电成功！");
         } else {
-            showAndSaveLog(QString("机器人断电失败！SDK 错误码: %1").arg(ret));
-            QMessageBox::critical(this, "控制错误", QString("无法断开机器人电源，错误码: %1").arg(ret));
+            showAndSaveLog(QString("断电失败！错误码: %1").arg(ret));
         }
     }
 }

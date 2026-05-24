@@ -24,7 +24,7 @@
 #include <QDoubleSpinBox>
 #include <QDate>
 #include <QDialog>
-#include "EfortSdk.h"
+#include "EfortSdkNet.h"
 
 class QCalendarWidget;
 class QTextEdit;
@@ -224,8 +224,6 @@ private:
 
     QPushButton* m_powerBtn = nullptr;       // 👇【新增】：上电/断电按钮指针
     bool m_isRobotPoweredOn = false;
-    using PowerOnFuncType = decltype(RobotAPI::PowerOn);
-    using PowerOnFuncType = decltype(RobotAPI::PowerOff);
-    int m_currentDevId = 0;
+    unsigned int m_currentDevId = 1;
 };
 #endif
