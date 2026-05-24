@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "EfortSdk.h"
 #include "renderarea.h"
 #include "usercoordinatemanager.h"
 #include "rotationmatrixdialog.h"
@@ -328,9 +329,14 @@ void MainWindow::setupUi()
     m_resetBtn->setCursor(Qt::ArrowCursor);
     m_resetBtn->setVisible(false);
 
+    m_powerBtn = new QPushButton("机器人上电", renderArea);
+    m_powerBtn->setStyleSheet(btnStyle);
+    m_powerBtn->setCursor(Qt::PointingHandCursor);
+
     bottomBtnLayout->addWidget(m_startBtn);
     bottomBtnLayout->addWidget(m_pauseBtn);
     bottomBtnLayout->addWidget(m_resetBtn);
+    bottomBtnLayout->addWidget(m_powerBtn);
     bottomBtnLayout->addStretch();
     overlayLayout->addLayout(bottomBtnLayout);
 
@@ -652,6 +658,7 @@ void MainWindow::setupUi()
     connect(m_startBtn, &QPushButton::clicked, this, &MainWindow::onStartClicked);
     connect(m_pauseBtn, &QPushButton::clicked, this, &MainWindow::onPauseClicked);
     connect(m_resetBtn, &QPushButton::clicked, this, &MainWindow::onResetClicked);
+    connect(m_powerBtn, &QPushButton::clicked, this, &MainWindow::toggleRobotPower);
     connect(m_floatingToolWidget->btnRestore, &QPushButton::clicked, this, &MainWindow::restoreDrawing);
     connect(m_floatingToolWidget->btnUndo, &QPushButton::clicked, this, &MainWindow::undo);
     QShortcut *undoShortcut = new QShortcut(QKeySequence::Undo, this);
@@ -1683,7 +1690,8 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         watched == m_toggleCoordBtn ||
         watched == m_startBtn ||
         watched == m_pauseBtn ||
-        watched == m_resetBtn)
+        watched == m_resetBtn ||
+        watched == m_powerBtn)
     {
         if (event->type() == QEvent::Enter || event->type() == QEvent::Leave) {
             if (renderArea) {
@@ -2127,4 +2135,56 @@ void MainWindow::moveSelectedRowsToBottom()
     renderArea->setDisplayPaths(m_displayPaths);
     renderArea->update();
     handleTableSelectionChanged();
+}
+
+void MainWindow::toggleRobotPower()
+{
+    // 1. 如果尚未连接机器人，m_currentDevId 默认为 0
+    // 为了防止未连接真实机器时测试闪退，此处直接透传 m_currentDevId
+
+    if (!m_isRobotPoweredOn) {
+        // ----------------------------------------------------
+        // 执行【自动模式下：上电】逻辑
+        // ----------------------------------------------------
+        showAndSaveLog(QString("正在尝试通过 SDK 为机器人控制器(Id: %1)上电...").arg(m_currentDevId));
+
+        int ret = RobotAPI::PowerOn();
+
+        if (ret == 0) { // 假设 0 代表成功（请参考你的附录1错误码）
+            m_isRobotPoweredOn = true;
+            m_powerBtn->setText("机器人断电");
+            m_powerBtn->setStyleSheet(
+                "QPushButton {"
+                "   background-color: #E53935; color: white; border: 1px solid #D32F2F; border-radius: 4px; padding: 5px 15px;"
+                "}"
+                "QPushButton:hover { background-color: #EF5350; }"
+                );
+            showAndSaveLog("机器人上电成功，伺服系统已在自动模式下就绪。");
+        } else {
+            showAndSaveLog(QString("机器人上电失败！SDK 错误码: %1").arg(ret));
+            QMessageBox::critical(this, "控制错误", QString("无法为机器人上电，错误码: %1\n请检查是否处于自动模式或存在安全报警。").arg(ret));
+        }
+    } else {
+        // ----------------------------------------------------
+        // 执行【断电】逻辑
+        // ----------------------------------------------------
+        showAndSaveLog(QString("正在尝试通过 SDK 关闭机器人(Id: %1)伺服电源...").arg(m_currentDevId));
+
+        int ret = RobotAPI::PowerOff();
+
+        if (ret == 0) {
+            m_isRobotPoweredOn = false;
+            m_powerBtn->setText("机器人上电");
+            m_powerBtn->setStyleSheet(
+                "QPushButton {"
+                "   background-color: #2196F3; color: white; border: 1px solid #1E88E5; border-radius: 4px; padding: 5px 15px;"
+                "}"
+                "QPushButton:hover { background-color: #42A5F5; }"
+                );
+            showAndSaveLog("机器人伺服电源已断开，成功进入安全状态。");
+        } else {
+            showAndSaveLog(QString("机器人断电失败！SDK 错误码: %1").arg(ret));
+            QMessageBox::critical(this, "控制错误", QString("无法断开机器人电源，错误码: %1").arg(ret));
+        }
+    }
 }
