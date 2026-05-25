@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "EfortSdk.h"
 #include "renderarea.h"
 #include "usercoordinatemanager.h"
 #include "rotationmatrixdialog.h"
@@ -244,15 +245,26 @@ MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
     // 5. 初始化数据与自动连接
     loadWeldingProcesses();  // 启动时自动加载焊接工艺数据
 
+    QDir::setCurrent(QCoreApplication::applicationDirPath());
+
     // 读取本地保存的 IP 和 端口配置，并尝试自动连接
     QSettings settings(QCoreApplication::applicationDirPath() + "/config.ini", QSettings::IniFormat);
     m_lastIp = settings.value("RobotIP", "").toString();
     m_lastPort = settings.value("RobotPort", 502).toInt();
+
     if (!m_lastIp.isEmpty()) {
-        // 如果之前存过 IP，软件打开直接自动连接
         m_modbusManager->connectToRobot(m_lastIp, m_lastPort);
+
+        int ret = RobotAPI::ConnectRobot(m_lastIp.toStdString().c_str(), m_currentDevId, true);
+
+        if (ret == ERROR_OK || ret == ERROR_DEVICE_EXIT) { // ERROR_OK=0, ERROR_DEVICE_EXIT=10021
+            RobotAPI::SelectRobot(m_currentDevId);
+            qDebug() << "SDK 自动连接成功，设备 ID:" << m_currentDevId;
+        } else {
+            qDebug() << "SDK 自动连接失败，错误码:" << ret;
+            m_currentDevId = 0; // 失败必须归零
+        }
     } else {
-        // 如果是第一次运行，给个默认值，等用户手动去点“建立连接”
         m_lastIp = "192.168.1.10";
         m_lastPort = 502;
     }
@@ -328,9 +340,14 @@ void MainWindow::setupUi()
     m_resetBtn->setCursor(Qt::ArrowCursor);
     m_resetBtn->setVisible(false);
 
+    m_powerBtn = new QPushButton("机器人上电", renderArea);
+    m_powerBtn->setStyleSheet(btnStyle);
+    m_powerBtn->setCursor(Qt::PointingHandCursor);
+
     bottomBtnLayout->addWidget(m_startBtn);
     bottomBtnLayout->addWidget(m_pauseBtn);
     bottomBtnLayout->addWidget(m_resetBtn);
+    bottomBtnLayout->addWidget(m_powerBtn);
     bottomBtnLayout->addStretch();
     overlayLayout->addLayout(bottomBtnLayout);
 
@@ -652,6 +669,7 @@ void MainWindow::setupUi()
     connect(m_startBtn, &QPushButton::clicked, this, &MainWindow::onStartClicked);
     connect(m_pauseBtn, &QPushButton::clicked, this, &MainWindow::onPauseClicked);
     connect(m_resetBtn, &QPushButton::clicked, this, &MainWindow::onResetClicked);
+    connect(m_powerBtn, &QPushButton::clicked, this, &MainWindow::toggleRobotPower);
     connect(m_floatingToolWidget->btnRestore, &QPushButton::clicked, this, &MainWindow::restoreDrawing);
     connect(m_floatingToolWidget->btnUndo, &QPushButton::clicked, this, &MainWindow::undo);
     QShortcut *undoShortcut = new QShortcut(QKeySequence::Undo, this);
@@ -1352,25 +1370,38 @@ void MainWindow::onConnectTriggered()
     dlg.setPort(m_lastPort);
 
     if (dlg.exec() == QDialog::Accepted) {
-
         int action = dlg.getAction();
 
         if (action == 1) {
-            // 点击连接
             m_lastIp = dlg.getIp();
             m_lastPort = dlg.getPort();
 
-            // 保存到 config.ini 配置文件
             QSettings settings(QCoreApplication::applicationDirPath() + "/config.ini", QSettings::IniFormat);
             settings.setValue("RobotIP", m_lastIp);
             settings.setValue("RobotPort", m_lastPort);
 
-            // 发起连接
             m_modbusManager->connectToRobot(m_lastIp, m_lastPort);
 
+            // 👇【完美照抄官方 Demo，删掉所有多余的路径设置】
+            int ret = RobotAPI::ConnectRobot(m_lastIp.toStdString().c_str(), m_currentDevId, true);
+
+            if (ret == 0 || ret == 10021) {
+                RobotAPI::SelectRobot(m_currentDevId);
+                showAndSaveLog(QString("SDK连接就绪！当前操作设备ID为: %1").arg(m_currentDevId));
+            } else {
+                showAndSaveLog(QString("SDK连接失败！错误码: %1").arg(ret));
+                QMessageBox::critical(this, "SDK 错误", QString("无法建立 SDK 核心连接，错误码: %1").arg(ret));
+                m_currentDevId = 0;
+            }
+
         } else if (action == 2) {
-            // 点击断开连接
             m_modbusManager->disconnectFromRobot();
+
+            if (m_currentDevId != 0) {
+                RobotAPI::DisconnectRobot(m_currentDevId);
+                showAndSaveLog(QString("SDK连接已断开 (Id: %1)").arg(m_currentDevId));
+                m_currentDevId = 0;
+            }
         }
     }
 }
@@ -1683,7 +1714,8 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         watched == m_toggleCoordBtn ||
         watched == m_startBtn ||
         watched == m_pauseBtn ||
-        watched == m_resetBtn)
+        watched == m_resetBtn ||
+        watched == m_powerBtn)
     {
         if (event->type() == QEvent::Enter || event->type() == QEvent::Leave) {
             if (renderArea) {
@@ -2127,4 +2159,53 @@ void MainWindow::moveSelectedRowsToBottom()
     renderArea->setDisplayPaths(m_displayPaths);
     renderArea->update();
     handleTableSelectionChanged();
+}
+
+void MainWindow::toggleRobotPower()
+{
+    // 如果 ID 还是 0，说明压根还没点“建立连接”
+    if (m_currentDevId == 0) {
+        QMessageBox::warning(this, "未连接", "请先在上方菜单中建立机器人连接！");
+        return;
+    }
+
+    if (!m_isRobotPoweredOn) {
+        showAndSaveLog(QString("正在尝试为机器人(Id: %1)上电...").arg(m_currentDevId));
+
+        // 👇 传入刚才 ConnectRobot 拿到的那个 m_currentDevId
+        int ret = RobotAPI::PowerOn();
+
+        if (ret == 0) {
+            m_isRobotPoweredOn = true;
+            m_powerBtn->setText("机器人断电");
+            m_powerBtn->setStyleSheet(
+                "QPushButton {"
+                "   background-color: #E53935; color: white; border: 1px solid #D32F2F; border-radius: 4px; padding: 5px 15px;"
+                "}"
+                "QPushButton:hover { background-color: #EF5350; }"
+                );
+            showAndSaveLog("机器人上电成功！");
+        } else {
+            showAndSaveLog(QString("上电失败！错误码: %1").arg(ret));
+        }
+    } else {
+        showAndSaveLog(QString("正在尝试关闭机器人(Id: %1)伺服...").arg(m_currentDevId));
+
+        // 👇 同样传入获取到的 ID
+        int ret = RobotAPI::PowerOff();
+
+        if (ret == 0) {
+            m_isRobotPoweredOn = false;
+            m_powerBtn->setText("机器人上电");
+            m_powerBtn->setStyleSheet(
+                "QPushButton {"
+                "   background-color: #2196F3; color: white; border: 1px solid #1E88E5; border-radius: 4px; padding: 5px 15px;"
+                "}"
+                "QPushButton:hover { background-color: #42A5F5; }"
+                );
+            showAndSaveLog("机器人断电成功！");
+        } else {
+            showAndSaveLog(QString("断电失败！错误码: %1").arg(ret));
+        }
+    }
 }

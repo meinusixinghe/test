@@ -24,6 +24,7 @@
 #include <QDoubleSpinBox>
 #include <QDate>
 #include <QDialog>
+#include "EfortSdk.h"
 
 class QCalendarWidget;
 class QTextEdit;
@@ -137,6 +138,7 @@ private slots:
     void moveSelectedRowsToTop();
     void moveSelectedRowsToBottom();
 
+    void toggleRobotPower();
 private:
     void loadDrawingData(const QString &filePath);      // 核心数据加载函数
     void setupUi();                                     // UI初始化函数
@@ -219,6 +221,9 @@ private:
 
     void appendLogToFile(const QString& msg);
     LogViewerDialog* m_logViewerDialog = nullptr;
-};
 
+    QPushButton* m_powerBtn = nullptr;       // 👇【新增】：上电/断电按钮指针
+    bool m_isRobotPoweredOn = false;
+    unsigned int m_currentDevId = 0;
+};
 #endif
