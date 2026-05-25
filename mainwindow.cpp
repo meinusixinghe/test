@@ -26,6 +26,8 @@
 #include <QSettings>
 #include <QCloseEvent>
 #include <QTimer>
+#include <QThread>
+#include <QMetaObject>
 #include <QShortcut>
 #include <QFormLayout>
 #include <QGraphicsDropShadowEffect>
@@ -34,6 +36,13 @@
 #include <QDir>
 #include <QDateTime>
 #include <QTextStream>
+
+namespace {
+struct RobotConnectResult {
+    int ret = -1;
+    unsigned int devId = 0;
+};
+}
 
 FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     setAttribute(Qt::WA_StyledBackground, true);
@@ -193,10 +202,6 @@ MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
     // 1. 初始化 UI
     setupUi();
 
-    // 2. 初始化 SDK 状态轮询定时器
-        m_statusTimer = new QTimer(this);
-    connect(m_statusTimer, &QTimer::timeout, this, &MainWindow::onStatusTimer);
-
     // 5. 初始化数据与自动连接
     loadWeldingProcesses();  // 启动时自动加载焊接工艺数据
 
@@ -207,10 +212,8 @@ MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
     QDir::setCurrent(QCoreApplication::applicationDirPath());
     QSettings settings(QCoreApplication::applicationDirPath() + "/config.ini", QSettings::IniFormat);
     m_lastIp = settings.value("RobotIP", "192.168.1.12").toString();
-    m_lastPort = settings.value("RobotPort", 502).toInt();
     if (m_lastIp.isEmpty()) {
         m_lastIp = "192.168.1.10";
-        m_lastPort = 502;
     }
 }
 
@@ -1309,6 +1312,11 @@ void MainWindow::loadWeldingProcesses()
 // =============================================================================
 void MainWindow::onConnectTriggered()
 {
+    if (m_isRobotCommandRunning) {
+        showAndSaveLog("机器人连接操作正在执行，请稍候...");
+        return;
+    }
+
     ConnectionDialog dlg(this);
     dlg.setIp(m_lastIp);
 
@@ -1318,22 +1326,55 @@ void MainWindow::onConnectTriggered()
             QSettings settings(QCoreApplication::applicationDirPath() + "/config.ini", QSettings::IniFormat);
             settings.setValue("RobotIP", m_lastIp);
 
-            QDir::setCurrent(QCoreApplication::applicationDirPath());
-            int ret = RobotAPI::ConnectRobot(m_lastIp.toStdString().c_str(), m_currentDevId, true);
+            m_isRobotCommandRunning = true;
+            m_connectAction->setEnabled(false);
+            showAndSaveLog(QString("正在连接机器人 %1 ...").arg(m_lastIp));
 
-            if (ret == 0 || ret == 10021) {
-                RobotAPI::SelectRobot(m_currentDevId);
-                showAndSaveLog(QString("SDK连接就绪！分配ID为: %1").arg(m_currentDevId));
-                m_statusTimer->start(200); // 启动状态轮询
-            } else {
-                showAndSaveLog(QString("SDK连接失败！错误码: %1").arg(ret));
-                m_currentDevId = 0;
-            }
+            QThread* worker = QThread::create([this, ip = m_lastIp]() {
+                RobotConnectResult result;
+                QDir::setCurrent(QCoreApplication::applicationDirPath());
+                result.ret = RobotAPI::ConnectRobot(ip.toStdString(), result.devId, true);
+                if (result.ret == 0 || result.ret == 10021) {
+                    RobotAPI::SelectRobot(result.devId);
+                }
+
+                QMetaObject::invokeMethod(this, [this, result]() {
+                    m_isRobotCommandRunning = false;
+                    m_connectAction->setEnabled(true);
+
+                    if (result.ret == 0 || result.ret == 10021) {
+                        m_currentDevId = result.devId;
+                        showAndSaveLog(QString("SDK连接就绪！分配ID为: %1").arg(m_currentDevId));
+                        m_statusTimer->start(200); // 启动状态轮询
+                    } else {
+                        showAndSaveLog(QString("SDK连接失败！错误码: %1").arg(result.ret));
+                        m_currentDevId = 0;
+                    }
+                }, Qt::QueuedConnection);
+            });
+            connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+            worker->start();
         } else if (dlg.getAction() == 2) {
             if (m_currentDevId != 0) {
-                RobotAPI::DisconnectRobot(m_currentDevId);
-                m_currentDevId = 0;
+                m_isRobotCommandRunning = true;
+                m_connectAction->setEnabled(false);
                 m_statusTimer->stop(); // 停止轮询
+                unsigned int devId = m_currentDevId;
+                m_currentDevId = 0;
+                showAndSaveLog(QString("正在断开机器人连接(Id: %1)...").arg(devId));
+
+                QThread* worker = QThread::create([this, devId]() mutable {
+                    RobotAPI::DisconnectRobot(devId);
+
+                    QMetaObject::invokeMethod(this, [this]() {
+                        m_isRobotCommandRunning = false;
+                        m_connectAction->setEnabled(true);
+                        showAndSaveLog("机器人连接已断开。");
+                        onStatusTimer();
+                    }, Qt::QueuedConnection);
+                });
+                connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+                worker->start();
             }
         }
     }
@@ -1391,31 +1432,52 @@ void MainWindow::onResetClicked()
 // ----------------------------------------------------
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    // 1. ！！！核心防护：立刻停止状态轮询定时器
-    // 防止软件在销毁组件时定时器突然触发，导致野指针内存崩溃
+    if (m_isShuttingDown) {
+        event->ignore();
+        return;
+    }
+
+    if (m_isRobotCommandRunning) {
+        if (m_statusLabel) {
+            m_statusLabel->setText("机器人连接操作正在执行，请稍候再关闭。");
+        }
+        event->ignore();
+        return;
+    }
+
     if (m_statusTimer && m_statusTimer->isActive()) {
         m_statusTimer->stop();
     }
 
-    // 2. 如果 SDK 处于连接状态，执行物理安全关闭序列
     if (m_currentDevId != 0 && RobotAPI::IsConnected(m_currentDevId)) {
         if (m_statusLabel) {
             m_statusLabel->setText("正在安全停止机器人并清理状态...");
         }
-        // 将鼠标指针变成沙漏/转圈状态，提示用户正在与机器人同步通信
         QApplication::setOverrideCursor(Qt::WaitCursor);
-        // A. 强行终止当前正在运行的机器人程序（防止运动中关闭软件导致机器人失控继续移动）
-        RobotAPI::TerminateProgram(m_currentDevId);
-        // B. 切断机器人伺服电源，使机械臂进入安全断电合闸状态
-        RobotAPI::PowerOff(m_currentDevId);
-        // C. 正式断开与机器人控制器的 TCP SDK 通讯链路，释放底层句柄
-        RobotAPI::DisconnectRobot(m_currentDevId);
-        m_currentDevId = 0; // 设备 ID 清零
-        // 恢复正常鼠标指针
-        QApplication::restoreOverrideCursor();
+        m_isShuttingDown = true;
+        m_isRobotCommandRunning = true;
+        m_connectAction->setEnabled(false);
+        unsigned int devId = m_currentDevId;
+        m_currentDevId = 0;
+        event->ignore();
+
+        QThread* worker = QThread::create([this, devId]() mutable {
+            RobotAPI::TerminateProgram(devId);
+            RobotAPI::PowerOff(devId);
+            RobotAPI::DisconnectRobot(devId);
+
+            QMetaObject::invokeMethod(this, [this]() {
+                QApplication::restoreOverrideCursor();
+                m_isRobotCommandRunning = false;
+                m_isShuttingDown = false;
+                close();
+            }, Qt::QueuedConnection);
+        });
+        connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+        worker->start();
+        return;
     }
 
-    // 3. 彻底接受关闭事件，允许软件安全退出
     event->accept();
 }
 
