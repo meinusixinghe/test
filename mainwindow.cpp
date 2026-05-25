@@ -193,78 +193,22 @@ MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
     // 1. 初始化 UI
     setupUi();
 
-    // 2. 初始化 Modbus 管理器
-    m_modbusManager = new ModbusManager(this);
-
-    // 3. 基础状态与日志信号绑定
-    connect(m_modbusManager, &ModbusManager::connectionStateChanged, this, &MainWindow::onModbusStateChanged);
-    connect(m_modbusManager, &ModbusManager::logMessage, this, &MainWindow::showAndSaveLog);
-    connect(m_modbusManager, &ModbusManager::servoStateChanged, this, &MainWindow::onServoStateChanged);
-    connect(m_modbusManager, &ModbusManager::autoStateChanged, this, &MainWindow::onAutoStateChanged);
-
-    // 4. 业务逻辑信号绑定
-
-    // 4.1 错误拦截：断网或急停时，除了弹窗，还必须中断连续焊接状态
-    connect(m_modbusManager, &ModbusManager::errorOccurred, this, [this](QString msg){
-        showAndSaveLog("错误: " + msg);
-        QMessageBox::warning(this, "通讯错误", msg);
-        if (m_isWeldingProcessRunning) {
-            m_isWeldingProcessRunning = false;
-            m_startBtn->setText("预约");
-            m_startBtn->setEnabled(true);
-            m_pauseBtn->setVisible(false);
-        }
-    });
-
-    // 4.2 动态按钮文字：不仅改字，还要监控底层状态回退
-    connect(m_modbusManager, &ModbusManager::startButtonTextChanged, this, [this](QString text) {
-        m_startBtn->setText(text);
-        if (text == "预约"|| text == "启动") {
-            m_isWeldingProcessRunning = false;
-            m_startBtn->setEnabled(true);
-            m_pauseBtn->setVisible(false);
-        }
-    });
-
-    // 4.3 收到总命令握手完成信号，立刻下发第一个孔的数据
-    connect(m_modbusManager, &ModbusManager::cmdHandshakeCompleted, this, [this]() {
-        if (m_isWeldingProcessRunning) {
-            sendNextWeldHole();
-        }
-    });
-
-    // 4.4 单孔闭环完成，自动触发下一个！
-    connect(m_modbusManager, &ModbusManager::jobSentSuccess, this, [this]() {
-        if (m_isWeldingProcessRunning) {
-            QApplication::processEvents();
-            m_currentWeldIndex++; // 索引加 1
-            sendNextWeldHole();   // 自动调取下一行数据发送给机器人
-        }
-    });
+    // 2. 初始化 SDK 状态轮询定时器
+        m_statusTimer = new QTimer(this);
+    connect(m_statusTimer, &QTimer::timeout, this, &MainWindow::onStatusTimer);
 
     // 5. 初始化数据与自动连接
     loadWeldingProcesses();  // 启动时自动加载焊接工艺数据
 
+    m_statusTimer = new QTimer(this);
+    connect(m_statusTimer, &QTimer::timeout, this, &MainWindow::onStatusTimer);
+
+    // 👇 2. 自动连接逻辑 (使用 SDK)
     QDir::setCurrent(QCoreApplication::applicationDirPath());
-
-    // 读取本地保存的 IP 和 端口配置，并尝试自动连接
     QSettings settings(QCoreApplication::applicationDirPath() + "/config.ini", QSettings::IniFormat);
-    m_lastIp = settings.value("RobotIP", "").toString();
+    m_lastIp = settings.value("RobotIP", "192.168.1.12").toString();
     m_lastPort = settings.value("RobotPort", 502).toInt();
-
-    if (!m_lastIp.isEmpty()) {
-        m_modbusManager->connectToRobot(m_lastIp, m_lastPort);
-
-        int ret = RobotAPI::ConnectRobot(m_lastIp.toStdString().c_str(), m_currentDevId, true);
-
-        if (ret == ERROR_OK || ret == ERROR_DEVICE_EXIT) { // ERROR_OK=0, ERROR_DEVICE_EXIT=10021
-            RobotAPI::SelectRobot(m_currentDevId);
-            qDebug() << "SDK 自动连接成功，设备 ID:" << m_currentDevId;
-        } else {
-            qDebug() << "SDK 自动连接失败，错误码:" << ret;
-            m_currentDevId = 0; // 失败必须归零
-        }
-    } else {
+    if (m_lastIp.isEmpty()) {
         m_lastIp = "192.168.1.10";
         m_lastPort = 502;
     }
@@ -1367,73 +1311,31 @@ void MainWindow::onConnectTriggered()
 {
     ConnectionDialog dlg(this);
     dlg.setIp(m_lastIp);
-    dlg.setPort(m_lastPort);
 
     if (dlg.exec() == QDialog::Accepted) {
-        int action = dlg.getAction();
-
-        if (action == 1) {
+        if (dlg.getAction() == 1) {
             m_lastIp = dlg.getIp();
-            m_lastPort = dlg.getPort();
-
             QSettings settings(QCoreApplication::applicationDirPath() + "/config.ini", QSettings::IniFormat);
             settings.setValue("RobotIP", m_lastIp);
-            settings.setValue("RobotPort", m_lastPort);
 
-            m_modbusManager->connectToRobot(m_lastIp, m_lastPort);
-
-            // 👇【完美照抄官方 Demo，删掉所有多余的路径设置】
+            QDir::setCurrent(QCoreApplication::applicationDirPath());
             int ret = RobotAPI::ConnectRobot(m_lastIp.toStdString().c_str(), m_currentDevId, true);
 
             if (ret == 0 || ret == 10021) {
                 RobotAPI::SelectRobot(m_currentDevId);
-                showAndSaveLog(QString("SDK连接就绪！当前操作设备ID为: %1").arg(m_currentDevId));
+                showAndSaveLog(QString("SDK连接就绪！分配ID为: %1").arg(m_currentDevId));
+                m_statusTimer->start(200); // 启动状态轮询
             } else {
                 showAndSaveLog(QString("SDK连接失败！错误码: %1").arg(ret));
-                QMessageBox::critical(this, "SDK 错误", QString("无法建立 SDK 核心连接，错误码: %1").arg(ret));
                 m_currentDevId = 0;
             }
-
-        } else if (action == 2) {
-            m_modbusManager->disconnectFromRobot();
-
+        } else if (dlg.getAction() == 2) {
             if (m_currentDevId != 0) {
                 RobotAPI::DisconnectRobot(m_currentDevId);
-                showAndSaveLog(QString("SDK连接已断开 (Id: %1)").arg(m_currentDevId));
                 m_currentDevId = 0;
+                m_statusTimer->stop(); // 停止轮询
             }
         }
-    }
-}
-
-void MainWindow::onModbusStateChanged(int state)
-{
-    if (state == 2) { // 已连接 (绿色)
-        m_statusIconLabel->setStyleSheet("background-color: #4CAF50; border-radius: 8px;");
-        m_statusTextLabel->setText("已连接");
-        m_statusLabel->setText(QString("已连接到机器人: %1:%2").arg(m_lastIp).arg(m_lastPort));
-
-        m_startBtn->setVisible(true);
-        m_pauseBtn->setVisible(false);
-        m_resetBtn->setVisible(true);
-    }
-    else if (state == 1) { // 正在连接 (黄色)
-        m_statusIconLabel->setStyleSheet("background-color: #FFC107; border-radius: 8px;");
-        m_statusTextLabel->setText("正在连接...");
-        m_statusLabel->setText("尝试连接中...");
-
-        m_startBtn->setVisible(false);
-        m_pauseBtn->setVisible(false);
-        m_resetBtn->setVisible(false);
-    }
-    else { // 未连接 / 断开 (红色)
-        m_statusIconLabel->setStyleSheet("background-color: #F44336; border-radius: 8px;");
-        m_statusTextLabel->setText("未连接");
-        m_statusLabel->setText("未连接 / 连接断开");
-
-        m_startBtn->setVisible(false);
-        m_pauseBtn->setVisible(false);
-        m_resetBtn->setVisible(false);
     }
 }
 
@@ -1443,26 +1345,22 @@ void MainWindow::onModbusStateChanged(int state)
 void MainWindow::onStartClicked()
 {
     if (m_startBtn->text() == "预约") {
-        // 触发启动信号 (40129.9) - 跑步骤1和2
-        m_modbusManager->prepareAndStart();
+        // SDK 启动机器人运行程序
+        RobotAPI::StartProgram(m_currentDevId);
     }
     else if (m_startBtn->text() == "启动") {
-        // 到达启动之后，不再跑步骤2，而是持续跑步骤3！
-        if (weldHoles.isEmpty()) {
-            QMessageBox::warning(this, "警告", "没有管孔数据可供焊接！");
-            return;
-        }
+        if (weldHoles.isEmpty()) return;
 
         m_currentWeldIndex = 0;
         m_isWeldingProcessRunning = true;
         m_startBtn->setText("连续焊接中...");
-        m_startBtn->setEnabled(false); // 防止中途乱点
-
+        m_startBtn->setEnabled(false);
         m_pauseBtn->setVisible(true);
-        m_pauseBtn->setChecked(false); // 确保按钮处于没被按下的状态
+        m_pauseBtn->setChecked(false);
         m_pauseBtn->setText("暂停");
 
-        m_modbusManager->startWeldingProcess();
+        // 下发第一个孔
+        sendNextWeldHole();
     }
 }
 
@@ -1471,14 +1369,12 @@ void MainWindow::onStartClicked()
 // ----------------------------------------------------
 void MainWindow::onPauseClicked()
 {
-    bool isPaused = m_pauseBtn->isChecked(); // 按钮按下状态为 true (暂停中)
-
-    if (isPaused) {
+    if (m_pauseBtn->isChecked()) {
         m_pauseBtn->setText("继续");
-        m_modbusManager->setPause(true); // 发送暂停信号
+        RobotAPI::StopProgram(m_currentDevId); // SDK 发送停止(暂停)指令
     } else {
         m_pauseBtn->setText("暂停");
-        m_modbusManager->setPause(false); // 清除暂停并触发启动信号
+        RobotAPI::StartProgram(m_currentDevId); // SDK 恢复运行指令
     }
 }
 
@@ -1487,7 +1383,7 @@ void MainWindow::onPauseClicked()
 // ----------------------------------------------------
 void MainWindow::onResetClicked()
 {
-    m_modbusManager->resetAlarm();
+    RobotAPI::ClearAlarm(m_currentDevId); // SDK 清除报警
 }
 
 // ----------------------------------------------------
@@ -1495,55 +1391,32 @@ void MainWindow::onResetClicked()
 // ----------------------------------------------------
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    if (m_isShuttingDown || !m_modbusManager || !m_modbusManager->isConnected()) {
-        if (m_modbusManager) {
-            m_modbusManager->disconnectFromRobot();
+    // 1. ！！！核心防护：立刻停止状态轮询定时器
+    // 防止软件在销毁组件时定时器突然触发，导致野指针内存崩溃
+    if (m_statusTimer && m_statusTimer->isActive()) {
+        m_statusTimer->stop();
+    }
+
+    // 2. 如果 SDK 处于连接状态，执行物理安全关闭序列
+    if (m_currentDevId != 0 && RobotAPI::IsConnected(m_currentDevId)) {
+        if (m_statusLabel) {
+            m_statusLabel->setText("正在安全停止机器人并清理状态...");
         }
-        event->accept();
-        return;
+        // 将鼠标指针变成沙漏/转圈状态，提示用户正在与机器人同步通信
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        // A. 强行终止当前正在运行的机器人程序（防止运动中关闭软件导致机器人失控继续移动）
+        RobotAPI::TerminateProgram(m_currentDevId);
+        // B. 切断机器人伺服电源，使机械臂进入安全断电合闸状态
+        RobotAPI::PowerOff(m_currentDevId);
+        // C. 正式断开与机器人控制器的 TCP SDK 通讯链路，释放底层句柄
+        RobotAPI::DisconnectRobot(m_currentDevId);
+        m_currentDevId = 0; // 设备 ID 清零
+        // 恢复正常鼠标指针
+        QApplication::restoreOverrideCursor();
     }
 
-    event->ignore();
-    m_isShuttingDown = true;
-    m_statusLabel->setText("正在安全关闭机器人并清理状态...");
-
-    // 监听底层的“关机完成”信号。收到信号后，立刻重新触发关闭
-    connect(m_modbusManager, &ModbusManager::shutdownFinished, this, [this]() {
-        this->close();
-    });
-
-    // 调用底层的安全关闭逻辑
-    m_modbusManager->safeShutdown();
-}
-
-// =============================================================================
-// 更新伺服使能 UI 状态
-// =============================================================================
-void MainWindow::onServoStateChanged(bool enabled)
-{
-    if (enabled) {
-        // 绿色：伺服已上电
-        m_servoIconLabel->setStyleSheet("background-color: #4CAF50; border-radius: 8px;");
-        m_servoTextLabel->setText("伺服使能");
-    } else {
-        // 灰色：伺服未上电/断开
-        m_servoIconLabel->setStyleSheet("background-color: #9E9E9E; border-radius: 8px;");
-        m_servoTextLabel->setText("伺服断开");
-    }
-}
-
-// =============================================================================
-// 更新自动/手动 UI 状态
-// =============================================================================
-void MainWindow::onAutoStateChanged(bool isAuto)
-{
-    if (isAuto) {
-        m_autoTextLabel->setStyleSheet("color: #4CAF50;"); // 绿色文字
-        m_autoTextLabel->setText("自动模式");
-    } else {
-        m_autoTextLabel->setStyleSheet("color: #FF9800;"); // 橙色文字
-        m_autoTextLabel->setText("手动模式");
-    }
+    // 3. 彻底接受关闭事件，允许软件安全退出
+    event->accept();
 }
 
 // ----------------------------------------------------
@@ -1554,37 +1427,30 @@ void MainWindow::sendNextWeldHole()
     if (!m_isWeldingProcessRunning) return;
 
     if (m_currentWeldIndex >= weldHoles.size()) {
-
-        m_statusLabel->setText("所有管孔焊接完成！下发全 0 数据...");
-        m_modbusManager->sendWeldingFinished();
-
+        m_statusLabel->setText("所有管孔焊接完成！");
         m_isWeldingProcessRunning = false;
         m_startBtn->setText("预约");
         m_startBtn->setEnabled(true);
         m_pauseBtn->setVisible(false);
-
-        QTimer::singleShot(500, this, [this](){
-            QMessageBox::information(this, "完成", "恭喜，所有管孔已连续焊接完毕！");
-        });
+        // 可选：写入一个标识位通知机器人程序已全完成
+        RobotAPI::SetBoolVariable(11, true, m_currentDevId);
         return;
     }
 
     const Hole& hole = weldHoles[m_currentWeldIndex];
-
-    WeldingData data;
-    data.x = hole.center3D.x();
-    data.y = hole.center3D.y();
-    data.z = hole.center3D.z();
-    data.r = hole.radius;
-    data.processId = 1;
-
     dataTable->selectRow(m_currentWeldIndex);
-    m_statusLabel->setText(QString("正在下发并焊接第 %1 / %2 个管孔...")
-                               .arg(m_currentWeldIndex + 1)
-                               .arg(weldHoles.size()));
+    m_statusLabel->setText(QString("正在下发并焊接第 %1 / %2 个管孔...").arg(m_currentWeldIndex + 1).arg(weldHoles.size()));
 
-    // 调用专属的管孔数据下发函数
-    m_modbusManager->sendWeldHoleData(data);
+    // 👇 【SDK 神级操作：直接写底层变量】
+    // 假设你在机器人程序里使用全局 Double 变量 D01, D02, D03, D04 来接收 X,Y,Z,R
+    // 索引分别对应 0, 1, 2, 3 （请根据机器人实际规划修改索引数字）
+    RobotAPI::SetDoubleVariable(0, hole.center3D.x(), m_currentDevId);
+    RobotAPI::SetDoubleVariable(1, hole.center3D.y(), m_currentDevId);
+    RobotAPI::SetDoubleVariable(2, hole.center3D.z(), m_currentDevId);
+    RobotAPI::SetDoubleVariable(3, hole.radius, m_currentDevId);
+
+    // 假设用全局 Bool 变量 B01（索引1）作为“新数据已就绪，机器人可以移动”的信号
+    RobotAPI::SetBoolVariable(1, true, m_currentDevId);
 }
 
 void MainWindow::restoreDrawing()
@@ -2206,6 +2072,76 @@ void MainWindow::toggleRobotPower()
             showAndSaveLog("机器人断电成功！");
         } else {
             showAndSaveLog(QString("断电失败！错误码: %1").arg(ret));
+        }
+    }
+}
+
+void MainWindow::onStatusTimer()
+{
+    if (m_currentDevId == 0 || !RobotAPI::IsConnected(m_currentDevId)) {
+        // 如果断线了，UI 变红
+        m_statusIconLabel->setStyleSheet("background-color: #F44336; border-radius: 8px;");
+        m_statusTextLabel->setText("未连接");
+        m_startBtn->setVisible(false);
+        m_pauseBtn->setVisible(false);
+        m_resetBtn->setVisible(false);
+        return;
+    }
+
+    // 正常连接时，UI 变绿
+    m_statusIconLabel->setStyleSheet("background-color: #4CAF50; border-radius: 8px;");
+    m_statusTextLabel->setText("已连接");
+    m_startBtn->setVisible(true);
+    if (!m_isWeldingProcessRunning) m_pauseBtn->setVisible(false);
+    m_resetBtn->setVisible(true);
+
+    // 1. 获取伺服状态
+    bool servoStatus = false;
+    RobotAPI::GetCurrentServoStatus(servoStatus, m_currentDevId);
+    if (servoStatus) {
+        m_servoIconLabel->setStyleSheet("background-color: #4CAF50; border-radius: 8px;");
+        m_servoTextLabel->setText("伺服使能");
+    } else {
+        m_servoIconLabel->setStyleSheet("background-color: #9E9E9E; border-radius: 8px;");
+        m_servoTextLabel->setText("伺服断开");
+    }
+
+    // 2. 获取自动/手动模式
+    RoboxKeyMode keyMode = RoboxKeyMode::ROBOX_MODE_MANUAL;
+    RobotAPI::GetCurrentKeyMode(keyMode, m_currentDevId);
+    if (keyMode == RoboxKeyMode::ROBOX_MODE_AUTO) {
+        m_autoTextLabel->setStyleSheet("color: #4CAF50;");
+        m_autoTextLabel->setText("自动模式");
+    } else {
+        m_autoTextLabel->setStyleSheet("color: #FF9800;");
+        m_autoTextLabel->setText("手动模式");
+    }
+
+    // 3. 监控报警状态
+    bool alarmStatus = false;
+    RobotAPI::GetCurrentAlarmStatus(alarmStatus, m_currentDevId);
+    if (alarmStatus) {
+        m_statusLabel->setText("机器人当前存在报警，请复位！");
+        if (m_isWeldingProcessRunning) {
+            m_isWeldingProcessRunning = false;
+            m_startBtn->setText("预约");
+            m_startBtn->setEnabled(true);
+            m_pauseBtn->setVisible(false);
+        }
+    }
+
+    // 👇 4. 连续焊接逻辑的心跳检测 (以前 Modbus 的握手现在全靠读变量)
+    if (m_isWeldingProcessRunning) {
+        bool isRobotReadyForNext = false;
+        // 假设我们在机器人程序的全局 Bool 变量索引 10，约定作为“机器人到达点位，请求下一个点”的握手信号
+        RobotAPI::GetBoolVariable(10, isRobotReadyForNext, m_currentDevId);
+
+        if (isRobotReadyForNext) {
+            // 机器人说它准备好了，我们将信号重置为 false，并下发下一个点
+            RobotAPI::SetBoolVariable(10, false, m_currentDevId);
+
+            m_currentWeldIndex++;
+            sendNextWeldHole();
         }
     }
 }

@@ -1,6 +1,6 @@
 QT       += core gui
-# Modbus TCP
-QT += serialbus serialport network
+
+QT += network
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
@@ -14,7 +14,6 @@ SOURCES += \
     connectiondialog.cpp \
     main.cpp \
     mainwindow.cpp \
-    modbusmanager.cpp \
     positioningdialog.cpp \
     renderarea.cpp \
     rotationmatrixdialog.cpp \
@@ -30,7 +29,6 @@ HEADERS += \
     libs/efort-robotics/include/irobot.h \
     libs/efort-robotics/include/math_pose.hpp \
     mainwindow.h \
-    modbusmanager.h \
     positioningdialog.h \
     renderarea.h \
     rotationmatrixdialog.h \

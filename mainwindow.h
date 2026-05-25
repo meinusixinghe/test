@@ -11,7 +11,6 @@
 #include <QTimer>
 #include <QPushButton>
 #include "weldingprocessdialog.h"
-#include "modbusmanager.h"
 #include <QCloseEvent>
 #include <QSettings>
 #include <QSplitter>
@@ -109,16 +108,9 @@ private slots:
 
     // Modbus
     void onConnectTriggered();
-    void onModbusStateChanged(int state);
     void onStartClicked();
     void onPauseClicked();
     void onResetClicked();
-
-    // 响应伺服状态变化的槽函数
-    void onServoStateChanged(bool enabled);
-
-    // 响应自动模式变化的槽函数
-    void onAutoStateChanged(bool isAuto);
 
     // 持续发送下一个管孔的函数
     void sendNextWeldHole();
@@ -139,6 +131,8 @@ private slots:
     void moveSelectedRowsToBottom();
 
     void toggleRobotPower();
+
+    void onStatusTimer();
 private:
     void loadDrawingData(const QString &filePath);      // 核心数据加载函数
     void setupUi();                                     // UI初始化函数
@@ -179,7 +173,6 @@ private:
     QVector<WeldingProcess> m_weldingProcesses;         // 存储所有的焊接工艺数据
     QAction* m_manageProcessAction;                     // 菜单动作
 
-    ModbusManager* m_modbusManager;
     QMenu* m_connectMenu;
     QAction* m_connectAction;
 
@@ -225,5 +218,7 @@ private:
     QPushButton* m_powerBtn = nullptr;       // 👇【新增】：上电/断电按钮指针
     bool m_isRobotPoweredOn = false;
     unsigned int m_currentDevId = 0;
+
+    QTimer* m_statusTimer;
 };
 #endif
