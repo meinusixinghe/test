@@ -40,7 +40,14 @@
 namespace {
 struct RobotConnectResult {
     int ret = -1;
+    int apiRet = -1;
     unsigned int devId = 0;
+};
+
+struct RobotMotionResult {
+    bool stopped = false;
+    int failedIndex = -1;
+    int ret = 0;
 };
 }
 
@@ -271,7 +278,7 @@ void MainWindow::setupUi()
 
     bottomBtnLayout->addWidget(m_toggleCoordBtn);
 
-    m_startBtn = new QPushButton("预约", renderArea);
+    m_startBtn = new QPushButton("启动", renderArea);
     m_startBtn->setStyleSheet("QPushButton { background-color: rgba(76, 175, 80, 0.95); color: white; border-radius: 4px; padding: 6px 12px; } QPushButton:hover { background-color: #45a049; }");
     m_startBtn->setCursor(Qt::ArrowCursor);
     m_startBtn->setVisible(false);
@@ -476,10 +483,11 @@ void MainWindow::setupUi()
     loadAction = new QAction(QIcon(":/img/images/import.png"), "导入DXF", this);
     rotateAction = new QAction("应用旋转矩阵", this);
     m_setupCoordAction = new QAction(QIcon(":/img/images/chuangjianzuobiaoxi.png"), "建立用户坐标系", this);
-    m_manageProcessAction = new QAction(QIcon(":/img/images/icons4.png"), "焊接工艺管理", this);
+    m_manageProcessAction = new QAction(QIcon(":/img/images/icons4.png"), "工艺管理", this);
     m_imageProcessAction = new QAction(QIcon(":/img/images/DrawProcessing.png"), "图纸处理", this);
     QAction* m_positioningAction = new QAction("建立定位", this);
     m_connectAction = new QAction(QIcon(":/img/images/icons6.png"), "建立连接", this);
+    m_robotParamAction = new QAction(QIcon(":/img/images/icons4.png"), "机器参数设置", this);
     // --- 创建第一层：“选项卡”栏 ---
     QToolBar* tabBar = addToolBar("选项卡");
     tabBar->setMovable(false); // 禁止拖动
@@ -520,6 +528,7 @@ void MainWindow::setupUi()
             toolBar->addAction(rotateAction);
             toolBar->addAction(m_setupCoordAction);
             toolBar->addAction(m_manageProcessAction);
+            toolBar->addAction(m_robotParamAction);
         } else if (currentTab == tabTools) {
             toolBar->addAction(m_imageProcessAction);
             toolBar->addAction(m_positioningAction);
@@ -604,6 +613,7 @@ void MainWindow::setupUi()
         m_coordManager->toggleCoordinateDisplay(checked);
         m_toggleCoordBtn->setText(checked ? "隐藏用户坐标系" : "显示用户坐标系");
     });
+    connect(m_robotParamAction, &QAction::triggered, this, &MainWindow::onRobotParameterSettings);
 
     // 焊接工艺
     connect(m_manageProcessAction, &QAction::triggered, this, &MainWindow::onManageWeldingProcess);
@@ -1336,6 +1346,7 @@ void MainWindow::onConnectTriggered()
                 result.ret = RobotAPI::ConnectRobot(ip.toStdString(), result.devId, true);
                 if (result.ret == 0 || result.ret == 10021) {
                     RobotAPI::SelectRobot(result.devId);
+                    result.apiRet = RobotAPI::EnableApiControl(true, result.devId);
                 }
 
                 QMetaObject::invokeMethod(this, [this, result]() {
@@ -1345,6 +1356,12 @@ void MainWindow::onConnectTriggered()
                     if (result.ret == 0 || result.ret == 10021) {
                         m_currentDevId = result.devId;
                         showAndSaveLog(QString("SDK连接就绪！分配ID为: %1").arg(m_currentDevId));
+                        if (result.apiRet == 0) {
+                            showAndSaveLog("已使能当前机器人外部 API 控制权限。");
+                        } else {
+                            showAndSaveLog(QString("警告：使能 API 权限失败，错误码: %1").arg(result.apiRet));
+                        }
+
                         m_statusTimer->start(200); // 启动状态轮询
                     } else {
                         showAndSaveLog(QString("SDK连接失败！错误码: %1").arg(result.ret));
@@ -1385,38 +1402,78 @@ void MainWindow::onConnectTriggered()
 // =============================================================================
 void MainWindow::onStartClicked()
 {
-    if (m_startBtn->text() == "预约") {
-        // SDK 启动机器人运行程序
-        RobotAPI::StartProgram(m_currentDevId);
+    if (m_currentDevId == 0 || !RobotAPI::IsConnected(m_currentDevId)) {
+        QMessageBox::warning(this, "未连接", "请先连接机器人。");
+        return;
     }
-    else if (m_startBtn->text() == "启动") {
-        if (weldHoles.isEmpty()) return;
 
-        m_currentWeldIndex = 0;
-        m_isWeldingProcessRunning = true;
-        m_startBtn->setText("连续焊接中...");
-        m_startBtn->setEnabled(false);
-        m_pauseBtn->setVisible(true);
-        m_pauseBtn->setChecked(false);
-        m_pauseBtn->setText("暂停");
-
-        // 下发第一个孔
-        sendNextWeldHole();
+    if (m_isRobotMotionRunning) {
+        showAndSaveLog("机器人运动正在执行，请先停止或复位。");
+        return;
     }
+
+    if (weldHoles.isEmpty()) {
+        QMessageBox::warning(this, "无点位", "当前没有可运动的管孔点位，请先导入 DXF。");
+        return;
+    }
+
+    if (m_coordManager && !m_coordManager->isSetupComplete()) {
+        QMessageBox::warning(this, "未建立坐标系", "请先建立用户坐标系，再启动 SDK 运动。");
+        return;
+    }
+
+    m_currentWeldIndex = 0;
+    m_isWeldingProcessRunning = true;
+    m_isRobotMotionRunning = true;
+    m_stopRobotMotionRequested = false;
+    m_robotMotionStopFlag = std::make_shared<std::atomic_bool>(false);
+
+    m_startBtn->setText("运动中...");
+    m_startBtn->setEnabled(false);
+    m_pauseBtn->setVisible(true);
+    m_pauseBtn->setEnabled(true);
+    m_pauseBtn->setChecked(false);
+    m_pauseBtn->setText("停止运动");
+
+    showAndSaveLog(QString("开始通过 SDK 直控运动，共 %1 个管孔点位。").arg(weldHoles.size()));
+    sendNextWeldHole();
 }
 
 // ----------------------------------------------------
-// 暂停按钮：处理暂停和恢复
+// 停止按钮：请求运动线程停止，并向控制器发送 MOVEHOLD
 // ----------------------------------------------------
 void MainWindow::onPauseClicked()
 {
-    if (m_pauseBtn->isChecked()) {
-        m_pauseBtn->setText("继续");
-        RobotAPI::StopProgram(m_currentDevId); // SDK 发送停止(暂停)指令
-    } else {
-        m_pauseBtn->setText("暂停");
-        RobotAPI::StartProgram(m_currentDevId); // SDK 恢复运行指令
+    if (m_currentDevId == 0 || !m_isRobotMotionRunning) {
+        m_pauseBtn->setChecked(false);
+        m_pauseBtn->setVisible(false);
+        return;
     }
+
+    m_stopRobotMotionRequested = true;
+    if (m_robotMotionStopFlag) {
+        m_robotMotionStopFlag->store(true);
+    }
+
+    m_pauseBtn->setText("停止中...");
+    m_pauseBtn->setEnabled(false);
+
+    unsigned int devId = m_currentDevId;
+    QThread* worker = QThread::create([this, devId]() {
+        int ret = RobotAPI::MOVEHOLD(devId);
+
+        QMetaObject::invokeMethod(this, [this, ret]() {
+            if (ret == 0) {
+                showAndSaveLog("已发送 MOVEHOLD，等待当前运动线程退出。");
+            } else {
+                showAndSaveLog(QString("MOVEHOLD 发送失败，错误码: %1").arg(ret));
+                m_pauseBtn->setEnabled(true);
+                m_pauseBtn->setText("停止运动");
+            }
+        }, Qt::QueuedConnection);
+    });
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    worker->start();
 }
 
 // ----------------------------------------------------
@@ -1424,7 +1481,44 @@ void MainWindow::onPauseClicked()
 // ----------------------------------------------------
 void MainWindow::onResetClicked()
 {
-    RobotAPI::ClearAlarm(m_currentDevId); // SDK 清除报警
+    if (m_currentDevId == 0) {
+        return;
+    }
+
+    m_stopRobotMotionRequested = true;
+    if (m_robotMotionStopFlag) {
+        m_robotMotionStopFlag->store(true);
+    }
+
+    m_isRobotMotionRunning = false;
+    m_isWeldingProcessRunning = false;
+    m_startBtn->setText("启动");
+    m_startBtn->setEnabled(true);
+    m_pauseBtn->setChecked(false);
+    m_pauseBtn->setEnabled(true);
+    m_pauseBtn->setVisible(false);
+    m_resetBtn->setEnabled(false);
+
+    unsigned int devId = m_currentDevId;
+    QThread* worker = QThread::create([this, devId]() {
+        int clearMoveRet = RobotAPI::MOVECLEAR(devId);
+        int clearAlarmRet = RobotAPI::ClearAlarm(devId);
+        int apiRet = RobotAPI::EnableApiControl(true, devId);
+
+        QMetaObject::invokeMethod(this, [this, clearMoveRet, clearAlarmRet, apiRet]() {
+            m_resetBtn->setEnabled(true);
+            if (clearMoveRet == 0 && clearAlarmRet == 0 && apiRet == 0) {
+                showAndSaveLog("机器人运动队列和报警已复位，API 控制已启用。");
+            } else {
+                showAndSaveLog(QString("复位完成但存在错误：MOVECLEAR=%1, ClearAlarm=%2, EnableApiControl=%3")
+                                   .arg(clearMoveRet)
+                                   .arg(clearAlarmRet)
+                                   .arg(apiRet));
+            }
+        }, Qt::QueuedConnection);
+    });
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    worker->start();
 }
 
 // ----------------------------------------------------
@@ -1449,6 +1543,11 @@ void MainWindow::closeEvent(QCloseEvent *event)
         m_statusTimer->stop();
     }
 
+    m_stopRobotMotionRequested = true;
+    if (m_robotMotionStopFlag) {
+        m_robotMotionStopFlag->store(true);
+    }
+
     if (m_currentDevId != 0 && RobotAPI::IsConnected(m_currentDevId)) {
         if (m_statusLabel) {
             m_statusLabel->setText("正在安全停止机器人并清理状态...");
@@ -1462,6 +1561,8 @@ void MainWindow::closeEvent(QCloseEvent *event)
         event->ignore();
 
         QThread* worker = QThread::create([this, devId]() mutable {
+            RobotAPI::MOVEHOLD(devId);
+            RobotAPI::MOVECLEAR(devId);
             RobotAPI::TerminateProgram(devId);
             RobotAPI::PowerOff(devId);
             RobotAPI::DisconnectRobot(devId);
@@ -1486,33 +1587,119 @@ void MainWindow::closeEvent(QCloseEvent *event)
 // ----------------------------------------------------
 void MainWindow::sendNextWeldHole()
 {
-    if (!m_isWeldingProcessRunning) return;
+    if (!m_isWeldingProcessRunning || m_currentDevId == 0) return;
 
-    if (m_currentWeldIndex >= weldHoles.size()) {
-        m_statusLabel->setText("所有管孔焊接完成！");
-        m_isWeldingProcessRunning = false;
-        m_startBtn->setText("预约");
-        m_startBtn->setEnabled(true);
-        m_pauseBtn->setVisible(false);
-        // 可选：写入一个标识位通知机器人程序已全完成
-        RobotAPI::SetBoolVariable(11, true, m_currentDevId);
-        return;
-    }
+    const QVector<Hole> holes = weldHoles;
+    const int startIndex = m_currentWeldIndex;
+    const unsigned int devId = m_currentDevId;
+    const auto stopFlag = m_robotMotionStopFlag;
 
-    const Hole& hole = weldHoles[m_currentWeldIndex];
-    dataTable->selectRow(m_currentWeldIndex);
-    m_statusLabel->setText(QString("正在下发并焊接第 %1 / %2 个管孔...").arg(m_currentWeldIndex + 1).arg(weldHoles.size()));
+    QThread* worker = QThread::create([this, holes, startIndex, devId, stopFlag]() {
+        RobotMotionResult result;
+        int apiRet = RobotAPI::EnableApiControl(true, devId);
+        if (apiRet != 0) {
+            result.failedIndex = startIndex;
+            result.ret = apiRet;
+        }
 
-    // 👇 【SDK 神级操作：直接写底层变量】
-    // 假设你在机器人程序里使用全局 Double 变量 D01, D02, D03, D04 来接收 X,Y,Z,R
-    // 索引分别对应 0, 1, 2, 3 （请根据机器人实际规划修改索引数字）
-    RobotAPI::SetDoubleVariable(0, hole.center3D.x(), m_currentDevId);
-    RobotAPI::SetDoubleVariable(1, hole.center3D.y(), m_currentDevId);
-    RobotAPI::SetDoubleVariable(2, hole.center3D.z(), m_currentDevId);
-    RobotAPI::SetDoubleVariable(3, hole.radius, m_currentDevId);
+        RobotAPI::RobotPos currentPose;
+        if (result.ret == 0) {
+            int poseRet = RobotAPI::GetBaseCoordinatePos(currentPose, devId);
+            if (poseRet != 0) {
+                result.failedIndex = startIndex;
+                result.ret = poseRet;
+            }
+        }
 
-    // 假设用全局 Bool 变量 B01（索引1）作为“新数据已就绪，机器人可以移动”的信号
-    RobotAPI::SetBoolVariable(1, true, m_currentDevId);
+        for (int i = startIndex; result.ret == 0 && i < holes.size(); ++i) {
+            if (stopFlag && stopFlag->load()) {
+                result.stopped = true;
+                break;
+            }
+
+            const Hole hole = holes.at(i);
+            QMetaObject::invokeMethod(this, [this, i, total = holes.size()]() {
+                m_currentWeldIndex = i;
+                if (i >= 0 && i < dataTable->rowCount()) {
+                    dataTable->selectRow(i);
+                }
+                m_statusLabel->setText(QString("正在通过 SDK 运动到第 %1 / %2 个管孔...")
+                                           .arg(i + 1)
+                                           .arg(total));
+            }, Qt::QueuedConnection);
+
+            double pos[6] = {
+                hole.center3D.x(),
+                hole.center3D.y(),
+                hole.center3D.z(),
+                currentPose.a,
+                currentPose.b,
+                currentPose.c
+            };
+
+            int moveRet = RobotAPI::MLIN(pos, 10, devId);
+            if (moveRet != 0) {
+                result.failedIndex = i;
+                result.ret = moveRet;
+                break;
+            }
+
+            while (true) {
+                if (stopFlag && stopFlag->load()) {
+                    RobotAPI::MOVEHOLD(devId);
+                    result.stopped = true;
+                    break;
+                }
+
+                bool isMoving = false;
+                int stateRet = RobotAPI::GetMoveState(isMoving, devId);
+                if (stateRet != 0) {
+                    result.failedIndex = i;
+                    result.ret = stateRet;
+                    break;
+                }
+                if (!isMoving) {
+                    QMetaObject::invokeMethod(this, [this, i]() {
+                        m_currentWeldIndex = i + 1;
+                    }, Qt::QueuedConnection);
+                    break;
+                }
+                QThread::msleep(100);
+            }
+        }
+
+        QMetaObject::invokeMethod(this, [this, result]() {
+            m_isRobotMotionRunning = false;
+            m_isWeldingProcessRunning = false;
+            m_stopRobotMotionRequested = false;
+
+            m_startBtn->setText("启动");
+            m_startBtn->setEnabled(true);
+            m_pauseBtn->setChecked(false);
+            m_pauseBtn->setEnabled(true);
+            m_pauseBtn->setText("停止运动");
+            m_pauseBtn->setVisible(false);
+
+            if (result.ret != 0) {
+                const int displayIndex = result.failedIndex >= 0 ? result.failedIndex + 1 : 0;
+                m_statusLabel->setText(QString("SDK 运动失败，第 %1 个点，错误码: %2")
+                                           .arg(displayIndex)
+                                           .arg(result.ret));
+                showAndSaveLog(QString("SDK 运动失败，第 %1 个点，错误码: %2")
+                                   .arg(displayIndex)
+                                   .arg(result.ret));
+            } else if (result.stopped) {
+                m_statusLabel->setText("SDK 运动已停止。");
+                showAndSaveLog("SDK 运动已停止。");
+            } else {
+                m_statusLabel->setText("所有管孔点位 SDK 运动完成。");
+                showAndSaveLog("所有管孔点位 SDK 运动完成。");
+            }
+        }, Qt::QueuedConnection);
+    });
+
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    worker->start();
 }
 
 void MainWindow::restoreDrawing()
@@ -1557,6 +1744,7 @@ void MainWindow::restoreDrawing()
         renderArea->setHighlightedPathIndices(QList<int>());
         renderArea->setDisplayPaths(m_displayPaths);
         renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate, false);
+        showAndSaveLog("图纸已还原到导入后的初始状态。");
     }
 }
 
@@ -2186,24 +2374,31 @@ void MainWindow::onStatusTimer()
         m_statusLabel->setText("机器人当前存在报警，请复位！");
         if (m_isWeldingProcessRunning) {
             m_isWeldingProcessRunning = false;
-            m_startBtn->setText("预约");
+            m_isRobotMotionRunning = false;
+            m_stopRobotMotionRequested = true;
+            if (m_robotMotionStopFlag) {
+                m_robotMotionStopFlag->store(true);
+            }
+            m_startBtn->setText("启动");
             m_startBtn->setEnabled(true);
             m_pauseBtn->setVisible(false);
         }
     }
+}
 
-    // 👇 4. 连续焊接逻辑的心跳检测 (以前 Modbus 的握手现在全靠读变量)
-    if (m_isWeldingProcessRunning) {
-        bool isRobotReadyForNext = false;
-        // 假设我们在机器人程序的全局 Bool 变量索引 10，约定作为“机器人到达点位，请求下一个点”的握手信号
-        RobotAPI::GetBoolVariable(10, isRobotReadyForNext, m_currentDevId);
-
-        if (isRobotReadyForNext) {
-            // 机器人说它准备好了，我们将信号重置为 false，并下发下一个点
-            RobotAPI::SetBoolVariable(10, false, m_currentDevId);
-
-            m_currentWeldIndex++;
-            sendNextWeldHole();
-        }
+// ----------------------------------------------------
+// 功能：打开机器参数设置对话框
+// ----------------------------------------------------
+void MainWindow::onRobotParameterSettings()
+{
+    // 如果还没连接，拦住不让进
+    if (m_currentDevId == 0) {
+        QMessageBox::warning(this, "未连接", "请先在“连接”选项卡中建立机器人通信！");
+        return;
     }
+
+    RobotParameterDialog* dialog = new RobotParameterDialog(m_currentDevId, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowFlags(dialog->windowFlags() | Qt::WindowStaysOnTopHint);
+    dialog->show();
 }

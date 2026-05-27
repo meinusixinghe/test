@@ -1,6 +1,8 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
+#include <atomic>
+#include <memory>
 #include <QAction>
 #include <QCloseEvent>
 #include <QDate>
@@ -27,8 +29,7 @@
 #include <QVector3D>
 #include <QVBoxLayout>
 #include <QWidget>
-
-#include "EfortSdk.h"
+#include "robotparameterdialog.h"
 #include "weldingprocessdialog.h"
 
 class QCalendarWidget;
@@ -119,6 +120,7 @@ private slots:
     void moveSelectedRowsToBottom();
     void toggleRobotPower();
     void onStatusTimer();
+    void onRobotParameterSettings();
 
 private:
     void loadDrawingData(const QString &filePath);
@@ -173,6 +175,9 @@ private:
 
     bool m_isShuttingDown = false;
     bool m_isRobotCommandRunning = false;
+    bool m_isRobotMotionRunning = false;
+    bool m_stopRobotMotionRequested = false;
+    std::shared_ptr<std::atomic_bool> m_robotMotionStopFlag;
 
     int m_currentWeldIndex = 0;
     bool m_isWeldingProcessRunning = false;
@@ -202,6 +207,8 @@ private:
     unsigned int m_currentDevId = 0;
 
     QTimer* m_statusTimer;
+
+    QAction* m_robotParamAction;
 };
 
 #endif
