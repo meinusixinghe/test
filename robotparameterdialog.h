@@ -7,6 +7,8 @@
 #include <QListWidget>
 #include <QStackedWidget>
 #include <functional>
+#include <QTimer>
+#include <QComboBox>
 
 class QLabel;
 
@@ -14,6 +16,10 @@ class RobotParameterDialog : public QDialog {
     Q_OBJECT
 public:
     explicit RobotParameterDialog(unsigned int devId, QWidget *parent = nullptr);
+
+protected:
+    // 声明事件过滤器函数，用于拦截鼠标滚轮
+    bool eventFilter(QObject *obj, QEvent *event) override;
 
 private slots:
     // 页面切换槽函数
@@ -26,6 +32,9 @@ private slots:
     void onDecreasePressed();
     void onDecreaseReleased();
 
+    void updateRealTimeStatus();
+    void onServoTimerTimeout();
+    void updateCoordinateSystems();
 private:
     unsigned int m_devId;
 
@@ -46,6 +55,17 @@ private:
 
     void handleJogButton(int axisIndex, bool positive, bool pressed, QLabel* statusLabel);
     void runAsyncCommand(std::function<void()> cmd);
+
+    QLabel* m_servoStatusLabel = nullptr;
+    QPushButton* m_manualPowerBtn = nullptr;
+    QTimer* m_servoTimer = nullptr;
+    bool m_isQueryingServo = false;
+
+    QComboBox* m_toolCombo = nullptr;
+    QComboBox* m_userCombo = nullptr;
+    bool m_isUpdatingCoords = false;
+    int m_currentJogMode = 0;
+    QLabel* m_posLabels[6] = {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
 };
 
 #endif // ROBOTPARAMETERDIALOG_H

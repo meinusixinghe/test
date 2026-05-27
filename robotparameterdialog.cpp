@@ -11,6 +11,10 @@
 #include <QDebug>
 #include <QGridLayout>
 #include <QStringList>
+#include <QScrollArea>
+#include <vector>
+#include <string>
+#include <QEvent>
 
 RobotParameterDialog::RobotParameterDialog(unsigned int devId, QWidget *parent)
     : QDialog(parent), m_devId(devId)
@@ -31,14 +35,12 @@ void RobotParameterDialog::setupUi()
 
     // 1. 创建左侧导航菜单
     m_navMenu = new QListWidget(this);
-    m_navMenu->setFixedWidth(120);
+    m_navMenu->setFixedWidth(100);
     m_navMenu->addItem("全局速度");
     m_navMenu->addItem("机器人运动");
-    // 你可以在这里继续添加：m_navMenu->addItem("TCP标定");
-    // 设置一些基础样式让它看起来更像工业软件的侧边栏
     m_navMenu->setStyleSheet(
         "QListWidget { border: 1px solid #ccc; background-color: #f8f9fa; outline: none; }"
-        "QListWidget::item { height: 40px; padding-left: 10px; }"
+        "QListWidget::item { height: 30px; padding-left: 10px; }"
         "QListWidget::item:selected { background-color: #2196F3; color: white; font-weight: bold; }"
         );
 
@@ -64,6 +66,20 @@ void RobotParameterDialog::setupUi()
 void RobotParameterDialog::switchPage(int index)
 {
     m_stackedWidget->setCurrentIndex(index);
+
+    // 如果没有初始化定时器，创建一下
+    if (!m_servoTimer) {
+        m_servoTimer = new QTimer(this);
+        connect(m_servoTimer, &QTimer::timeout, this, &RobotParameterDialog::onServoTimerTimeout);
+    }
+
+    if (index == 1) { // 1 代表运动控制页
+        updateRealTimeStatus();
+        updateCoordinateSystems();
+        m_servoTimer->start(500);
+    } else {
+        if (m_servoTimer->isActive()) m_servoTimer->stop();
+    }
 }
 
 // ==========================================
@@ -107,7 +123,7 @@ QWidget* RobotParameterDialog::createSpeedPage()
     m_increaseBtn = new QPushButton("速度 +", page);
 
     // 设置一点样式让按键更明显
-    QString btnStyle = "QPushButton { padding: 15px; font-weight: bold; background-color: #e0e0e0; border: 1px solid #aaa; border-radius: 4px; }"
+    QString btnStyle = "QPushButton { padding: 6px; font-weight: bold; background-color: #e0e0e0; border: 1px solid #aaa; border-radius: 4px; }"
                        "QPushButton:pressed { background-color: #bdbdbd; }";
     m_decreaseBtn->setStyleSheet(btnStyle);
     m_increaseBtn->setStyleSheet(btnStyle);
@@ -129,98 +145,202 @@ QWidget* RobotParameterDialog::createSpeedPage()
 }
 
 // ==========================================
-// 页面构建：机器人运动控制页 (Jogging)
+// 页面构建：机器人运动控制页 (Jogging) - 带滑动条支持
 // ==========================================
 QWidget* RobotParameterDialog::createMotionPage()
 {
+    // 1. 创建最外层的页面容器
     QWidget* page = new QWidget();
-    QVBoxLayout* layout = new QVBoxLayout(page);
-    layout->setContentsMargins(0, 0, 0, 0);
+    QVBoxLayout* mainLayout = new QVBoxLayout(page);
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+
+    // 2. 创建核心控件：滚动区域 (ScrollArea)
+    QScrollArea* scrollArea = new QScrollArea(page);
+    scrollArea->setWidgetResizable(true); // 极其关键：允许内部控件随窗口自适应缩放宽度
+    scrollArea->setFrameShape(QFrame::NoFrame); // 去除滚动区域的默认边框，更美观
+
+    // 3. 创建一个承载所有实际内容的内部 Widget
+    QWidget* scrollContent = new QWidget();
+    QVBoxLayout* layout = new QVBoxLayout(scrollContent);
+    layout->setContentsMargins(5, 5, 15, 5); // 右侧留一点边距给滚动条
 
     // ==========================================
-    // 1. 坐标系选择区域
+    // 1. 运动与工作坐标系选择区域
     // ==========================================
-    QGroupBox* modeGroup = new QGroupBox("运动坐标系设置", page);
-    QHBoxLayout* modeLayout = new QHBoxLayout(modeGroup);
-    modeLayout->addWidget(new QLabel("当前 Jog 坐标系:"));
+    QGroupBox* modeGroup = new QGroupBox("坐标系状态与设置", scrollContent);
+    QGridLayout* modeLayout = new QGridLayout(modeGroup);
 
-    QComboBox* jogModeCombo = new QComboBox(page);
+    modeLayout->addWidget(new QLabel("Jog 运动模式:"), 0, 0);
+    QComboBox* jogModeCombo = new QComboBox(scrollContent);
     jogModeCombo->addItem("0: 关节坐标系 (Joint)", 0);
-    jogModeCombo->addItem("1: 机器人坐标系 (Base)", 1);
+    jogModeCombo->addItem("1: 机器人基座坐标系 (Base)", 1);
     jogModeCombo->addItem("2: 工具坐标系 (Tool)", 2);
     jogModeCombo->addItem("3: 用户坐标系 (User)", 3);
     jogModeCombo->setStyleSheet("QComboBox { padding: 4px; font-size: 13px; }");
-    modeLayout->addWidget(jogModeCombo);
+    jogModeCombo->installEventFilter(this);
+    modeLayout->addWidget(jogModeCombo, 0, 1);
 
-    // 绑定下拉框切换事件：动态下发 SetJogMode
     connect(jogModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this, jogModeCombo](int index) {
         if (m_devId == 0) return;
         int mode = jogModeCombo->itemData(index).toInt();
-        unsigned int devId = m_devId;
-        runAsyncCommand([devId, mode]() {
-            RobotAPI::SetJogMode(mode, devId);
+        m_currentJogMode = mode;
+        runAsyncCommand([this, mode]() {
+            RobotAPI::SetJogMode(mode, m_devId);
         });
     });
+
+    modeLayout->addWidget(new QLabel("当前工具 (Tool):"), 1, 0);
+    m_toolCombo = new QComboBox(scrollContent);
+    m_toolCombo->setStyleSheet("QComboBox { padding: 4px; font-size: 13px; }");
+    m_toolCombo->installEventFilter(this);
+    modeLayout->addWidget(m_toolCombo, 1, 1);
+
+    connect(m_toolCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (m_isUpdatingCoords || index < 0 || m_devId == 0) return;
+        std::string toolName = m_toolCombo->itemText(index).toStdString();
+        runAsyncCommand([this, toolName]() {
+            int ret = RobotAPI::SetCurrentToolByName(toolName, m_devId);
+            if (ret != 0) qDebug() << "设置工具坐标系失败，错误码:" << ret;
+        });
+    });
+
+    modeLayout->addWidget(new QLabel("当前用户 (User):"), 2, 0);
+    m_userCombo = new QComboBox(scrollContent);
+    m_userCombo->setStyleSheet("QComboBox { padding: 4px; font-size: 13px; }");
+    m_userCombo->installEventFilter(this);
+    modeLayout->addWidget(m_userCombo, 2, 1);
+
+    connect(m_userCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (m_isUpdatingCoords || index < 0 || m_devId == 0) return;
+        std::string userName = m_userCombo->itemText(index).toStdString();
+        runAsyncCommand([this, userName]() {
+            int ret = RobotAPI::SetCurrentUframeByName(userName, m_devId);
+            if (ret != 0) qDebug() << "设置用户坐标系失败，错误码:" << ret;
+        });
+    });
+
     layout->addWidget(modeGroup);
 
     // ==========================================
-    // 2. 运动控制按钮与状态显示区域
+    // 2. 手动模式伺服上电控制区域
     // ==========================================
-    QGroupBox* jogGroup = new QGroupBox("轴控点动 (按住运行，松开停止)", page);
-    QVBoxLayout* jogMainLayout = new QVBoxLayout(jogGroup); // 垂直布局，用来放标签和下方的网格
+    QGroupBox* powerGroup = new QGroupBox("手动模式使能控制", scrollContent);
+    QHBoxLayout* powerLayout = new QHBoxLayout(powerGroup);
 
-    // 👉 错误状态监控标签
-    QLabel* jogStatusLabel = new QLabel("状态: 就绪", page);
+    m_manualPowerBtn = new QPushButton("读取状态中...", scrollContent);
+    m_manualPowerBtn->setCursor(Qt::PointingHandCursor);
+
+    m_servoStatusLabel = new QLabel("伺服状态: 未知", scrollContent);
+    m_servoStatusLabel->setStyleSheet("font-weight: bold; color: #757575;");
+
+    QPushButton* refreshStatusBtn = new QPushButton("刷新状态", scrollContent);
+    refreshStatusBtn->setCursor(Qt::PointingHandCursor);
+    refreshStatusBtn->setStyleSheet("QPushButton { padding: 4px 8px; font-size: 12px; }");
+
+    powerLayout->addWidget(m_manualPowerBtn);
+    powerLayout->addWidget(m_servoStatusLabel);
+    powerLayout->addWidget(refreshStatusBtn);
+    powerLayout->addStretch();
+    layout->addWidget(powerGroup);
+
+    connect(m_manualPowerBtn, &QPushButton::clicked, this, [this]() {
+        if (m_devId == 0) return;
+        m_manualPowerBtn->setEnabled(false);
+        m_manualPowerBtn->setText("动作中...");
+        m_manualPowerBtn->setStyleSheet("QPushButton { padding: 6px 12px; font-weight: bold; background-color: #9E9E9E; color: white; border-radius: 4px; }");
+
+        runAsyncCommand([this]() {
+            bool isEnabled = false;
+            RobotAPI::GetCurrentServoStatus(isEnabled, m_devId);
+
+            int ret = -1;
+            if (isEnabled) {
+                ret = RobotAPI::PowerOffManual(m_devId);
+            } else {
+                RobotAPI::GetPermission(m_devId);
+                ret = RobotAPI::PowerOnManual(m_devId);
+            }
+
+            QMetaObject::invokeMethod(this, [this, ret, isEnabled]() {
+                m_manualPowerBtn->setEnabled(true);
+                if (ret != 0) {
+                    QMessageBox::warning(this, "操作失败", QString("%1失败！错误码: %2").arg(isEnabled ? "下电" : "上电").arg(ret));
+                }
+            }, Qt::QueuedConnection);
+        });
+    });
+
+    connect(refreshStatusBtn, &QPushButton::clicked, this, &RobotParameterDialog::updateRealTimeStatus);
+
+    // ==========================================
+    // 3. 运动控制按钮与状态显示区域
+    // ==========================================
+    QGroupBox* jogGroup = new QGroupBox("轴控点动 (按住运行，松开停止)", scrollContent);
+    QVBoxLayout* jogMainLayout = new QVBoxLayout(jogGroup);
+
+    QLabel* jogStatusLabel = new QLabel("状态: 就绪", scrollContent);
     jogStatusLabel->setStyleSheet("color: #E53935; font-weight: bold; font-size: 13px;");
     jogMainLayout->addWidget(jogStatusLabel);
 
-    // 👉 核心修复：在这里声明并创建 gridLayout！
-    QWidget* gridWidget = new QWidget(page);
+    QWidget* gridWidget = new QWidget(scrollContent);
     QGridLayout* gridLayout = new QGridLayout(gridWidget);
     jogMainLayout->addWidget(gridWidget);
 
-    QString btnStyle = "QPushButton { padding: 8px; font-weight: bold; background-color: #e0e0e0; border: 1px solid #aaa; border-radius: 4px; font-size: 14px; }"
+    QString btnStyle = "QPushButton { padding: 4px 15px; font-weight: bold; background-color: #e0e0e0; border: 1px solid #aaa; border-radius: 4px; font-size: 16px; }"
                        "QPushButton:pressed { background-color: #4CAF50; color: white; border: 1px solid #388E3C; }";
     QStringList axisNames = { "1 轴 (X)", "2 轴 (Y)", "3 轴 (Z)", "4 轴 (RX)", "5 轴 (RY)", "6 轴 (RZ)" };
 
     for (int i = 0; i < 6; ++i) {
         QLabel* lblAxis = new QLabel(axisNames[i], gridWidget);
-        lblAxis->setFixedWidth(60);
+        lblAxis->setFixedWidth(55);
 
-        QPushButton* btnMinus = new QPushButton("- (Minus)", gridWidget);
-        QPushButton* btnPlus = new QPushButton("+ (Plus)", gridWidget);
+        QPushButton* btnMinus = new QPushButton("-", gridWidget);
+        QPushButton* btnPlus = new QPushButton("+", gridWidget);
+        btnMinus->setFixedWidth(50);
+        btnPlus->setFixedWidth(50);
 
         btnMinus->setStyleSheet(btnStyle); btnPlus->setStyleSheet(btnStyle);
         btnMinus->setCursor(Qt::PointingHandCursor); btnPlus->setCursor(Qt::PointingHandCursor);
 
-        // 使用刚才正确声明的 gridLayout
+        m_posLabels[i] = new QLabel("0.000", gridWidget);
+        m_posLabels[i]->setStyleSheet("font-family: Consolas, monospace; font-size: 14px; color: #1976D2; font-weight: bold;");
+        m_posLabels[i]->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        m_posLabels[i]->setFixedWidth(70);
+
+        // 依次放入网格的 0, 1, 2, 3 列
         gridLayout->addWidget(lblAxis, i, 0);
         gridLayout->addWidget(btnMinus, i, 1);
         gridLayout->addWidget(btnPlus, i, 2);
+        gridLayout->addWidget(m_posLabels[i], i, 3);
 
         int axisIndex = i + 1; // 1~6
-
-        connect(btnMinus, &QPushButton::pressed, this, [this, axisIndex, jogStatusLabel]() {
-            handleJogButton(axisIndex, false, true, jogStatusLabel);
-        });
-        connect(btnMinus, &QPushButton::released, this, [this, axisIndex, jogStatusLabel]() {
-            handleJogButton(axisIndex, false, false, jogStatusLabel);
-        });
-        connect(btnPlus, &QPushButton::pressed, this, [this, axisIndex, jogStatusLabel]() {
-            handleJogButton(axisIndex, true, true, jogStatusLabel);
-        });
-        connect(btnPlus, &QPushButton::released, this, [this, axisIndex, jogStatusLabel]() {
-            handleJogButton(axisIndex, true, false, jogStatusLabel);
-        });
+        connect(btnMinus, &QPushButton::pressed, this, [this, axisIndex, jogStatusLabel]() { handleJogButton(axisIndex, false, true, jogStatusLabel); });
+        connect(btnMinus, &QPushButton::released, this, [this, axisIndex, jogStatusLabel]() { handleJogButton(axisIndex, false, false, jogStatusLabel); });
+        connect(btnPlus, &QPushButton::pressed, this, [this, axisIndex, jogStatusLabel]() { handleJogButton(axisIndex, true, true, jogStatusLabel); });
+        connect(btnPlus, &QPushButton::released, this, [this, axisIndex, jogStatusLabel]() { handleJogButton(axisIndex, true, false, jogStatusLabel); });
     }
 
     layout->addWidget(jogGroup);
     layout->addStretch(); // 撑起空白部分
 
-    // 打开面板时默认发一次指令：切到下拉框第一个坐标系 (关节)
+    // ==========================================
+    // 4. 将内容 Widget 塞入滚动区域，并放入页面
+    // ==========================================
+    scrollArea->setWidget(scrollContent);
+    mainLayout->addWidget(scrollArea);
+
+    // ==========================================
+    // 5. 打开面板时的初始化操作
+    // ==========================================
     if (m_devId != 0) {
         unsigned int devId = m_devId;
-        runAsyncCommand([devId]() { RobotAPI::SetJogMode(0, devId); });
+        runAsyncCommand([this, devId]() {
+            RobotAPI::GetPermission(devId);
+            RobotAPI::SetJogMode(0, devId);
+
+            QMetaObject::invokeMethod(this, &RobotParameterDialog::updateRealTimeStatus, Qt::QueuedConnection);
+            QMetaObject::invokeMethod(this, &RobotParameterDialog::updateCoordinateSystems, Qt::QueuedConnection);
+        });
     }
 
     return page;
@@ -236,42 +356,55 @@ void RobotParameterDialog::handleJogButton(int axisIndex, bool positive, bool pr
     }
 
     unsigned int devId = m_devId;
-    int ret = 0;
 
-    switch (axisIndex) {
-    case 1:
-        ret = positive ? RobotAPI::Jog1Plus(pressed, devId)
-                       : RobotAPI::Jog1Minus(pressed, devId);
-        break;
-    case 2:
-        ret = positive ? RobotAPI::Jog2Plus(pressed, devId)
-                       : RobotAPI::Jog2Minus(pressed, devId);
-        break;
-    case 3:
-        ret = positive ? RobotAPI::Jog3Plus(pressed, devId)
-                       : RobotAPI::Jog3Minus(pressed, devId);
-        break;
-    case 4:
-        ret = positive ? RobotAPI::Jog4Plus(pressed, devId)
-                       : RobotAPI::Jog4Minus(pressed, devId);
-        break;
-    case 5:
-        ret = positive ? RobotAPI::Jog5Plus(pressed, devId)
-                       : RobotAPI::Jog5Minus(pressed, devId);
-        break;
-    case 6:
-        ret = positive ? RobotAPI::Jog6Plus(pressed, devId)
-                       : RobotAPI::Jog6Minus(pressed, devId);
-        break;
-    }
+    // ==========================================
+    // 👇 核心修复：必须把网络发送放到子线程中，绝对不阻塞 UI
+    // ==========================================
+    runAsyncCommand([this, axisIndex, positive, pressed, statusLabel, devId]() {
 
-    if (ret == 0) {
-        statusLabel->setText(pressed ? "状态: 运行中..." : "状态: 就绪");
-    } else {
-        statusLabel->setText(QString("%1失败，错误码: %2")
-                                 .arg(pressed ? "启动" : "停止")
-                                 .arg(ret));
-    }
+        // 1. 每次按下或松开前，必须强制确认获取一次操作令牌！(极其关键)
+        RobotAPI::GetPermission(devId);
+
+        int ret = 0;
+
+        // 2. 发送 Jog 指令
+        switch (axisIndex) {
+        case 1:
+            ret = positive ? RobotAPI::Jog1Plus(pressed, devId)
+                           : RobotAPI::Jog1Minus(pressed, devId);
+            break;
+        case 2:
+            ret = positive ? RobotAPI::Jog2Plus(pressed, devId)
+                           : RobotAPI::Jog2Minus(pressed, devId);
+            break;
+        case 3:
+            ret = positive ? RobotAPI::Jog3Plus(pressed, devId)
+                           : RobotAPI::Jog3Minus(pressed, devId);
+            break;
+        case 4:
+            ret = positive ? RobotAPI::Jog4Plus(pressed, devId)
+                           : RobotAPI::Jog4Minus(pressed, devId);
+            break;
+        case 5:
+            ret = positive ? RobotAPI::Jog5Plus(pressed, devId)
+                           : RobotAPI::Jog5Minus(pressed, devId);
+            break;
+        case 6:
+            ret = positive ? RobotAPI::Jog6Plus(pressed, devId)
+                           : RobotAPI::Jog6Minus(pressed, devId);
+            break;
+        }
+
+        QMetaObject::invokeMethod(this, [statusLabel, pressed, ret]() {
+            if (ret == 0) {
+                statusLabel->setText(pressed ? "状态: 运行中..." : "状态: 就绪");
+            } else {
+                statusLabel->setText(QString("%1失败，错误码: %2")
+                                         .arg(pressed ? "启动" : "停止")
+                                         .arg(ret));
+            }
+        }, Qt::QueuedConnection);
+    });
 }
 
 void RobotParameterDialog::runAsyncCommand(std::function<void()> cmd) {
@@ -313,4 +446,147 @@ void RobotParameterDialog::onDecreasePressed() {
 }
 void RobotParameterDialog::onDecreaseReleased() {
     if (m_devId != 0) runAsyncCommand([devId = m_devId]() { RobotAPI::DecreaseVelocity(false, devId); });
+}
+
+// ==========================================
+// 定时器触发：后台静默拉取状态
+// ==========================================
+void RobotParameterDialog::onServoTimerTimeout()
+{
+    // 如果上一次查询线程还没结束，直接跳过这次，防止 UI 卡顿
+    if (m_isQueryingServo) return;
+
+    updateRealTimeStatus();
+}
+
+// ==========================================
+// 核心状态刷新逻辑
+// ==========================================
+void RobotParameterDialog::updateRealTimeStatus()
+{
+    if (m_devId == 0 || !m_servoStatusLabel || !m_manualPowerBtn) return;
+
+    m_isQueryingServo = true; // 上锁
+
+    runAsyncCommand([this]() {
+        // 1. 获取伺服状态
+        bool isEnabled = false;
+        RobotAPI::GetCurrentServoStatus(isEnabled, m_devId);
+
+        // 2. 获取机器人位置
+        RobotAPI::PosData posData;
+        int retPos = RobotAPI::GetPositionData(posData, m_devId);
+
+        // 切回主线程更新 UI
+        QMetaObject::invokeMethod(this, [this, isEnabled, posData, retPos]() {
+            // 更新伺服 UI
+            if (isEnabled) {
+                m_servoStatusLabel->setText("伺服状态: 已上电 (ON)");
+                m_servoStatusLabel->setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 13px;");
+                m_manualPowerBtn->setText("手动模式下电");
+                m_manualPowerBtn->setStyleSheet("QPushButton { padding: 6px 12px; font-weight: bold; background-color: #E53935; color: white; border-radius: 4px; }");
+            } else {
+                m_servoStatusLabel->setText("伺服状态: 已下电 (OFF)");
+                m_servoStatusLabel->setStyleSheet("color: #E53935; font-weight: bold; font-size: 13px;");
+                m_manualPowerBtn->setText("手动模式上电");
+                m_manualPowerBtn->setStyleSheet("QPushButton { padding: 6px 12px; font-weight: bold; background-color: #4CAF50; color: white; border-radius: 4px; }");
+            }
+
+            // 更新位置坐标 UI
+            if (retPos == 0) {
+                for (int i = 0; i < 6; ++i) {
+                    if (!m_posLabels[i]) continue;
+
+                    double val = 0.0;
+                    // 根据 SDK 的 PosData 结构体：
+                    // 0: 关节模式 -> acsPos
+                    // 1: 基座模式 -> kcsPos
+                    // 2: 工具模式 -> (通常以基座呈现TCP，故用 kcsPos)
+                    // 3: 用户模式 -> pcsPos
+                    if (m_currentJogMode == 0) {
+                        val = posData.acsPos[i];
+                    } else if (m_currentJogMode == 3) {
+                        val = posData.pcsPos[i];
+                    } else {
+                        val = posData.kcsPos[i];
+                    }
+
+                    // 格式化为保留 3 位小数的字符串 (工业标准毫米/度)
+                    m_posLabels[i]->setText(QString::number(val, 'f', 3));
+                }
+            }
+
+            m_isQueryingServo = false; // 解锁
+        }, Qt::QueuedConnection);
+    });
+}
+
+// ==========================================
+// 独立功能：后台拉取工具/用户坐标系列表及当前选中项
+// ==========================================
+void RobotParameterDialog::updateCoordinateSystems()
+{
+    if (m_devId == 0 || !m_toolCombo || !m_userCombo) return;
+
+    runAsyncCommand([this]() {
+        std::vector<std::string> toolList;
+        std::vector<std::string> userList;
+        std::string currentTool;
+        std::string currentUser;
+
+        // SDK 调用：获取列表
+        RobotAPI::GetToolNameList(toolList, m_devId);
+        RobotAPI::GetUserNameList(userList, m_devId);
+
+        // SDK 调用：获取当前被选中的名称
+        RobotAPI::GetCurrentToolName(currentTool, m_devId);
+        RobotAPI::GetCurrentUframeName(currentUser, m_devId);
+
+        // 获取完毕后，切回主 UI 线程进行渲染
+        QMetaObject::invokeMethod(this, [this, toolList, userList, currentTool, currentUser]() {
+            // 👇【加锁】：屏蔽 comboBox 的 onChange 信号触发，防止数据刚填入就被当成用户点击下发给机器人
+            m_isUpdatingCoords = true;
+
+            // 1. 刷新 Tool 下拉框
+            m_toolCombo->clear();
+            for (const auto& name : toolList) {
+                m_toolCombo->addItem(QString::fromStdString(name));
+            }
+            int toolIdx = m_toolCombo->findText(QString::fromStdString(currentTool));
+            if (toolIdx >= 0) {
+                m_toolCombo->setCurrentIndex(toolIdx);
+            }
+
+            // 2. 刷新 User 下拉框
+            m_userCombo->clear();
+            for (const auto& name : userList) {
+                m_userCombo->addItem(QString::fromStdString(name));
+            }
+            int userIdx = m_userCombo->findText(QString::fromStdString(currentUser));
+            if (userIdx >= 0) {
+                m_userCombo->setCurrentIndex(userIdx);
+            }
+
+            // 👇【解锁】：渲染完毕，重新接受用户手动点击
+            m_isUpdatingCoords = false;
+        }, Qt::QueuedConnection);
+    });
+}
+
+// ==========================================
+// 事件过滤器：全局拦截特定控件的鼠标及按键事件
+// ==========================================
+bool RobotParameterDialog::eventFilter(QObject *obj, QEvent *event)
+{
+    // 如果触发的是鼠标滚轮事件
+    if (event->type() == QEvent::Wheel) {
+        // 判断被滚动的是不是 QComboBox
+        if (qobject_cast<QComboBox*>(obj)) {
+            // 忽略该事件，告诉 Qt 当前控件(下拉框)不处理滚轮
+            event->ignore();
+            return true;
+        }
+    }
+    // 对于其他事件或控件，按 Qt 默认逻辑继续处理
+    return QDialog::eventFilter(obj, event);
 }

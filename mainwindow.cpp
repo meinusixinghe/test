@@ -1292,7 +1292,6 @@ void MainWindow::onManageWeldingProcess()
 // ----------------------------------------------------
 void MainWindow::loadWeldingProcesses()
 {
-    // 路径：exe 同级目录下的 welding_processes.json
     QString path = QCoreApplication::applicationDirPath() + "/welding_processes.json";
     QFile file(path);
 
@@ -2399,6 +2398,6 @@ void MainWindow::onRobotParameterSettings()
 
     RobotParameterDialog* dialog = new RobotParameterDialog(m_currentDevId, this);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
-    dialog->setWindowFlags(dialog->windowFlags() | Qt::WindowStaysOnTopHint);
+    dialog->setWindowFlags(Qt::Tool);
     dialog->show();
 }
