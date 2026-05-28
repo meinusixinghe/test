@@ -37,6 +37,9 @@
 #include <QDateTime>
 #include <QTextStream>
 
+// 测试
+#include "motiontestdialog.h"
+
 namespace {
 struct RobotConnectResult {
     int ret = -1;
@@ -518,6 +521,37 @@ void MainWindow::setupUi()
         "QToolButton { padding: 6px; border: 1px solid transparent; border-radius: 4px; }"
         "QToolButton:hover { background-color: #E3F2FD; border: 1px solid #90CAF9; }"
         );
+
+
+    // =================================================================
+    // 👇【新增测试代码】：在“操作”菜单下注入测试 Action（极易查找、极易删除）
+    // =================================================================
+    QPushButton* mlinTestBtn = new QPushButton("🤖 打开 MLIN 测试界面", this);
+
+    // 设置按钮的大小和绝对位置 (X:20, Y:100, 宽:200, 高:40)
+    // 你可以根据你的主界面空缺位置，自己调整 20 和 100 这两个坐标数字
+    mlinTestBtn->setGeometry(20, 100, 200, 40);
+
+    // 给按钮加上醒目的黄色背景，方便测试完找到它并删掉
+    mlinTestBtn->setStyleSheet("background-color: #FFEB3B; font-weight: bold; border-radius: 5px;");
+    mlinTestBtn->show(); // 强制显示在最上层
+
+    // 绑定点击事件
+    connect(mlinTestBtn, &QPushButton::clicked, this, [this]() {
+        // m_currentDevId 是你在 MainWindow 里维护的连接 ID 变量
+        if (m_currentDevId == 0) {
+            QMessageBox::warning(this, "通信断开", "请确保主界面已成功建立机器人通信连接！");
+            return;
+        }
+
+        // 弹出测试面板
+        MotionTestDialog* testDialog = new MotionTestDialog(m_currentDevId, this);
+        testDialog->setAttribute(Qt::WA_DeleteOnClose);
+        testDialog->setWindowFlags(Qt::Tool);
+        testDialog->show();
+    });
+    // =================================================================
+
 
     // 5. 绑定选项卡点击逻辑，动态切换下方工具栏的内容
     auto switchTab = [=](QAction* currentTab) {

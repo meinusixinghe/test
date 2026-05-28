@@ -14,6 +14,7 @@ SOURCES += \
     connectiondialog.cpp \
     main.cpp \
     mainwindow.cpp \
+    motiontestdialog.cpp \
     positioningdialog.cpp \
     renderarea.cpp \
     robotparameterdialog.cpp \
@@ -30,6 +31,7 @@ HEADERS += \
     libs/efort-robotics/include/irobot.h \
     libs/efort-robotics/include/math_pose.hpp \
     mainwindow.h \
+    motiontestdialog.h \
     positioningdialog.h \
     renderarea.h \
     robotparameterdialog.h \
