@@ -1,8 +1,6 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
-#include <atomic>
-#include <memory>
 #include <QAction>
 #include <QCloseEvent>
 #include <QDate>
@@ -29,10 +27,6 @@
 #include <QVector3D>
 #include <QVBoxLayout>
 #include <QWidget>
-#include "robotparameterdialog.h"
-#include "weldingprocessdialog.h"
-#include "motiontestdialog.h"
-#include "taskprogramdialog.h"
 
 class QCalendarWidget;
 class RenderArea;
@@ -59,6 +53,10 @@ struct DrawingState {
     Hole mainPlateHole;
     QPolygonF mainPlateContour;
 };
+
+#include "robotparameterdialog.h"
+#include "weldingprocessdialog.h"
+#include "motiontestdialog.h"
 
 class FloatingToolWidget : public QWidget {
     Q_OBJECT

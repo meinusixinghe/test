@@ -36,6 +36,7 @@
 #include <QDir>
 #include <QDateTime>
 #include <QTextStream>
+#include "taskprogramdialog.h"
 
 // 测试
 #include "motiontestdialog.h"
@@ -918,7 +919,7 @@ void MainWindow::handleTableSelectionChanged()
     // 1. 获取当前表格中所有被选中的行号
     QList<int> selectedRows;
     QList<QTableWidgetItem*> selectedItems = dataTable->selectedItems();
-    for (auto item : selectedItems) {
+    for (auto item : std::as_const(selectedItems)) {
         int row = item->row();
         if (!selectedRows.contains(row)) {
             selectedRows.append(row);
@@ -1474,11 +1475,6 @@ void MainWindow::closeEvent(QCloseEvent *event)
         m_statusTimer->stop();
     }
 
-    m_stopRobotMotionRequested = true;
-    if (m_robotMotionStopFlag) {
-        m_robotMotionStopFlag->store(true);
-    }
-
     if (m_currentDevId != 0 && RobotAPI::IsConnected(m_currentDevId)) {
         if (m_statusLabel) {
             m_statusLabel->setText("正在安全停止机器人并清理状态...");
@@ -1640,8 +1636,6 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     if (watched == m_floatingToolWidget ||
         watched == m_toggleCoordBtn ||
         watched == m_startBtn ||
-        watched == m_pauseBtn ||
-        watched == m_resetBtn ||
         watched == m_powerBtn)
     {
         if (event->type() == QEvent::Enter || event->type() == QEvent::Leave) {
@@ -2099,7 +2093,6 @@ void MainWindow::toggleRobotPower()
     if (!m_isRobotPoweredOn) {
         showAndSaveLog(QString("正在尝试为机器人(Id: %1)上电...").arg(m_currentDevId));
 
-        // 👇 传入刚才 ConnectRobot 拿到的那个 m_currentDevId
         int ret = RobotAPI::PowerOn();
 
         if (ret == 0) {
@@ -2143,8 +2136,6 @@ void MainWindow::onStatusTimer()
         m_statusIconLabel->setStyleSheet("background-color: #F44336; border-radius: 8px;");
         m_statusTextLabel->setText("未连接");
         m_startBtn->setVisible(false);
-        m_pauseBtn->setVisible(false);
-        m_resetBtn->setVisible(false);
         return;
     }
 
@@ -2152,8 +2143,6 @@ void MainWindow::onStatusTimer()
     m_statusIconLabel->setStyleSheet("background-color: #4CAF50; border-radius: 8px;");
     m_statusTextLabel->setText("已连接");
     m_startBtn->setVisible(true);
-    if (!m_isWeldingProcessRunning) m_pauseBtn->setVisible(false);
-    m_resetBtn->setVisible(true);
 
     // 1. 获取伺服状态
     bool servoStatus = false;
@@ -2213,17 +2202,6 @@ void MainWindow::onStatusTimer()
     RobotAPI::GetCurrentAlarmStatus(alarmStatus, m_currentDevId);
     if (alarmStatus) {
         m_statusLabel->setText("机器人当前存在报警，请复位！");
-        if (m_isWeldingProcessRunning) {
-            m_isWeldingProcessRunning = false;
-            m_isRobotMotionRunning = false;
-            m_stopRobotMotionRequested = true;
-            if (m_robotMotionStopFlag) {
-                m_robotMotionStopFlag->store(true);
-            }
-            m_startBtn->setText("启动");
-            m_startBtn->setEnabled(true);
-            m_pauseBtn->setVisible(false);
-        }
     }
 }
 
