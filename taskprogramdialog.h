@@ -12,7 +12,7 @@ class TaskProgramDialog : public QDialog
 {
     Q_OBJECT
 public:
-    explicit TaskProgramDialog(unsigned int devId, const QVector<Hole>& holes, QWidget *parent = nullptr);
+    explicit TaskProgramDialog(unsigned int devId, const QVector<Contour>& paths, QWidget *parent = nullptr);
 
 private slots:
     void onAddRowClicked();
@@ -24,7 +24,7 @@ private slots:
     void onResetClicked();
 
 private:
-    void addRow(int moveType, int posType, double* pos, double speed, double acc, double dec, double overlap);
+    void addRow(int moveType, int posType, double* pos, double speed, double acc, double dec, double overlap, const QString& remark = "");
 
     unsigned int m_devId;
     QTableWidget* m_table;

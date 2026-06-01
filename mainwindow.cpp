@@ -1307,13 +1307,12 @@ void MainWindow::onStartClicked()
         return;
     }
 
-    if (weldHoles.isEmpty()) {
-        QMessageBox::warning(this, "无点位", "当前没有可运动的管孔点位，请先导入 DXF。");
+    if (m_displayPaths.isEmpty()) {
+        QMessageBox::warning(this, "无图纸", "当前没有可运行的加工线条，请先导入 DXF 图纸！");
         return;
     }
 
-    // 弹出任务控制台
-    TaskProgramDialog* dlg = new TaskProgramDialog(m_currentDevId, weldHoles, this);
+    TaskProgramDialog* dlg = new TaskProgramDialog(m_currentDevId, m_displayPaths, this);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->show();
 }
