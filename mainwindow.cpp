@@ -209,16 +209,13 @@ void FloatingToolWidget::setSliderVisible(bool visible) {
 
 MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
 {
-    // 1. 初始化 UI
     setupUi();
 
-    // 5. 初始化数据与自动连接
     loadWeldingProcesses();  // 启动时自动加载焊接工艺数据
 
     m_statusTimer = new QTimer(this);
     connect(m_statusTimer, &QTimer::timeout, this, &MainWindow::onStatusTimer);
 
-    // 👇 2. 自动连接逻辑 (使用 SDK)
     QDir::setCurrent(QCoreApplication::applicationDirPath());
     QSettings settings(QCoreApplication::applicationDirPath() + "/config.ini", QSettings::IniFormat);
     m_lastIp = settings.value("RobotIP", "192.168.1.12").toString();
@@ -482,7 +479,7 @@ void MainWindow::setupUi()
 
     // 4. 创建菜单栏
     menuBar()->hide();
-    // --- 提前创建好所有的功能 Action (有图标就传图标，没有就只传文字) ---
+    // --- 提前创建好所有的功能 Action---
     loadAction = new QAction(QIcon(":/img/images/import.png"), "导入DXF", this);
     rotateAction = new QAction("应用旋转矩阵", this);
     m_setupCoordAction = new QAction(QIcon(":/img/images/chuangjianzuobiaoxi.png"), "建立用户坐标系", this);
@@ -526,7 +523,7 @@ void MainWindow::setupUi()
     // =================================================================
     // 👇【新增测试代码】：在“操作”菜单下注入测试 Action（极易查找、极易删除）
     // =================================================================
-    QPushButton* mlinTestBtn = new QPushButton("🤖 打开 MLIN 测试界面", this);
+    QPushButton* mlinTestBtn = new QPushButton("测试界面", this);
 
     // 设置按钮的大小和绝对位置 (X:20, Y:100, 宽:200, 高:40)
     // 你可以根据你的主界面空缺位置，自己调整 20 和 100 这两个坐标数字
@@ -538,17 +535,19 @@ void MainWindow::setupUi()
 
     // 绑定点击事件
     connect(mlinTestBtn, &QPushButton::clicked, this, [this]() {
-        // m_currentDevId 是你在 MainWindow 里维护的连接 ID 变量
         if (m_currentDevId == 0) {
             QMessageBox::warning(this, "通信断开", "请确保主界面已成功建立机器人通信连接！");
             return;
         }
-
-        // 弹出测试面板
-        MotionTestDialog* testDialog = new MotionTestDialog(m_currentDevId, this);
-        testDialog->setAttribute(Qt::WA_DeleteOnClose);
-        testDialog->setWindowFlags(Qt::Tool);
-        testDialog->show();
+        if (!m_motionTestDialog) {
+            m_motionTestDialog = new MotionTestDialog(m_currentDevId, this);
+            m_motionTestDialog->setWindowFlags(Qt::Tool);
+        } else {
+            m_motionTestDialog->setDevId(m_currentDevId);
+        }
+        m_motionTestDialog->show();       // 显示窗口
+        m_motionTestDialog->raise();      // 提到最上层
+        m_motionTestDialog->activateWindow(); // 激活焦点
     });
     // =================================================================
 
@@ -616,18 +615,29 @@ void MainWindow::setupUi()
     autoFont.setBold(true);
     m_autoTextLabel->setFont(autoFont);
     m_autoTextLabel->setStyleSheet("color: #FF9800;");
+    // 分隔符 3
+    QLabel* separator3 = new QLabel(" | ", this);
+    separator2->setStyleSheet("color: #999; font-weight: bold;");
+    //
+    m_permissionBtn = new QPushButton("获取控制权 (未获取)", this);
+    m_permissionBtn->setCursor(Qt::PointingHandCursor);
+    m_permissionBtn->setStyleSheet("background-color: #9E9E9E; color: white; border-radius: 4px; padding: 5px 15px; font-weight: bold;");
     // 按顺序添加到布局
     statusLayout->addWidget(m_statusIconLabel);
     statusLayout->addWidget(m_statusTextLabel);
-    statusLayout->addSpacing(10);
+    statusLayout->addSpacing(5);
     statusLayout->addWidget(separator1);
-    statusLayout->addSpacing(10);
+    statusLayout->addSpacing(5);
     statusLayout->addWidget(m_servoIconLabel);
     statusLayout->addWidget(m_servoTextLabel);
-    statusLayout->addSpacing(10);
+    statusLayout->addSpacing(5);
     statusLayout->addWidget(separator2);
-    statusLayout->addSpacing(10);
+    statusLayout->addSpacing(5);
     statusLayout->addWidget(m_autoTextLabel);
+    statusLayout->addSpacing(5);
+    statusLayout->addWidget(separator3);
+    statusLayout->addSpacing(5);
+    statusLayout->addWidget(m_permissionBtn);
     statusBar()->addPermanentWidget(statusContainer);
     statusLayout->setContentsMargins(5, 0, 5, 0);
     statusLayout->setSpacing(5);
@@ -683,6 +693,7 @@ void MainWindow::setupUi()
         m_floatingToolWidget->raise();
     });
     connect(renderArea, &RenderArea::itemDeleted, this, &MainWindow::handleItemDeleted);
+    connect(m_permissionBtn, &QPushButton::clicked, this, &MainWindow::onPermissionBtnClicked);
 
     connect(m_floatingToolWidget->sliderEraserSize, &QSlider::valueChanged, this, [this](int value){
         m_floatingToolWidget->lblEraserSize->setText(QString::number(value));
@@ -2388,6 +2399,27 @@ void MainWindow::onStatusTimer()
         m_servoIconLabel->setStyleSheet("background-color: #9E9E9E; border-radius: 8px;");
         m_servoTextLabel->setText("伺服断开");
     }
+    if (servoStatus != m_isRobotPoweredOn) {
+        m_isRobotPoweredOn = servoStatus; // 同步标志位
+
+        if (m_isRobotPoweredOn) {
+            m_powerBtn->setText("机器人断电");
+            m_powerBtn->setStyleSheet(
+                "QPushButton {"
+                "   background-color: #E53935; color: white; border: 1px solid #D32F2F; border-radius: 4px; padding: 5px 15px;"
+                "}"
+                "QPushButton:hover { background-color: #EF5350; }"
+                );
+        } else {
+            m_powerBtn->setText("机器人上电");
+            m_powerBtn->setStyleSheet(
+                "QPushButton {"
+                "   background-color: #2196F3; color: white; border: 1px solid #1E88E5; border-radius: 4px; padding: 5px 15px;"
+                "}"
+                "QPushButton:hover { background-color: #42A5F5; }"
+                );
+        }
+    }
 
     // 2. 获取自动/手动模式
     RoboxKeyMode keyMode = RoboxKeyMode::ROBOX_MODE_MANUAL;
@@ -2434,4 +2466,68 @@ void MainWindow::onRobotParameterSettings()
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowFlags(Qt::Tool);
     dialog->show();
+}
+
+// =================================================================
+// 功能：示教器权限获取与释放 (异步无阻塞)
+// =================================================================
+void MainWindow::onPermissionBtnClicked()
+{
+    // 防呆拦截：必须先建立网络连接
+    if (m_currentDevId == 0) {
+        QMessageBox::warning(this, "未连接", "请先连接机器人，再尝试获取控制权！");
+        return;
+    }
+
+    // 防止用户狂点导致指令堆叠，先禁用按钮并变色提示
+    m_permissionBtn->setEnabled(false);
+    m_permissionBtn->setText("正在切换权限...");
+    m_permissionBtn->setStyleSheet("background-color: #FF9800; color: white; border-radius: 4px; padding: 5px 15px; font-weight: bold;");
+
+    // 开启子线程去跟控制器通信
+    QThread* worker = QThread::create([this]() {
+        int ret = -1;
+        bool targetState = !m_hasPermission; // 目标状态是当前状态的反转
+
+        // 调用对应的 SDK 接口
+        if (targetState) {
+            ret = RobotAPI::GetPermission(m_currentDevId); // 去获取
+        } else {
+            ret = RobotAPI::ReleasePermission(m_currentDevId); // 去释放
+        }
+
+        // 通信完毕，安全切回主 UI 线程更新界面
+        QMetaObject::invokeMethod(this, [this, ret, targetState]() {
+            m_permissionBtn->setEnabled(true); // 恢复按钮可点
+
+            if (ret == 0) {
+                // 成功：更新本地标志位
+                m_hasPermission = targetState;
+
+                // 根据新状态，改变右下角按钮的颜色和文字
+                if (m_hasPermission) {
+                    m_permissionBtn->setText("释放控制权 (已获取)");
+                    m_permissionBtn->setStyleSheet("background-color: #4CAF50; color: white; border-radius: 4px; padding: 5px 15px; font-weight: bold;");
+                } else {
+                    m_permissionBtn->setText("获取控制权 (未获取)");
+                    m_permissionBtn->setStyleSheet("background-color: #9E9E9E; color: white; border-radius: 4px; padding: 5px 15px; font-weight: bold;");
+                }
+            } else {
+                // 失败：报错并恢复原本的按钮样式
+                QMessageBox::warning(this, "权限切换失败",
+                                     QString("操作失败！\n错误码: %1\n\n提示：如果是获取失败，请检查示教器屏幕上的【权限状态灯】是否为黄色（已释放状态）。").arg(ret));
+
+                if (m_hasPermission) {
+                    m_permissionBtn->setText("释放控制权 (已获取)");
+                    m_permissionBtn->setStyleSheet("background-color: #4CAF50; color: white; border-radius: 4px; padding: 5px 15px; font-weight: bold;");
+                } else {
+                    m_permissionBtn->setText("获取控制权 (未获取)");
+                    m_permissionBtn->setStyleSheet("background-color: #9E9E9E; color: white; border-radius: 4px; padding: 5px 15px; font-weight: bold;");
+                }
+            }
+        }, Qt::QueuedConnection);
+    });
+
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    worker->start();
 }

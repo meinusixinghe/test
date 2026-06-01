@@ -31,6 +31,7 @@
 #include <QWidget>
 #include "robotparameterdialog.h"
 #include "weldingprocessdialog.h"
+#include "motiontestdialog.h"
 
 class QCalendarWidget;
 class RenderArea;
@@ -121,6 +122,7 @@ private slots:
     void toggleRobotPower();
     void onStatusTimer();
     void onRobotParameterSettings();
+    void onPermissionBtnClicked();
 
 private:
     void loadDrawingData(const QString &filePath);
@@ -209,6 +211,11 @@ private:
     QTimer* m_statusTimer;
 
     QAction* m_robotParamAction;
+
+    MotionTestDialog* m_motionTestDialog = nullptr;
+
+    QPushButton* m_permissionBtn = nullptr;
+    bool m_hasPermission = false;
 };
 
 #endif

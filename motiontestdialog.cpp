@@ -28,6 +28,7 @@ void MotionTestDialog::setupUi()
     m_navMenu->setFixedWidth(160);
     m_navMenu->addItem("非阻塞直线 (MLIN)");
     m_navMenu->addItem("组合运动 (MultiMove)");
+    m_navMenu->addItem("第2类组合 (MultiMove2)");
     m_navMenu->setStyleSheet(
         "QListWidget { border: 1px solid #ccc; background-color: #f8f9fa; outline: none; font-weight: bold; }"
         "QListWidget::item { height: 40px; padding-left: 10px; }"
@@ -38,6 +39,7 @@ void MotionTestDialog::setupUi()
     m_stackedWidget = new QStackedWidget(this);
     m_stackedWidget->addWidget(createMlinPage());      // 索引 0
     m_stackedWidget->addWidget(createMultiMovePage()); // 索引 1
+    m_stackedWidget->addWidget(createMultiMove2Page());
 
     mainLayout->addWidget(m_navMenu);
     mainLayout->addWidget(m_stackedWidget);
@@ -69,9 +71,9 @@ QWidget* MotionTestDialog::createMlinPage()
     tableLayout->addWidget(m_mlinTable);
 
     QHBoxLayout* editLayout = new QHBoxLayout();
-    QPushButton* addBtn = new QPushButton("➕ 添加空点位", page);
-    QPushButton* removeBtn = new QPushButton("➖ 删除选中", page);
-    QPushButton* getPosBtn = new QPushButton("📍 获取当前笛卡尔坐标", page);
+    QPushButton* addBtn = new QPushButton("添加空点位", page);
+    QPushButton* removeBtn = new QPushButton("删除选中", page);
+    QPushButton* getPosBtn = new QPushButton("获取当前笛卡尔坐标", page);
 
     editLayout->addWidget(addBtn); editLayout->addWidget(removeBtn); editLayout->addWidget(getPosBtn);
     editLayout->addStretch();
@@ -82,7 +84,7 @@ QWidget* MotionTestDialog::createMlinPage()
     m_mlinStatusLabel = new QLabel("状态: 准备就绪...", page);
     m_mlinStatusLabel->setStyleSheet("color: #1976D2; font-weight: bold;");
 
-    m_mlinRunBtn = new QPushButton("🚀 执行 MLIN 队列", page);
+    m_mlinRunBtn = new QPushButton("执行 MLIN 队列", page);
     m_mlinRunBtn->setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px;");
 
     bottomLayout->addWidget(m_mlinStatusLabel);
@@ -182,10 +184,10 @@ QWidget* MotionTestDialog::createMultiMovePage()
     tableLayout->addWidget(m_multiTable);
 
     QHBoxLayout* editLayout = new QHBoxLayout();
-    QPushButton* addBtn = new QPushButton("➕ 添加", page);
-    QPushButton* removeBtn = new QPushButton("➖ 删除", page);
-    QPushButton* getJointBtn = new QPushButton("📍 获取关节(Type1)", page);
-    QPushButton* getCartBtn = new QPushButton("📍 获取笛卡尔(Type2)", page);
+    QPushButton* addBtn = new QPushButton("添加", page);
+    QPushButton* removeBtn = new QPushButton("删除", page);
+    QPushButton* getJointBtn = new QPushButton("获取关节(Type1)", page);
+    QPushButton* getCartBtn = new QPushButton("获取笛卡尔(Type2)", page);
 
     editLayout->addWidget(addBtn); editLayout->addWidget(removeBtn);
     editLayout->addWidget(getJointBtn); editLayout->addWidget(getCartBtn);
@@ -197,7 +199,7 @@ QWidget* MotionTestDialog::createMultiMovePage()
     m_multiStatusLabel = new QLabel("状态: 准备就绪...", page);
     m_multiStatusLabel->setStyleSheet("color: #E53935; font-weight: bold;"); // 红色警示色
 
-    m_multiRunBtn = new QPushButton("🚀 执行组合运动 (自动 Reset)", page);
+    m_multiRunBtn = new QPushButton("执行组合运动 (自动 Reset)", page);
     m_multiRunBtn->setStyleSheet("background-color: #FF9800; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px;");
 
     bottomLayout->addWidget(m_multiStatusLabel);
@@ -284,7 +286,7 @@ void MotionTestDialog::onExecuteMultiMoveClicked() {
         RobotAPI::MultiMovePos mp;
 
         QComboBox* combo = qobject_cast<QComboBox*>(m_multiTable->cellWidget(r, 0));
-        if(combo) mp.type = combo->currentText().left(1).toInt(); // 截取 "1", "2", "3" 转为整数
+        if(combo) mp.type = combo->currentText().left(1).toInt(); /* 截取 "1", "2", "3" 转为整数 */
         else mp.type = 2; // 容错兜底
 
         for (int i = 0; i < 6; ++i) mp.pos[i] = m_multiTable->item(r, i + 1)->text().toDouble();
@@ -311,6 +313,188 @@ void MotionTestDialog::onExecuteMultiMoveClicked() {
             } else {
                 m_multiStatusLabel->setText(QString("组合运动失败，错误码: %1").arg(ret));
                 QMessageBox::warning(this, "下发失败", QString("MultiMoveStart 被拒绝！错误码: %1").arg(ret));
+            }
+        }, Qt::QueuedConnection);
+    });
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    worker->start();
+}
+
+// =======================================================================
+// 第三页：第2类组合运动 (MultiMove2) 构建与逻辑
+// =======================================================================
+QWidget* MotionTestDialog::createMultiMove2Page()
+{
+    QWidget* page = new QWidget();
+    QVBoxLayout* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 0, 0, 0);
+
+    QGroupBox* tableGroup = new QGroupBox("MultiMove2 高级运动队列 (支持加减速设定)", page);
+    QVBoxLayout* tableLayout = new QVBoxLayout(tableGroup);
+
+    // 表格增加至 12 列，涵盖 acc 和 dec
+    m_multi2Table = new QTableWidget(0, 12, page);
+    m_multi2Table->setHorizontalHeaderLabels({"插补模式", "位置类型", "J1/X", "J2/Y", "J3/Z", "J4/RX", "J5/RY", "J6/RZ", "速度", "加Acc", "减Dec", "Overlap"});
+    m_multi2Table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    m_multi2Table->horizontalHeader()->setStretchLastSection(true);
+    m_multi2Table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    tableLayout->addWidget(m_multi2Table);
+
+    QHBoxLayout* editLayout = new QHBoxLayout();
+    QPushButton* addBtn = new QPushButton("添加", page);
+    QPushButton* removeBtn = new QPushButton("删除", page);
+    QPushButton* getJointBtn = new QPushButton("获取关节(posType=1)", page);
+    QPushButton* getCartBtn = new QPushButton("获取笛卡尔(posType=2)", page);
+
+    editLayout->addWidget(addBtn); editLayout->addWidget(removeBtn);
+    editLayout->addWidget(getJointBtn); editLayout->addWidget(getCartBtn);
+    editLayout->addStretch();
+    tableLayout->addLayout(editLayout);
+    layout->addWidget(tableGroup);
+
+    QHBoxLayout* bottomLayout = new QHBoxLayout();
+    m_multi2StatusLabel = new QLabel("状态: 准备就绪...", page);
+    m_multi2StatusLabel->setStyleSheet("color: #9C27B0; font-weight: bold;"); // 紫色区分
+
+    m_multi2RunBtn = new QPushButton("执行 MultiMove2 (自动 Reset)", page);
+    m_multi2RunBtn->setStyleSheet("background-color: #9C27B0; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px;");
+
+    bottomLayout->addWidget(m_multi2StatusLabel);
+    bottomLayout->addStretch();
+    bottomLayout->addWidget(m_multi2RunBtn);
+    layout->addLayout(bottomLayout);
+
+    connect(addBtn, &QPushButton::clicked, this, &MotionTestDialog::onMulti2AddRowClicked);
+    connect(removeBtn, &QPushButton::clicked, this, &MotionTestDialog::onMulti2RemoveRowClicked);
+    connect(getJointBtn, &QPushButton::clicked, this, &MotionTestDialog::onMulti2GetJointPosClicked);
+    connect(getCartBtn, &QPushButton::clicked, this, &MotionTestDialog::onMulti2GetCartPosClicked);
+    connect(m_multi2RunBtn, &QPushButton::clicked, this, &MotionTestDialog::onExecuteMultiMove2Clicked);
+
+    return page;
+}
+
+void MotionTestDialog::addRowToMulti2Table(int moveType, int posType, double* pos, double speed, double acc, double dec, double overlap)
+{
+    int row = m_multi2Table->rowCount();
+    m_multi2Table->insertRow(row);
+    double defaultPos[6] = {0,0,0,0,0,0};
+    if (!pos) pos = defaultPos;
+
+    // 单元格 0: moveType (插补模式)
+    QComboBox* moveCombo = new QComboBox();
+    moveCombo->addItems({"1: 关节(Joint)", "2: 直线(Lin)", "3: 圆弧(Circ)", "4: 圆角(CircAng)"});
+    if (moveType >= 1 && moveType <= 4) moveCombo->setCurrentIndex(moveType - 1);
+    m_multi2Table->setCellWidget(row, 0, moveCombo);
+
+    // 单元格 1: posType (位置类型)
+    QComboBox* posCombo = new QComboBox();
+    posCombo->addItems({"1: Joint数据", "2: Cart数据"});
+    if (posType == 1 || posType == 2) posCombo->setCurrentIndex(posType - 1);
+    m_multi2Table->setCellWidget(row, 1, posCombo);
+
+    // 坐标与参数填入
+    for (int i = 0; i < 6; ++i) m_multi2Table->setItem(row, i + 2, new QTableWidgetItem(QString::number(pos[i], 'f', 3)));
+
+    m_multi2Table->setItem(row, 8, new QTableWidgetItem(QString::number(speed, 'f', 1)));
+    m_multi2Table->setItem(row, 9, new QTableWidgetItem(QString::number(acc, 'f', 1)));
+    m_multi2Table->setItem(row, 10, new QTableWidgetItem(QString::number(dec, 'f', 1)));
+    m_multi2Table->setItem(row, 11, new QTableWidgetItem(QString::number(overlap, 'f', 1)));
+}
+
+void MotionTestDialog::onMulti2AddRowClicked() { addRowToMulti2Table(2, 2); }
+void MotionTestDialog::onMulti2RemoveRowClicked() {
+    if (m_multi2Table->currentRow() >= 0) m_multi2Table->removeRow(m_multi2Table->currentRow());
+}
+
+void MotionTestDialog::onMulti2GetJointPosClicked() {
+    if (m_devId == 0) return;
+    QThread* worker = QThread::create([this]() {
+        RobotAPI::PosData pd;
+        int ret = RobotAPI::GetPositionData(pd, m_devId);
+        QMetaObject::invokeMethod(this, [this, ret, pd]() {
+            if (ret == 0) {
+                double p[6]; for(int i=0; i<6; i++) p[i] = pd.acsPos[i];
+                addRowToMulti2Table(1, 1, p, 100, 50, 50, 0); // moveType=1(关节插补), posType=1(关节数据)
+            }
+        }, Qt::QueuedConnection);
+    });
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    worker->start();
+}
+
+void MotionTestDialog::onMulti2GetCartPosClicked() {
+    if (m_devId == 0) return;
+    QThread* worker = QThread::create([this]() {
+        RobotAPI::PosData pd;
+        int ret = RobotAPI::GetPositionData(pd, m_devId);
+        QMetaObject::invokeMethod(this, [this, ret, pd]() {
+            if (ret == 0) {
+                double p[6]; for(int i=0; i<6; i++) p[i] = pd.kcsPos[i];
+                addRowToMulti2Table(2, 2, p, 100, 50, 50, 0); // moveType=2(直线插补), posType=2(Cart数据)
+            }
+        }, Qt::QueuedConnection);
+    });
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    worker->start();
+}
+
+void MotionTestDialog::onExecuteMultiMove2Clicked() {
+    int rowCount = m_multi2Table->rowCount();
+    if (m_devId == 0 || rowCount == 0) return;
+
+    // SDK 数据结构：MultiMoveInfo2 (在某些 SDK 版本中被typedef 为 BlockMultiMoveInfo)
+    std::vector<RobotAPI::MultiMoveInfo2> mps;
+
+    for (int r = 0; r < rowCount; ++r) {
+        RobotAPI::MultiMoveInfo2 mp;
+        memset(&mp, 0, sizeof(RobotAPI::MultiMoveInfo2)); // 内存清零，防止无效标志位导致机器人死机
+
+        QComboBox* moveCombo = qobject_cast<QComboBox*>(m_multi2Table->cellWidget(r, 0));
+        mp.moveType = moveCombo ? moveCombo->currentText().left(1).toInt() : 2;
+
+        QComboBox* posCombo = qobject_cast<QComboBox*>(m_multi2Table->cellWidget(r, 1));
+        mp.posType = posCombo ? posCombo->currentText().left(1).toInt() : 2;
+
+        // 提取坐标系数据，并根据 posType 存入 ap(关节) 或 cp(笛卡尔)
+        double p[6];
+        for (int i = 0; i < 6; ++i) p[i] = m_multi2Table->item(r, i + 2)->text().toDouble();
+
+        if (mp.posType == 1) { // 关节坐标系 (使用 j 数组，下标 0~5 对应 1~6 轴)
+            mp.ap[0].j[0] = p[0]; mp.ap[0].j[1] = p[1]; mp.ap[0].j[2] = p[2];
+            mp.ap[0].j[3] = p[3]; mp.ap[0].j[4] = p[4]; mp.ap[0].j[5] = p[5];
+        } else { // 笛卡尔坐标系 (x,y,z,a,b,c 是独立的成员变量)
+            mp.cp[0].x = p[0]; mp.cp[0].y = p[1]; mp.cp[0].z = p[2];
+            mp.cp[0].a = p[3]; mp.cp[0].b = p[4]; mp.cp[0].c = p[5];
+        }
+
+        mp.speed = m_multi2Table->item(r, 8)->text().toDouble();
+        mp.acc = m_multi2Table->item(r, 9)->text().toDouble();
+        mp.dec = m_multi2Table->item(r, 10)->text().toDouble();
+        mp.jerk = 0; // 默认平滑
+        mp.overlapping = m_multi2Table->item(r, 11)->text().toDouble();
+        mp.auxOverlapping = 0;
+        mp.flags = 0;
+
+        mps.push_back(mp);
+    }
+
+    m_multi2RunBtn->setEnabled(false);
+    m_multi2StatusLabel->setText("正在重置并下发 MultiMove2 ...");
+
+    QThread* worker = QThread::create([this, mps, devId = m_devId]() {
+        // 执行前强制调用第 2 类组合重置
+        RobotAPI::MultiMove2Reset(devId);
+
+        // 下发整个列队
+        int ret = RobotAPI::MultiMove2Start(mps, devId);
+
+        QMetaObject::invokeMethod(this, [this, ret]() {
+            m_multi2RunBtn->setEnabled(true);
+            if (ret == 0) {
+                m_multi2StatusLabel->setText("MultiMove2 下发成功 (ERROR_OK)！");
+            } else {
+                m_multi2StatusLabel->setText(QString("MultiMove2 失败，错误码: %1").arg(ret));
+                QMessageBox::warning(this, "下发失败", QString("MultiMove2Start 被拒绝！\n错误码: %1\n请检查加减速度(acc/dec)是否有效，以及坐标数据(posType)是否匹配。").arg(ret));
             }
         }, Qt::QueuedConnection);
     });
