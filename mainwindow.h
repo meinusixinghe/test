@@ -32,6 +32,7 @@
 #include "robotparameterdialog.h"
 #include "weldingprocessdialog.h"
 #include "motiontestdialog.h"
+#include "taskprogramdialog.h"
 
 class QCalendarWidget;
 class RenderArea;
@@ -105,9 +106,6 @@ private slots:
     void onManageWeldingProcess();
     void onConnectTriggered();
     void onStartClicked();
-    void onPauseClicked();
-    void onResetClicked();
-    void sendNextWeldHole();
     void restoreDrawing();
     void handleItemDeleted(const QPointF &pos);
     void handleBulkPathsDeleted(QList<int> indices);
@@ -123,6 +121,7 @@ private slots:
     void onStatusTimer();
     void onRobotParameterSettings();
     void onPermissionBtnClicked();
+    void onRoboxModeChanged(int index);
 
 private:
     void loadDrawingData(const QString &filePath);
@@ -163,8 +162,6 @@ private:
     QAction* m_connectAction;
 
     QPushButton* m_startBtn;
-    QPushButton* m_pauseBtn;
-    QPushButton* m_resetBtn;
 
     QString m_lastIp = "192.168.1.10";
     QLabel* m_statusIconLabel;
@@ -173,16 +170,13 @@ private:
     QLabel* m_servoIconLabel;
     QLabel* m_servoTextLabel;
 
-    QLabel* m_autoTextLabel;
+    QPushButton* m_permissionBtn = nullptr;
+    bool m_hasPermission = false;
+    QComboBox* m_modeCombo = nullptr;
+    int m_lastModeIndex = 0;
 
     bool m_isShuttingDown = false;
     bool m_isRobotCommandRunning = false;
-    bool m_isRobotMotionRunning = false;
-    bool m_stopRobotMotionRequested = false;
-    std::shared_ptr<std::atomic_bool> m_robotMotionStopFlag;
-
-    int m_currentWeldIndex = 0;
-    bool m_isWeldingProcessRunning = false;
 
     QAction* m_imageProcessAction;
     FloatingToolWidget* m_floatingToolWidget;
@@ -214,8 +208,6 @@ private:
 
     MotionTestDialog* m_motionTestDialog = nullptr;
 
-    QPushButton* m_permissionBtn = nullptr;
-    bool m_hasPermission = false;
 };
 
 #endif
