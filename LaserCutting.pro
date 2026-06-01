@@ -20,7 +20,6 @@ SOURCES += \
     robotparameterdialog.cpp \
     rotationmatrixdialog.cpp \
     taskprogramdialog.cpp \
-    usercoordinatemanager.cpp \
     weldingprocessdialog.cpp
 
 HEADERS += \
@@ -38,7 +37,6 @@ HEADERS += \
     robotparameterdialog.h \
     rotationmatrixdialog.h \
     taskprogramdialog.h \
-    usercoordinatemanager.h \
     weldingprocessdialog.h
 
 FORMS += \

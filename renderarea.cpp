@@ -172,90 +172,6 @@ void RenderArea::paintEvent(QPaintEvent *event)
         }
     }
 
-    // 绘制用户坐标系
-    if (m_showUserCoordinate) {
-        painter.save();
-
-        // 1. 动态计算参考大小 (依据管板实际物理尺寸边界)
-        double contentW = m_dxfMaxBound.x() - m_dxfMinBound.x();
-        double contentH = m_dxfMaxBound.y() - m_dxfMinBound.y();
-        double refSize = std::max(contentW, contentH);
-        if (refSize < 1.0) refSize = 100.0; // 防止异常数据的安全后备
-
-        // 2. 根据管板大小动态计算各元素尺寸
-        double originRadius = refSize * 0.01;  // 原点半径取 1%
-        double arrowSize = refSize * 0.03;      // 箭头大小取 2%
-        double fontSize = refSize * 0.025;       // 字体大小取 1.5%
-        double textOffset = refSize * 0.02;
-
-        // 绘制原点
-        QPen originPen(Qt::yellow, 0);
-        originPen.setCosmetic(true);
-        originPen.setWidth(5);
-        painter.setPen(originPen);
-        painter.setBrush(Qt::yellow);
-        painter.drawEllipse(m_userOrigin, originRadius, originRadius);
-
-        // 绘制 X轴
-        QPen xAxisPen(Qt::red, 0);
-        xAxisPen.setCosmetic(true);
-        xAxisPen.setWidth(2);
-        painter.setPen(xAxisPen);
-        painter.drawLine(m_userOrigin, m_userXAxis);
-
-        // 绘制 X轴箭头
-        QPointF dir = m_userXAxis - m_userOrigin;
-        double length = std::hypot(dir.x(), dir.y());
-        if (length > 0) dir /= length;
-        QPointF arrowBase = m_userXAxis - dir * arrowSize * 0.5;
-        QPointF perp(-dir.y(), dir.x());
-        QPointF arrowP2 = arrowBase + perp * (arrowSize * 0.3);
-        QPointF arrowP3 = arrowBase - perp * (arrowSize * 0.3);
-        QPolygonF arrowHead;
-        arrowHead << m_userXAxis << arrowP2 << arrowP3;
-        painter.setBrush(Qt::red);
-        painter.drawPolygon(arrowHead);
-        painter.setBrush(Qt::NoBrush);
-
-        // x轴文字
-        painter.save();
-        painter.scale(1.0, -1.0);
-        QFont xFont = painter.font();
-        xFont.setPointSizeF(fontSize);
-        painter.setFont(xFont);
-        painter.drawText(m_userXAxis.x() + textOffset, -(m_userXAxis.y() - textOffset), "X轴");
-        painter.restore();
-
-        // 绘制平面参考线(Y轴)
-        QPen yAxisPen(Qt::darkGreen, 0);
-        yAxisPen.setCosmetic(true);
-        yAxisPen.setWidth(2);
-        painter.setPen(yAxisPen);
-        painter.drawLine(m_userOrigin, m_userPlanePoint);
-
-        QPointF dirY = m_userPlanePoint - m_userOrigin;
-        double lengthY = std::hypot(dirY.x(), dirY.y());
-        if (lengthY > 0) dirY /= lengthY;
-        QPointF arrowBaseY = m_userPlanePoint - dirY * arrowSize * 0.5;
-        QPointF perpY(-dirY.y(), dirY.x());
-        QPointF arrowP2Y = arrowBaseY + perpY * (arrowSize * 0.3);
-        QPointF arrowP3Y = arrowBaseY - perpY * (arrowSize * 0.3);
-        QPolygonF arrowHeadY;
-        arrowHeadY << m_userPlanePoint << arrowP2Y << arrowP3Y;
-        painter.setBrush(Qt::darkGreen);
-        painter.drawPolygon(arrowHeadY);
-        painter.setBrush(Qt::NoBrush);
-
-        // y轴文字
-        painter.save();
-        painter.scale(1.0, -1.0);
-        QFont yFont = painter.font();
-        yFont.setPointSizeF(fontSize);
-        painter.setFont(yFont);
-        painter.drawText(m_userPlanePoint.x() + textOffset, -(m_userPlanePoint.y() - textOffset), "Y轴");
-        painter.restore();
-    }
-
     if (m_isEraserMode && !m_isMiddlePanning) {
         QPoint localPos = mapFromGlobal(QCursor::pos());
         if (rect().contains(localPos) && childAt(localPos) == nullptr) {
@@ -556,26 +472,6 @@ void RenderArea::applyCurrentTransform(QPainter &painter)
     painter.translate(width() / 2.0, height() / 2.0);
     painter.scale(m_scaleFactor, -m_scaleFactor);
     painter.translate(m_panOffsetDXF);
-}
-
-// ----------------------------------------------------
-// 设置用户坐标
-// ----------------------------------------------------
-void RenderArea::setUserCoordinatePoints(const QPointF& origin, const QPointF& xAxis, const QPointF& planePoint)
-{
-    m_userOrigin = origin;
-    m_userXAxis = xAxis;
-    m_userPlanePoint = planePoint;
-    update();
-}
-
-// ----------------------------------------------------
-// 是否显示用户坐标系
-// ----------------------------------------------------
-void RenderArea::setShowUserCoordinate(bool show)
-{
-    m_showUserCoordinate = show;
-    update();
 }
 
 void RenderArea::setHighlightedPathIndices(const QList<int> &indices) {

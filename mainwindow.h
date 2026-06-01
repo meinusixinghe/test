@@ -30,7 +30,6 @@
 
 class QCalendarWidget;
 class RenderArea;
-class usercoordinatemanager;
 
 class LogViewerDialog : public QDialog {
     Q_OBJECT
@@ -100,7 +99,6 @@ private slots:
     void handleTableSelectionChanged();
     void handleTableCellChanged(int row, int column);
     void applyRotationMatrix();
-    void setupCoordinateWizard();
     void onManageWeldingProcess();
     void onConnectTriggered();
     void onStartClicked();
@@ -148,9 +146,6 @@ private:
     QAction* rotateAction;
     QMatrix4x4 rotationMatrix;
 
-    usercoordinatemanager* m_coordManager;
-    QAction* m_setupCoordAction;
-    QPushButton* m_toggleCoordBtn;
     QLabel* m_statusLabel;
     QMenu* m_operationMenu;
 

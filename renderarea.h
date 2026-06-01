@@ -28,9 +28,6 @@ public:
 
     void setHighlightedIndex(int index);
 
-    void setUserCoordinatePoints(const QPointF& origin, const QPointF& xAxis, const QPointF& planePoint);
-    void setShowUserCoordinate(bool show);
-
     void setDisplayPaths(const QVector<Contour>& paths);
     void setHighlightedPathIndices(const QList<int> &indices);
     void setEraserMode(bool enabled);
@@ -88,12 +85,6 @@ private:
     QPoint m_lastMousePos;                                  // 记录鼠标上一次的位置 (Widget像素单位)
     bool m_firstPaint = true;
     void applyCurrentTransform(QPainter &painter);          // 应用所有变换
-
-    // 用户坐标系显示相关
-    bool m_showUserCoordinate = false;                      // 显示/隐藏用户坐标系
-    QPointF m_userOrigin;                                   // 用户坐标系原点
-    QPointF m_userXAxis;                                    // 用户坐标系 x轴
-    QPointF m_userPlanePoint;                               // 用户坐标系 y轴
 
     QVector<Contour> m_displayPaths;
     int m_highlightPathIndex = -1;

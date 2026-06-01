@@ -1,7 +1,6 @@
 #include "mainwindow.h"
 #include "EfortSdk.h"
 #include "renderarea.h"
-#include "usercoordinatemanager.h"
 #include "rotationmatrixdialog.h"
 #include "connectiondialog.h"
 #include <QFileDialog>
@@ -226,9 +225,7 @@ MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
 }
 
 MainWindow::~MainWindow() {
-    if (m_coordManager) {
-        delete m_coordManager;
-    }
+
 }
 
 void MainWindow::setupUi()
@@ -264,20 +261,11 @@ void MainWindow::setupUi()
     overlayLayout->addStretch();
     QHBoxLayout* bottomBtnLayout = new QHBoxLayout();
 
-    m_toggleCoordBtn = new QPushButton("显示用户坐标系", renderArea);
-    m_toggleCoordBtn->setCheckable(true);
-    m_toggleCoordBtn->setChecked(true);                                                         // 默认显示
-    m_toggleCoordBtn->setVisible(false);                                                        // 初始不可见
-    m_toggleCoordBtn->setMinimumWidth(120);                                                     // 按钮最小宽度，避免文字挤压
-    m_toggleCoordBtn->setCursor(Qt::ArrowCursor);
     QString btnStyle = R"(
         QPushButton { padding: 6px 12px; background-color: rgba(255, 255, 255, 0.95); border: 1px solid #ccc; border-radius: 4px;}
         QPushButton:checked { background-color: #2196F3; color: white; border-color: #2196F3;}
         QPushButton:hover {border-color: #2196F3; }
     )";
-    m_toggleCoordBtn->setStyleSheet(btnStyle);
-
-    bottomBtnLayout->addWidget(m_toggleCoordBtn);
 
     m_startBtn = new QPushButton("生成运行程序", renderArea);
     m_startBtn->setStyleSheet("QPushButton { background-color: rgba(76, 175, 80, 0.95); color: white; border-radius: 4px; padding: 6px 12px; font-weight:bold; } QPushButton:hover { background-color: #45a049; }");
@@ -470,7 +458,6 @@ void MainWindow::setupUi()
     // --- 提前创建好所有的功能 Action---
     loadAction = new QAction(QIcon(":/img/images/import.png"), "导入DXF", this);
     rotateAction = new QAction("应用旋转矩阵", this);
-    m_setupCoordAction = new QAction(QIcon(":/img/images/chuangjianzuobiaoxi.png"), "建立用户坐标系", this);
     m_manageProcessAction = new QAction(QIcon(":/img/images/icons4.png"), "工艺管理", this);
     m_imageProcessAction = new QAction(QIcon(":/img/images/DrawProcessing.png"), "图纸处理", this);
     QAction* m_positioningAction = new QAction("建立定位", this);
@@ -547,7 +534,6 @@ void MainWindow::setupUi()
             toolBar->addAction(loadAction);
         } else if (currentTab == tabOperation) {
             toolBar->addAction(rotateAction);
-            toolBar->addAction(m_setupCoordAction);
             toolBar->addAction(m_manageProcessAction);
             toolBar->addAction(m_robotParamAction);
         } else if (currentTab == tabTools) {
@@ -631,21 +617,12 @@ void MainWindow::setupUi()
     statusLayout->setContentsMargins(5, 0, 5, 0);
     statusLayout->setSpacing(5);
 
-    // 7. 初始化坐标管理器
-    m_coordManager = new usercoordinatemanager(this);
-    m_coordManager->initialize(renderArea, dataTable, weldHoles, mainPlateHole, m_statusLabel);
-
     // 8. 信号槽连接
     connect(loadAction, &QAction::triggered, this, &MainWindow::importDxf);
     connect(dataTable->selectionModel(), &QItemSelectionModel::currentRowChanged,
             this, &MainWindow::handleTableSelectionChanged);
     connect(dataTable, &QTableWidget::itemSelectionChanged,this, &MainWindow::handleTableSelectionChanged);
     connect(rotateAction, &QAction::triggered, this, &MainWindow::applyRotationMatrix);
-    connect(m_setupCoordAction, &QAction::triggered, this, &MainWindow::setupCoordinateWizard);
-    connect(m_toggleCoordBtn, &QPushButton::clicked, this, [this](bool checked) {
-        m_coordManager->toggleCoordinateDisplay(checked);
-        m_toggleCoordBtn->setText(checked ? "隐藏用户坐标系" : "显示用户坐标系");
-    });
     connect(m_robotParamAction, &QAction::triggered, this, &MainWindow::onRobotParameterSettings);
 
     // 焊接工艺
@@ -722,7 +699,6 @@ void MainWindow::setupUi()
     connect(m_modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::onRoboxModeChanged);
 
     m_floatingToolWidget->installEventFilter(this);
-    m_toggleCoordBtn->installEventFilter(this);
     m_startBtn->installEventFilter(this);
 
     resize(1200, 700);
@@ -1201,112 +1177,6 @@ void MainWindow::applyRotationMatrix()
     }
 }
 
-// ----------------------------------------------------
-// 功能：建立用户坐标系向导
-// ----------------------------------------------------
-void MainWindow::setupCoordinateWizard()
-{
-    // 如果没有管孔数据，弹窗提示并返回
-    if (weldHoles.isEmpty()) {
-        QMessageBox::warning(this, "操作提示", "当前没有管孔数据，无法建立坐标系。\n请先点击“文件 -> 导入DXF”加载图纸。");
-        return;
-    }
-
-    if (m_coordManager && m_coordManager->isSetupComplete()) {
-        QMessageBox::StandardButton reply;
-        reply = QMessageBox::question(this,
-                                      "重新建立",
-                                      "检测到当前已建立用户坐标系，是否重新建立？\n（重新建立将覆盖原有坐标系数据）",
-                                      QMessageBox::Yes | QMessageBox::Cancel,
-                                      QMessageBox::Cancel);
-
-        if (reply == QMessageBox::Cancel) {
-            return;
-        }
-    }
-
-    QDialog* dialog = new QDialog(this);
-    // 添加自动销毁属性，避免内存泄漏
-    dialog->setAttribute(Qt::WA_DeleteOnClose);
-    dialog->setWindowTitle("用户坐标系建立向导");
-    dialog->setWindowFlags(dialog->windowFlags() & ~Qt::WindowContextHelpButtonHint);
-    dialog->setMinimumWidth(400);
-
-    QVBoxLayout* layout = new QVBoxLayout(dialog);
-    layout->setContentsMargins(15, 15, 15, 15);
-    layout->setSpacing(15);
-
-    // 标题标签
-    QLabel* titleLabel = new QLabel("请按照提示操作机器人", dialog);
-    QFont font = titleLabel->font();
-    font.setBold(true);
-    font.setPointSize(14);
-    titleLabel->setFont(font);
-    titleLabel->setAlignment(Qt::AlignCenter);
-    layout->addWidget(titleLabel);
-
-    QLabel* infoLabel = new QLabel("初始化中...", dialog);
-    infoLabel->setWordWrap(true);
-    infoLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-    infoLabel->setStyleSheet(R"(
-        QLabel {
-            color: blue;
-            font-size: 14px;
-            padding: 10px; /* 标签内部上下左右内边距，避免文本贴边 */
-            line-height: 1.5; /* 行间距1.5倍，文本不拥挤 */
-        }
-    )");
-    infoLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    infoLabel->setMinimumHeight(60);
-    layout->addWidget(infoLabel);
-
-    QHBoxLayout* btnLayout = new QHBoxLayout();
-    QPushButton* confirmBtn = new QPushButton("确定 (当前步骤完成)", dialog);
-    QPushButton* cancelBtn = new QPushButton("取消", dialog);
-    btnLayout->addWidget(confirmBtn);
-    btnLayout->addWidget(cancelBtn);
-    layout->addLayout(btnLayout);
-
-    // 使用定时器同步 Manager 的状态文字到对话框
-    QTimer* syncTimer = new QTimer(dialog);
-    connect(syncTimer, &QTimer::timeout, this, [this, infoLabel]() {
-        if (m_statusLabel) infoLabel->setText(m_statusLabel->text());
-    });
-    syncTimer->start(200);
-
-    // 确认按钮逻辑
-    connect(confirmBtn, &QPushButton::clicked, this, [this, dialog]() {
-        m_coordManager->confirmCurrentStep();
-        if (m_coordManager->isSetupComplete()) {
-            dialog->accept();
-            QMessageBox::information(this, "成功", "用户坐标系已建立！\n三维坐标已更新。");
-            m_toggleCoordBtn->setVisible(true); // 按照要求，完成后显示控制按钮
-            m_toggleCoordBtn->setChecked(true);
-        }
-    });
-
-    // 取消按钮逻辑
-    connect(cancelBtn, &QPushButton::clicked, this, [this, dialog]() {
-        m_coordManager->cancelCurrentStep();
-        dialog->reject();
-    });
-
-    // 右上角叉号，执行取消逻辑
-    connect(dialog, &QDialog::finished, this, [this](int result) {
-
-        if (result == QDialog::Rejected) {
-            m_coordManager->cancelCurrentStep();
-        }
-    });
-
-    // 启动向导
-    m_coordManager->startSetup();
-
-    dialog->adjustSize();
-    dialog->move(this->geometry().center() - dialog->rect().center());
-
-    dialog->exec();
-}
 
 // ----------------------------------------------------
 // 功能：打开焊接工艺管理对话框
@@ -1439,11 +1309,6 @@ void MainWindow::onStartClicked()
 
     if (weldHoles.isEmpty()) {
         QMessageBox::warning(this, "无点位", "当前没有可运动的管孔点位，请先导入 DXF。");
-        return;
-    }
-
-    if (m_coordManager && !m_coordManager->isSetupComplete()) {
-        QMessageBox::warning(this, "未建立坐标系", "请先建立用户坐标系，再生成运动程序。");
         return;
     }
 
@@ -1634,7 +1499,6 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         return true;
     }
     if (watched == m_floatingToolWidget ||
-        watched == m_toggleCoordBtn ||
         watched == m_startBtn ||
         watched == m_powerBtn)
     {
