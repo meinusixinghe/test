@@ -62,7 +62,8 @@ class FloatingToolWidget : public QWidget {
 public:
     QPushButton *btnRestore;
     QPushButton *btnEraser;
-    QPushButton *btnLasso;
+    QPushButton *btnRotate;
+    QPushButton *btnMirror;
     QPushButton *btnClose;
     QPushButton *btnMove;
     QPushButton *btnUndo;

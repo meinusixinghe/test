@@ -74,6 +74,38 @@ RenderArea::RenderArea(QWidget *parent): QWidget(parent),
 
     connect(m_editMoveX, &QLineEdit::returnPressed, this, &RenderArea::executeMove);
     connect(m_editMoveY, &QLineEdit::returnPressed, this, &RenderArea::executeMove);
+
+    m_rotateInputWidget = new QWidget(this);
+    m_rotateInputWidget->setWindowFlags(Qt::Widget | Qt::FramelessWindowHint);
+    m_rotateInputWidget->setStyleSheet(
+        "QWidget { background-color: rgba(250, 250, 250, 245); border: 2px solid #0078D7; border-radius: 6px; }"
+        "QLineEdit { border: 1px solid #ccc; border-radius: 3px; padding: 2px; background-color: white; }"
+        "QLineEdit:focus { border: 1px solid #0078D7; }"
+        );
+
+    m_rotateInputWidget->setMinimumWidth(120);
+    m_rotateInputWidget->setMinimumHeight(30);
+
+    QHBoxLayout *hLayout2 = new QHBoxLayout(m_rotateInputWidget);
+    hLayout2->setContentsMargins(6, 4, 6, 4);
+    hLayout2->setSpacing(5);
+
+    m_editRotateAngle = new QLineEdit();
+    m_editRotateAngle->setFixedWidth(60);
+
+    QDoubleValidator *validator2 = new QDoubleValidator(this);
+    m_editRotateAngle->setValidator(validator2);
+
+    QLabel *lblAngle = new QLabel("旋转角度(度):");
+    lblAngle->setStyleSheet("border: none; font-weight: bold; color: #333; font-size: 12px;");
+
+    hLayout2->addWidget(lblAngle);
+    hLayout2->addWidget(m_editRotateAngle);
+
+    m_rotateInputWidget->hide();
+
+    connect(m_editRotateAngle, &QLineEdit::returnPressed, this, &RenderArea::executeRotate);
+
     setFocusPolicy(Qt::StrongFocus);
 }
 
@@ -198,12 +230,27 @@ void RenderArea::paintEvent(QPaintEvent *event)
         painter.restore();
     }
 
-    if (m_isMoveMode && m_moveState == MS_BasePoint && m_isSnapped) {
+    if ((m_isMoveMode || m_isRotateMode || m_isMirrorMode) && (m_transformState == TS_BasePoint || m_transformState == TS_SecondPoint) && m_isSnapped) {
         painter.save();
         painter.setTransform(QTransform());
         painter.setPen(Qt::NoPen);
         painter.setBrush(Qt::blue);
         painter.drawEllipse(m_snappedScreenPos, 6, 6);
+        painter.restore();
+    }
+
+    if (m_isMirrorMode && m_transformState == TS_SecondPoint) {
+        painter.save();
+        painter.setTransform(QTransform());
+        QTransform transform;
+        transform.translate(width() / 2.0, height() / 2.0);
+        transform.scale(m_scaleFactor, -m_scaleFactor);
+        transform.translate(m_panOffsetDXF.x(), m_panOffsetDXF.y());
+        QPen axisPen(Qt::magenta, 1, Qt::DashLine);
+        painter.setPen(axisPen);
+        QPoint p1 = transform.map(m_mirrorAxisPoint1).toPoint();
+        QPoint p2 = m_isSnapped ? m_snappedScreenPos : m_currentMousePos;
+        painter.drawLine(p1, p2);
         painter.restore();
     }
 }
@@ -233,19 +280,19 @@ void RenderArea::wheelEvent(QWheelEvent *event)
 // ----------------------------------------------------
 // 功能：左键按下时，记录鼠标初始位置，改变鼠标样式为 “闭手”
 // ----------------------------------------------------
-void RenderArea::mousePressEvent(QMouseEvent *event)
-{
+void RenderArea::mousePressEvent(QMouseEvent *event) {
     if (event->button() == Qt::MiddleButton) {
         m_lastMousePos = event->pos();
         m_isMiddlePanning = true;
-        setCursor(Qt::ClosedHandCursor); // 拖拽时变为握紧的手
+        setCursor(Qt::ClosedHandCursor);
         update();
         event->accept();
         return;
     }
 
-    if (m_isMoveMode && event->button() == Qt::LeftButton) {
-        if (m_moveState == MS_Select) {
+    if ((m_isMoveMode || m_isRotateMode || m_isMirrorMode) && event->button() == Qt::LeftButton) {
+        if (m_transformState == TS_Select) {
+            // 使用原本的套索选择逻辑框选线条
             m_isLassoDragging = true;
             m_lassoStartPos = event->pos();
             m_lassoCurrentPos = event->pos();
@@ -258,43 +305,95 @@ void RenderArea::mousePressEvent(QMouseEvent *event)
             update();
             event->accept();
             return;
-        } else if (m_moveState == MS_BasePoint && m_isSnapped) {
-            m_moveState = MS_Input;
+        } else if (m_transformState == TS_BasePoint) {
+            if (!m_isSnapped) {
+                QTransform transform;
+                transform.translate(width() / 2.0, height() / 2.0);
+                transform.scale(m_scaleFactor, -m_scaleFactor);
+                transform.translate(m_panOffsetDXF.x(), m_panOffsetDXF.y());
+                m_snappedDxfPos = transform.inverted().map(QPointF(event->pos()));
+                m_snappedScreenPos = event->pos();
+            }
+            if (m_isMirrorMode) {
+                m_mirrorAxisPoint1 = m_snappedDxfPos;
+                m_transformState = TS_SecondPoint;
+                update();
+                event->accept();
+                return;
+            }
 
-            m_moveInputWidget->adjustSize();
-            int widgetW = m_moveInputWidget->width();
-            int widgetH = m_moveInputWidget->height();
+            m_transformState = TS_Input;
+            QWidget* activeInputWidget = m_isMoveMode ? m_moveInputWidget : m_rotateInputWidget;
 
+            activeInputWidget->adjustSize();
+            int widgetW = activeInputWidget->width();
+            int widgetH = activeInputWidget->height();
+
+            // 智能避让弹窗位置
             int targetX = m_snappedScreenPos.x() + 10;
             int targetY = m_snappedScreenPos.y() + 10;
-            if (targetX + widgetW > width()) {
-                targetX = m_snappedScreenPos.x() - widgetW - 10;
-            }
-            if (targetY + widgetH > height()) {
-                targetY = m_snappedScreenPos.y() - widgetH - 10;
-            }
-            targetX = std::max(0, targetX);
-            targetY = std::max(0, targetY);
+            if (targetX + widgetW > width()) targetX = m_snappedScreenPos.x() - widgetW - 10;
+            if (targetY + widgetH > height()) targetY = m_snappedScreenPos.y() - widgetH - 10;
 
-            m_moveInputWidget->move(targetX, targetY);
+            activeInputWidget->move(std::max(0, targetX), std::max(0, targetY));
 
-            m_editMoveX->clear();
-            m_editMoveY->clear();
-            m_moveInputWidget->show();
-            m_editMoveX->setFocus();
+            if (m_isMoveMode) {
+                m_editMoveX->clear();
+                m_editMoveY->clear();
+                m_editMoveX->setFocus();
+            } else {
+                m_editRotateAngle->clear();
+                m_editRotateAngle->setFocus();
+            }
+            activeInputWidget->show();
             update();
             event->accept();
             return;
         }
-    }
+    }else if (m_transformState == TS_SecondPoint && m_isMirrorMode) {
+        // 镜像模式的第二点点击！
+        if (!m_isSnapped) {
+            QTransform transform;
+            transform.translate(width() / 2.0, height() / 2.0);
+            transform.scale(m_scaleFactor, -m_scaleFactor);
+            transform.translate(m_panOffsetDXF.x(), m_panOffsetDXF.y());
+            m_snappedDxfPos = transform.inverted().map(QPointF(event->pos()));
+        }
 
-    if (m_isLassoMode && event->button() == Qt::LeftButton) {
-        m_isLassoDragging = true;
-        m_lassoStartPos = event->pos();
-        m_lassoCurrentPos = event->pos();
-        if (event->modifiers() & Qt::ControlModifier) {
-            m_baseSelectedIndices = m_selectedPathIndices;
-        } else {
+        QPointF p1 = m_mirrorAxisPoint1;
+        QPointF p2 = m_snappedDxfPos;
+
+        // 防呆：两点不能重合
+        if (std::hypot(p2.x() - p1.x(), p2.y() - p1.y()) > 1e-5) {
+            double dx = p2.x() - p1.x();
+            double dy = p2.y() - p1.y();
+            // 直线方程 Ax + By + C = 0 的参数
+            double A = -dy;
+            double B = dx;
+            double C = dy * p1.x() - dx * p1.y();
+            double denominator = A * A + B * B;
+
+            for (int idx : m_selectedPathIndices) {
+                if (idx >= 0 && idx < m_displayPaths.size()) {
+                    for (int i = 0; i < m_displayPaths[idx].points.size(); ++i) {
+                        double x0 = m_displayPaths[idx].points[i].x();
+                        double y0 = m_displayPaths[idx].points[i].y();
+
+                        // 点到直线的镜像点公式
+                        double nx = x0 - 2 * A * (A * x0 + B * y0 + C) / denominator;
+                        double ny = y0 - 2 * B * (A * x0 + B * y0 + C) / denominator;
+
+                        m_displayPaths[idx].points[i].setX(nx);
+                        m_displayPaths[idx].points[i].setY(ny);
+                    }
+                }
+            }
+
+            // 传回主界面并记录撤销
+            emit pathsMoved(m_displayPaths);
+
+            // 重置状态
+            m_transformState = TS_Select;
             m_selectedPathIndices.clear();
             m_baseSelectedIndices.clear();
         }
@@ -302,20 +401,20 @@ void RenderArea::mousePressEvent(QMouseEvent *event)
         event->accept();
         return;
     }
+
     if (m_isEraserMode && event->button() == Qt::LeftButton) {
         QTransform transform;
         transform.translate(width() / 2.0, height() / 2.0);
         transform.scale(m_scaleFactor, -m_scaleFactor);
         transform.translate(m_panOffsetDXF.x(), m_panOffsetDXF.y());
         QPointF dxfPos = transform.inverted().map(QPointF(event->pos()));
-
         emit itemDeleted(dxfPos);
         return;
     }
 
     if (event->button() == Qt::LeftButton) {
         m_lastMousePos = event->pos();
-        if (!m_isEraserMode && !m_isLassoMode && !m_isMoveMode) {
+        if (!m_isEraserMode && !m_isRotateMode && !m_isMoveMode) {
             setCursor(Qt::ClosedHandCursor);
         }
         event->accept();
@@ -325,8 +424,7 @@ void RenderArea::mousePressEvent(QMouseEvent *event)
 // ----------------------------------------------------
 // 功能：左键按住时，计算鼠标移动的像素差，转换为 DXF坐标的平移量，应用平移限制后更新平移量
 // ----------------------------------------------------
-void RenderArea::mouseMoveEvent(QMouseEvent *event)
-{
+void RenderArea::mouseMoveEvent(QMouseEvent *event) {
     m_currentMousePos = event->pos();
     if (event->buttons() & Qt::MiddleButton) {
         QPoint delta = event->pos() - m_lastMousePos;
@@ -336,15 +434,15 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event)
         event->accept();
         return;
     }
-    if (m_isMoveMode) {
-        if (m_moveState == MS_Select && m_isLassoDragging) {
+    if (m_isMoveMode || m_isRotateMode || m_isMirrorMode) {
+        if (m_transformState == TS_Select && m_isLassoDragging) {
             m_lassoCurrentPos = event->pos();
             updateLassoSelection();
             update();
             event->accept();
             return;
-        } else if (m_moveState == MS_BasePoint) {
-            findSnapPoint(event->pos()); // 寻找附近吸附点
+        } else if (m_transformState == TS_BasePoint || m_transformState == TS_SecondPoint) { // 👈 加入 TS_SecondPoint
+            findSnapPoint(event->pos());
             update();
             event->accept();
             return;
@@ -353,13 +451,6 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event)
     if (m_isEraserMode) {
         setCursor(Qt::BlankCursor);
         update();
-        return;
-    }
-    if (m_isLassoDragging) {
-        m_lassoCurrentPos = event->pos();
-        updateLassoSelection();
-        update();
-        event->accept();
         return;
     }
     if (event->buttons() & Qt::LeftButton) {
@@ -376,23 +467,15 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event)
 // ----------------------------------------------------
 // 功能：左键松开时，恢复鼠标样式为 “开手 ”
 // ----------------------------------------------------
-void RenderArea::mouseReleaseEvent(QMouseEvent *event)
-{
+void RenderArea::mouseReleaseEvent(QMouseEvent *event) {
     if (event->button() == Qt::MiddleButton) {
         m_isMiddlePanning = false;
-        // 根据当前模式恢复光标
-        if (m_isLassoMode) setCursor(Qt::CrossCursor);
+        if (m_isRotateMode || m_isMoveMode) setCursor(Qt::CrossCursor);
         else if (m_isEraserMode) setCursor(Qt::BlankCursor);
         else setCursor(Qt::OpenHandCursor);
         update();
         event->accept();
         return;
-    }
-    if (event->button() == Qt::LeftButton) {
-        if (!m_isEraserMode && !m_isLassoMode && !m_isMoveMode) {
-            setCursor(Qt::OpenHandCursor);
-        }
-        event->accept();
     }
     if (m_isLassoDragging && event->button() == Qt::LeftButton) {
         m_isLassoDragging = false;
@@ -400,6 +483,12 @@ void RenderArea::mouseReleaseEvent(QMouseEvent *event)
         update();
         event->accept();
         return;
+    }
+    if (event->button() == Qt::LeftButton) {
+        if (!m_isEraserMode && !m_isRotateMode && !m_isMoveMode) {
+            setCursor(Qt::OpenHandCursor);
+        }
+        event->accept();
     }
 }
 
@@ -504,18 +593,6 @@ void RenderArea::setEraserSize(int size) {
     }
 }
 
-void RenderArea::setLassoMode(bool enabled) {
-    m_isLassoMode = enabled;
-    if (enabled) {
-        setCursor(Qt::CrossCursor); // 开启套索：立即变为十字
-        setFocus();
-    } else {
-        clearSelection();
-        setCursor(Qt::OpenHandCursor); // 关闭套索：恢复为普通手型
-    }
-    update();
-}
-
 void RenderArea::clearSelection() {
     m_selectedPathIndices.clear();
     m_isLassoDragging = false;
@@ -530,33 +607,31 @@ void RenderArea::keyPressEvent(QKeyEvent *event) {
     }
 
     if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) && !m_selectedPathIndices.isEmpty()) {
-        if (m_moveState != MS_Input) {
+        if (m_transformState != TS_Input) {
             emit bulkPathsDeleted(m_selectedPathIndices.values());
             clearSelection();
         }
     }
     else if (event->key() == Qt::Key_Escape) {
-        if (m_isMoveMode) { // 移动模式的逐级取消
-            if (m_moveState == MS_Input) {
-                m_moveInputWidget->hide();
-                m_moveState = MS_BasePoint;
-            } else if (m_moveState == MS_BasePoint) {
-                m_moveState = MS_Select;
+        if (m_isMoveMode || m_isRotateMode || m_isMirrorMode) {
+            if (m_transformState == TS_Input || m_transformState == TS_SecondPoint) {
+                if (m_isMoveMode) m_moveInputWidget->hide();
+                if (m_isRotateMode) m_rotateInputWidget->hide();
+                m_transformState = TS_BasePoint; // 退回到选基准点状态
+            } else if (m_transformState == TS_BasePoint) {
+                m_transformState = TS_Select;
                 clearSelection();
             } else {
                 emit cancelModesRequested();
             }
             update();
-        }
-        else if (m_isLassoMode && !m_selectedPathIndices.isEmpty()) {
-            clearSelection();
         } else {
             emit cancelModesRequested();
         }
     }
     else if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
-        if (m_isMoveMode && m_moveState == MS_Select && !m_selectedPathIndices.isEmpty()) {
-            m_moveState = MS_BasePoint;
+        if ((m_isMoveMode || m_isRotateMode || m_isMirrorMode) && m_transformState == TS_Select && !m_selectedPathIndices.isEmpty()) {
+            m_transformState = TS_BasePoint;
             update();
         }
     }
@@ -597,17 +672,32 @@ void RenderArea::updateLassoSelection() {
 
 void RenderArea::setMoveMode(bool enabled) {
     m_isMoveMode = enabled;
-    m_moveState = MS_Select;
+    m_transformState = TS_Select;
     if (m_moveInputWidget) m_moveInputWidget->hide();
     m_isSnapped = false;
+    if (enabled) { setCursor(Qt::CrossCursor); setFocus(); }
+    else { clearSelection(); setCursor(Qt::OpenHandCursor); }
+    update();
+}
 
-    if (enabled) {
-        setCursor(Qt::CrossCursor);
-        setFocus();
-    } else {
-        clearSelection();
-        setCursor(Qt::OpenHandCursor);
-    }
+void RenderArea::setRotateMode(bool enabled) {
+    m_isRotateMode = enabled;
+    m_transformState = TS_Select;
+    if (m_rotateInputWidget) m_rotateInputWidget->hide();
+    m_isSnapped = false;
+    if (enabled) { setCursor(Qt::CrossCursor); setFocus(); }
+    else { clearSelection(); setCursor(Qt::OpenHandCursor); }
+    update();
+}
+
+void RenderArea::setMirrorMode(bool enabled) {
+    m_isMirrorMode = enabled;
+    m_transformState = TS_Select;
+    if (m_moveInputWidget) m_moveInputWidget->hide();
+    if (m_rotateInputWidget) m_rotateInputWidget->hide();
+    m_isSnapped = false;
+    if (enabled) { setCursor(Qt::CrossCursor); setFocus(); }
+    else { clearSelection(); setCursor(Qt::OpenHandCursor); }
     update();
 }
 
@@ -622,34 +712,58 @@ void RenderArea::findSnapPoint(const QPoint &pos) {
     transform.scale(m_scaleFactor, -m_scaleFactor);
     transform.translate(m_panOffsetDXF.x(), m_panOffsetDXF.y());
 
+    QList<QPointF> candidates;
+
+    double minX = std::numeric_limits<double>::max();
+    double maxX = std::numeric_limits<double>::lowest();
+    double minY = std::numeric_limits<double>::max();
+    double maxY = std::numeric_limits<double>::lowest();
+    bool hasSelection = false;
+
+    // 收集所有用户要求的点位
     for (int idx : std::as_const(m_selectedPathIndices)) {
-        if (idx < 0 || idx >= m_displayPaths.size()) continue; // 安全检查
+        if (idx < 0 || idx >= m_displayPaths.size()) continue;
 
         const auto& contour = m_displayPaths[idx];
         if (contour.points.isEmpty()) continue;
 
-        QList<QPointF> candidates;
-        candidates << contour.points.first() << contour.points.last(); // 添加起点和终点
-
-        if (contour.type == "圆" && contour.points.size() >= 3) {
-            double minX = contour.points[0].x(), maxX = minX, minY = contour.points[0].y(), maxY = minY;
-            for (const QPointF& p : contour.points) {
-                if (p.x() < minX) minX = p.x(); if (p.x() > maxX) maxX = p.x();
-                if (p.y() < minY) minY = p.y(); if (p.y() > maxY) maxY = p.y();
-            }
-            candidates << QPointF((minX + maxX)/2.0, (minY + maxY)/2.0);
+        hasSelection = true;
+        // 线段交点、端点、所有多边形节点
+        for (const QPointF& pt : contour.points) {
+            candidates << pt;
+            if (pt.x() < minX) minX = pt.x();
+            if (pt.x() > maxX) maxX = pt.x();
+            if (pt.y() < minY) minY = pt.y();
+            if (pt.y() > maxY) maxY = pt.y();
         }
 
-        // 判断距离最近的吸附点
-        for (const QPointF& pt : candidates) {
-            QPoint screenPt = transform.map(pt).toPoint();
-            double dist = std::hypot(screenPt.x() - pos.x(), screenPt.y() - pos.y());
-            if (dist < minDistance) {
-                minDistance = dist;
-                m_isSnapped = true;
-                closestDxfPos = pt;
-                closestScreenPos = screenPt;
+        // 智能找圆心
+        if (contour.type == "圆" && contour.points.size() >= 3) {
+            double cMinX = contour.points[0].x(), cMaxX = cMinX, cMinY = contour.points[0].y(), cMaxY = cMinY;
+            for (const QPointF& p : contour.points) {
+                if (p.x() < cMinX) cMinX = p.x(); if (p.x() > cMaxX) cMaxX = p.x();
+                if (p.y() < cMinY) cMinY = p.y(); if (p.y() > cMaxY) cMaxY = p.y();
             }
+            candidates << QPointF((cMinX + cMaxX)/2.0, (cMinY + cMaxY)/2.0);
+        }
+    }
+
+    if (hasSelection) {
+        // 选中物体构成的矩形包围盒的中心点
+        candidates << QPointF((minX + maxX)/2.0, (minY + maxY)/2.0);
+    }
+
+    // 永远将绝对坐标系原点(0,0)作为最高优先级候选项
+    candidates << QPointF(0, 0);
+
+    for (const QPointF& pt : candidates) {
+        QPoint screenPt = transform.map(pt).toPoint();
+        double dist = std::hypot(screenPt.x() - pos.x(), screenPt.y() - pos.y());
+        if (dist < minDistance) {
+            minDistance = dist;
+            m_isSnapped = true;
+            closestDxfPos = pt;
+            closestScreenPos = screenPt;
         }
     }
 
@@ -660,19 +774,16 @@ void RenderArea::findSnapPoint(const QPoint &pos) {
 }
 
 void RenderArea::executeMove() {
-    if (m_moveState != MS_Input) return;
-
+    if (m_transformState != TS_Input) return;
     bool okX, okY;
     double targetX = m_editMoveX->text().toDouble(&okX);
     double targetY = m_editMoveY->text().toDouble(&okY);
 
-    if (!okX || !okY) return; // 输入非法则不移动
+    if (!okX || !okY) return;
 
-    // 计算移动增量
     double dx = targetX - m_snappedDxfPos.x();
     double dy = targetY - m_snappedDxfPos.y();
 
-    // 更新选中的线条坐标
     for (int idx : m_selectedPathIndices) {
         if (idx >= 0 && idx < m_displayPaths.size()) {
             for (int i = 0; i < m_displayPaths[idx].points.size(); ++i) {
@@ -682,9 +793,50 @@ void RenderArea::executeMove() {
         }
     }
     emit pathsMoved(m_displayPaths);
-    // 移动完成，重置状态回选择模式
+
     m_moveInputWidget->hide();
-    m_moveState = MS_Select;
+    m_transformState = TS_Select;
+    m_selectedPathIndices.clear();
+    m_baseSelectedIndices.clear();
+    update();
+}
+
+void RenderArea::executeRotate() {
+    if (m_transformState != TS_Input) return;
+
+    bool okAngle;
+    double angleDeg = m_editRotateAngle->text().toDouble(&okAngle);
+    if (!okAngle) return;
+
+    // DXF是数学坐标系逆时针为正，此处直接运用二维旋转矩阵
+    double angleRad = angleDeg * M_PI / 180.0;
+    double cosA = std::cos(angleRad);
+    double sinA = std::sin(angleRad);
+
+    double cx = m_snappedDxfPos.x();
+    double cy = m_snappedDxfPos.y();
+
+    for (int idx : m_selectedPathIndices) {
+        if (idx >= 0 && idx < m_displayPaths.size()) {
+            for (int i = 0; i < m_displayPaths[idx].points.size(); ++i) {
+                double x = m_displayPaths[idx].points[i].x() - cx;
+                double y = m_displayPaths[idx].points[i].y() - cy;
+
+                // 经典仿射变换
+                double nx = x * cosA - y * sinA;
+                double ny = x * sinA + y * cosA;
+
+                m_displayPaths[idx].points[i].setX(nx + cx);
+                m_displayPaths[idx].points[i].setY(ny + cy);
+            }
+        }
+    }
+
+    // 利用原有的 pathsMoved 信号把状态传回给主窗体并记入Undo撤销堆栈
+    emit pathsMoved(m_displayPaths);
+
+    m_rotateInputWidget->hide();
+    m_transformState = TS_Select;
     m_selectedPathIndices.clear();
     m_baseSelectedIndices.clear();
     update();

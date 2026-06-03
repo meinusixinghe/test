@@ -102,13 +102,13 @@ FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     btnEraser->setToolTip("橡皮擦");
     btnEraser->setCheckable(true);
     btnEraser->setCursor(Qt::PointingHandCursor);
-    btnLasso = new QPushButton();
-    btnLasso->setIcon(QIcon(":/img/images/lasso.png"));
-    btnLasso->setIconSize(QSize(16, 16));
-    btnLasso->setFixedSize(36, 24);
-    btnLasso->setToolTip("框选线条 (按 Delete 键删除)");
-    btnLasso->setCheckable(true);
-    btnLasso->setCursor(Qt::PointingHandCursor);
+    btnRotate = new QPushButton();
+    btnRotate->setIcon(QIcon(":/img/images/lasso.png"));
+    btnRotate->setIconSize(QSize(16, 16));
+    btnRotate->setFixedSize(36, 24);
+    btnRotate->setToolTip("旋转线条 (框选后按回车选基准点，再输入角度)");
+    btnRotate->setCheckable(true);
+    btnRotate->setCursor(Qt::PointingHandCursor);
     btnMove = new QPushButton();
     btnMove->setIcon(QIcon(":/img/images/shift.png"));
     btnMove->setIconSize(QSize(16, 16));
@@ -116,10 +116,18 @@ FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     btnMove->setToolTip("移动线条 (框选后按回车选基准点)");
     btnMove->setCheckable(true);
     btnMove->setCursor(Qt::PointingHandCursor);
+    btnMirror = new QPushButton();
+    btnMirror->setIcon(QIcon(":/img/images/mirror.png"));
+    btnMirror->setIconSize(QSize(16, 16));
+    btnMirror->setFixedSize(36, 24);
+    btnMirror->setToolTip("镜像线条 (框选后依次点击两个点确定镜像轴)");
+    btnMirror->setCheckable(true);
+    btnMirror->setCursor(Qt::PointingHandCursor);
 
     tools->addWidget(btnRestore);
     tools->addWidget(btnUndo);
-    tools->addWidget(btnLasso);
+    tools->addWidget(btnRotate);
+    tools->addWidget(btnMirror);
     tools->addWidget(btnMove);
     tools->addWidget(btnEraser);
 
@@ -645,7 +653,8 @@ void MainWindow::setupUi()
     connect(m_floatingToolWidget->btnClose, &QPushButton::clicked, this, [this](){
         m_floatingToolWidget->hide();
         m_floatingToolWidget->btnEraser->setChecked(false);
-        m_floatingToolWidget->btnLasso->setChecked(false);
+        m_floatingToolWidget->btnRotate->setChecked(false);
+        m_floatingToolWidget->btnMirror->setChecked(false);
         m_floatingToolWidget->btnMove->setChecked(false);
         m_floatingToolWidget->setSliderVisible(false);
     });
@@ -663,24 +672,29 @@ void MainWindow::setupUi()
         m_floatingToolWidget->lblEraserSize->setText(QString::number(value));
         renderArea->setEraserSize(value);
     });
-    connect(m_floatingToolWidget->btnLasso, &QPushButton::toggled, this, [this](bool checked){
+    connect(m_floatingToolWidget->btnRotate, &QPushButton::toggled, this, [this](bool checked){
         if (checked) { m_floatingToolWidget->btnEraser->setChecked(false); m_floatingToolWidget->btnMove->setChecked(false); }
-        renderArea->setLassoMode(checked);
+        renderArea->setRotateMode(checked);
+    });
+    connect(m_floatingToolWidget->btnMirror, &QPushButton::toggled, this, [this](bool checked){ // 👈 新增镜像切换
+        if (checked) { m_floatingToolWidget->btnEraser->setChecked(false); m_floatingToolWidget->btnMove->setChecked(false); m_floatingToolWidget->btnRotate->setChecked(false); }
+        renderArea->setMirrorMode(checked);
     });
     connect(m_floatingToolWidget->btnEraser, &QPushButton::toggled, this, [this](bool checked){
-        if (checked) { m_floatingToolWidget->btnLasso->setChecked(false); m_floatingToolWidget->btnMove->setChecked(false); }
+        if (checked) { m_floatingToolWidget->btnRotate->setChecked(false); m_floatingToolWidget->btnMove->setChecked(false); }
         m_floatingToolWidget->setSliderVisible(checked);
         renderArea->setEraserMode(checked);
     });
     connect(m_floatingToolWidget->btnMove, &QPushButton::toggled, this, [this](bool checked){
-        if (checked) { m_floatingToolWidget->btnLasso->setChecked(false); m_floatingToolWidget->btnEraser->setChecked(false); }
+        if (checked) { m_floatingToolWidget->btnRotate->setChecked(false); m_floatingToolWidget->btnEraser->setChecked(false); }
         renderArea->setMoveMode(checked);
     });
     // 连接批量删除信号
     connect(renderArea, &RenderArea::bulkPathsDeleted, this, &MainWindow::handleBulkPathsDeleted);
     connect(renderArea, &RenderArea::cancelModesRequested, this, [this](){
-        m_floatingToolWidget->btnLasso->setChecked(false);
+        m_floatingToolWidget->btnRotate->setChecked(false);
         m_floatingToolWidget->btnEraser->setChecked(false);
+        m_floatingToolWidget->btnMirror->setChecked(false);
         m_floatingToolWidget->btnMove->setChecked(false);
         m_floatingToolWidget->setSliderVisible(false);
     });
@@ -1331,8 +1345,7 @@ void MainWindow::restoreDrawing()
 {
     m_floatingToolWidget->btnRestore->clearFocus();
     m_floatingToolWidget->btnRestore->setDown(false);
-
-    m_floatingToolWidget->btnLasso->setChecked(false);
+    m_floatingToolWidget->btnRotate->setChecked(false);
     m_floatingToolWidget->btnEraser->setChecked(false);
 
     if (m_originalDisplayPaths.isEmpty() && m_originalWeldHoles.isEmpty()) return;

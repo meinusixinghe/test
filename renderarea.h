@@ -34,10 +34,11 @@ public:
     double scaleFactor() const { return m_scaleFactor; }
     double distancePointToSegment(const QPointF& p, const QPointF& p1, const QPointF& p2);
     void setEraserSize(int size);
-    void setLassoMode(bool enabled);
+    void setRotateMode(bool enabled);
+    void setMirrorMode(bool enabled);
     void clearSelection();
 
-    enum MoveState { MS_Select, MS_BasePoint, MS_Input };
+    enum TransformState { TS_Select, TS_BasePoint, TS_SecondPoint, TS_Input };
     void setMoveMode(bool enabled);
     void findSnapPoint(const QPoint &pos);
 
@@ -46,6 +47,7 @@ public:
     QList<PositioningBlock> getPositioningBlocks() const { return m_posBlocks; }
 public slots:
     void executeMove();
+    void executeRotate();
 protected:
     void paintEvent(QPaintEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
@@ -94,7 +96,8 @@ private:
     QPoint m_currentMousePos;
     int m_eraserSize = 20;
     void updateLassoSelection();
-    bool m_isLassoMode = false;
+    bool m_isRotateMode = false;
+    bool m_isMirrorMode = false;
     bool m_isLassoDragging = false;
     QPoint m_lassoStartPos;
     QPoint m_lassoCurrentPos;
@@ -104,7 +107,9 @@ private:
     bool m_isMiddlePanning = false;
 
     bool m_isMoveMode = false;
-    MoveState m_moveState = MS_Select;
+    TransformState m_transformState = TS_Select;
+    QWidget *m_rotateInputWidget;
+    QLineEdit *m_editRotateAngle;
     bool m_isSnapped = false;
     QPointF m_snappedDxfPos;
     QPoint m_snappedScreenPos;
@@ -116,6 +121,7 @@ private:
     QList<PositioningBlock> m_posBlocks;
 
     int m_lineWidth = 2;
+    QPointF m_mirrorAxisPoint1;
 };
 
 #endif // RENDERAREA_H
