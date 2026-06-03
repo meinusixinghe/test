@@ -1,7 +1,6 @@
 #include "mainwindow.h"
 #include "EfortSdk.h"
 #include "renderarea.h"
-#include "usercoordinatemanager.h"
 #include "rotationmatrixdialog.h"
 #include "connectiondialog.h"
 #include <QFileDialog>
@@ -26,6 +25,8 @@
 #include <QSettings>
 #include <QCloseEvent>
 #include <QTimer>
+#include <QThread>
+#include <QMetaObject>
 #include <QShortcut>
 #include <QFormLayout>
 #include <QGraphicsDropShadowEffect>
@@ -34,6 +35,24 @@
 #include <QDir>
 #include <QDateTime>
 #include <QTextStream>
+#include "taskprogramdialog.h"
+
+// 测试
+#include "motiontestdialog.h"
+
+namespace {
+struct RobotConnectResult {
+    int ret = -1;
+    int apiRet = -1;
+    unsigned int devId = 0;
+};
+
+struct RobotMotionResult {
+    bool stopped = false;
+    int failedIndex = -1;
+    int ret = 0;
+};
+}
 
 FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     setAttribute(Qt::WA_StyledBackground, true);
@@ -83,13 +102,13 @@ FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     btnEraser->setToolTip("橡皮擦");
     btnEraser->setCheckable(true);
     btnEraser->setCursor(Qt::PointingHandCursor);
-    btnLasso = new QPushButton();
-    btnLasso->setIcon(QIcon(":/img/images/lasso.png"));
-    btnLasso->setIconSize(QSize(16, 16));
-    btnLasso->setFixedSize(36, 24);
-    btnLasso->setToolTip("框选线条 (按 Delete 键删除)");
-    btnLasso->setCheckable(true);
-    btnLasso->setCursor(Qt::PointingHandCursor);
+    btnRotate = new QPushButton();
+    btnRotate->setIcon(QIcon(":/img/images/lasso.png"));
+    btnRotate->setIconSize(QSize(16, 16));
+    btnRotate->setFixedSize(36, 24);
+    btnRotate->setToolTip("旋转线条 (框选后按回车选基准点，再输入角度)");
+    btnRotate->setCheckable(true);
+    btnRotate->setCursor(Qt::PointingHandCursor);
     btnMove = new QPushButton();
     btnMove->setIcon(QIcon(":/img/images/shift.png"));
     btnMove->setIconSize(QSize(16, 16));
@@ -97,10 +116,18 @@ FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     btnMove->setToolTip("移动线条 (框选后按回车选基准点)");
     btnMove->setCheckable(true);
     btnMove->setCursor(Qt::PointingHandCursor);
+    btnMirror = new QPushButton();
+    btnMirror->setIcon(QIcon(":/img/images/mirror.png"));
+    btnMirror->setIconSize(QSize(16, 16));
+    btnMirror->setFixedSize(36, 24);
+    btnMirror->setToolTip("镜像线条 (框选后依次点击两个点确定镜像轴)");
+    btnMirror->setCheckable(true);
+    btnMirror->setCursor(Qt::PointingHandCursor);
 
     tools->addWidget(btnRestore);
     tools->addWidget(btnUndo);
-    tools->addWidget(btnLasso);
+    tools->addWidget(btnRotate);
+    tools->addWidget(btnMirror);
     tools->addWidget(btnMove);
     tools->addWidget(btnEraser);
 
@@ -154,7 +181,7 @@ FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     mainLayout->addWidget(sliderContainer);
 
     sliderContainer->setVisible(false);
-    setFixedWidth(220);
+    setFixedWidth(280);
     adjustSize();
 
     setCursor(Qt::ArrowCursor);
@@ -190,101 +217,23 @@ void FloatingToolWidget::setSliderVisible(bool visible) {
 
 MainWindow::MainWindow(QWidget *parent): QMainWindow(parent)
 {
-    // 1. 初始化 UI
     setupUi();
 
-    // 2. 初始化 Modbus 管理器
-    m_modbusManager = new ModbusManager(this);
-
-    // 3. 基础状态与日志信号绑定
-    connect(m_modbusManager, &ModbusManager::connectionStateChanged, this, &MainWindow::onModbusStateChanged);
-    connect(m_modbusManager, &ModbusManager::logMessage, this, &MainWindow::showAndSaveLog);
-    connect(m_modbusManager, &ModbusManager::servoStateChanged, this, &MainWindow::onServoStateChanged);
-    connect(m_modbusManager, &ModbusManager::autoStateChanged, this, &MainWindow::onAutoStateChanged);
-
-    // 4. 业务逻辑信号绑定
-
-    // 4.1 错误拦截：断网或急停时，除了弹窗，还必须中断连续焊接状态
-    connect(m_modbusManager, &ModbusManager::errorOccurred, this, [this](QString msg){
-        showAndSaveLog("错误: " + msg);
-        QMessageBox::warning(this, "通讯错误", msg);
-        if (m_isWeldingProcessRunning) {
-            m_isWeldingProcessRunning = false;
-            m_startBtn->setText("预约");
-            m_startBtn->setEnabled(true);
-            m_pauseBtn->setVisible(false);
-        }
-    });
-
-    // 4.2 动态按钮文字：不仅改字，还要监控底层状态回退
-    connect(m_modbusManager, &ModbusManager::startButtonTextChanged, this, [this](QString text) {
-        m_startBtn->setText(text);
-        if (text == "预约"|| text == "启动") {
-            m_isWeldingProcessRunning = false;
-            m_startBtn->setEnabled(true);
-            m_pauseBtn->setVisible(false);
-        }
-    });
-
-    // 4.3 收到总命令握手完成信号，立刻下发第一个孔的数据
-    connect(m_modbusManager, &ModbusManager::cmdHandshakeCompleted, this, [this]() {
-        if (m_isWeldingProcessRunning) {
-            sendNextWeldHole();
-        }
-    });
-
-    // 4.4 单孔闭环完成，自动触发下一个！
-    connect(m_modbusManager, &ModbusManager::jobSentSuccess, this, [this]() {
-        if (m_isWeldingProcessRunning) {
-            QApplication::processEvents();
-            m_currentWeldIndex++; // 索引加 1
-            sendNextWeldHole();   // 自动调取下一行数据发送给机器人
-        }
-    });
-
-    // 5. 初始化数据与自动连接
     loadWeldingProcesses();  // 启动时自动加载焊接工艺数据
 
+    m_statusTimer = new QTimer(this);
+    connect(m_statusTimer, &QTimer::timeout, this, &MainWindow::onStatusTimer);
+
     QDir::setCurrent(QCoreApplication::applicationDirPath());
-
-    // 读取本地保存的 IP 和 端口配置，并尝试自动连接
     QSettings settings(QCoreApplication::applicationDirPath() + "/config.ini", QSettings::IniFormat);
-    m_lastIp = settings.value("RobotIP", "").toString();
-    m_lastPort = settings.value("RobotPort", 502).toInt();
-
-    if (!m_lastIp.isEmpty()) {
-        // 1. 如果之前存过 IP，软件打开直接自动连接底层的 Modbus
-        m_modbusManager->connectToRobot(m_lastIp, m_lastPort);
-
-        // 2. 强制创建 log 文件夹，防止 SDK 内部找不到路径而崩溃
-        QString logDir = QCoreApplication::applicationDirPath() + "/log";
-        QDir().mkpath(logDir);
-
-        // 3. 设置日志路径 (必须保证 char* 永久存活)
-        static QByteArray logPathBa = logDir.toLocal8Bit();
-        RobotAPI::SetLogPath(logPathBa.data());
-
-        // 4. 恢复为 EfortSdk.h 要求的 std::string 类型！
-        std::string ipStr = m_lastIp.toStdString();
-        int ret = RobotAPI::ConnectRobot(ipStr, m_currentDevId);
-
-        if (ret == 0 || ret == 10021) {
-            RobotAPI::SelectRobot(m_currentDevId);
-            qDebug() << "SDK 自动连接成功，设备 ID:" << m_currentDevId;
-        } else {
-            qDebug() << "SDK 自动连接失败，错误码:" << ret;
-        }
-    } else {
-        // 如果是第一次运行，给个默认值
+    m_lastIp = settings.value("RobotIP", "192.168.1.12").toString();
+    if (m_lastIp.isEmpty()) {
         m_lastIp = "192.168.1.10";
-        m_lastPort = 502;
     }
 }
 
 MainWindow::~MainWindow() {
-    if (m_coordManager) {
-        delete m_coordManager;
-    }
+
 }
 
 void MainWindow::setupUi()
@@ -320,44 +269,22 @@ void MainWindow::setupUi()
     overlayLayout->addStretch();
     QHBoxLayout* bottomBtnLayout = new QHBoxLayout();
 
-    m_toggleCoordBtn = new QPushButton("显示用户坐标系", renderArea);
-    m_toggleCoordBtn->setCheckable(true);
-    m_toggleCoordBtn->setChecked(true);                                                         // 默认显示
-    m_toggleCoordBtn->setVisible(false);                                                        // 初始不可见
-    m_toggleCoordBtn->setMinimumWidth(120);                                                     // 按钮最小宽度，避免文字挤压
-    m_toggleCoordBtn->setCursor(Qt::ArrowCursor);
     QString btnStyle = R"(
         QPushButton { padding: 6px 12px; background-color: rgba(255, 255, 255, 0.95); border: 1px solid #ccc; border-radius: 4px;}
         QPushButton:checked { background-color: #2196F3; color: white; border-color: #2196F3;}
         QPushButton:hover {border-color: #2196F3; }
     )";
-    m_toggleCoordBtn->setStyleSheet(btnStyle);
 
-    bottomBtnLayout->addWidget(m_toggleCoordBtn);
-
-    m_startBtn = new QPushButton("预约", renderArea);
-    m_startBtn->setStyleSheet("QPushButton { background-color: rgba(76, 175, 80, 0.95); color: white; border-radius: 4px; padding: 6px 12px; } QPushButton:hover { background-color: #45a049; }");
-    m_startBtn->setCursor(Qt::ArrowCursor);
+    m_startBtn = new QPushButton("生成运行程序", renderArea);
+    m_startBtn->setStyleSheet("QPushButton { background-color: rgba(76, 175, 80, 0.95); color: white; border-radius: 4px; padding: 6px 12px; font-weight:bold; } QPushButton:hover { background-color: #45a049; }");
+    m_startBtn->setCursor(Qt::PointingHandCursor);
     m_startBtn->setVisible(false);
-
-    m_pauseBtn = new QPushButton("暂停", renderArea);
-    m_pauseBtn->setCheckable(true); // 可切换暂停/继续
-    m_pauseBtn->setStyleSheet("QPushButton { background-color: rgba(255, 152, 0, 0.95); color: white; border-radius: 4px; padding: 6px 12px; } QPushButton:checked { background-color: #e65100; text-decoration: underline; }");
-    m_pauseBtn->setCursor(Qt::ArrowCursor);
-    m_pauseBtn->setVisible(false);
-
-    m_resetBtn = new QPushButton("复位", renderArea);
-    m_resetBtn->setStyleSheet("QPushButton { background-color: rgba(244, 67, 54, 0.95); color: white; border-radius: 4px; padding: 6px 12px; } QPushButton:hover { background-color: #d32f2f; }");
-    m_resetBtn->setCursor(Qt::ArrowCursor);
-    m_resetBtn->setVisible(false);
 
     m_powerBtn = new QPushButton("机器人上电", renderArea);
     m_powerBtn->setStyleSheet(btnStyle);
     m_powerBtn->setCursor(Qt::PointingHandCursor);
 
     bottomBtnLayout->addWidget(m_startBtn);
-    bottomBtnLayout->addWidget(m_pauseBtn);
-    bottomBtnLayout->addWidget(m_resetBtn);
     bottomBtnLayout->addWidget(m_powerBtn);
     bottomBtnLayout->addStretch();
     overlayLayout->addLayout(bottomBtnLayout);
@@ -536,14 +463,14 @@ void MainWindow::setupUi()
 
     // 4. 创建菜单栏
     menuBar()->hide();
-    // --- 提前创建好所有的功能 Action (有图标就传图标，没有就只传文字) ---
+    // --- 提前创建好所有的功能 Action---
     loadAction = new QAction(QIcon(":/img/images/import.png"), "导入DXF", this);
     rotateAction = new QAction("应用旋转矩阵", this);
-    m_setupCoordAction = new QAction(QIcon(":/img/images/chuangjianzuobiaoxi.png"), "建立用户坐标系", this);
-    m_manageProcessAction = new QAction(QIcon(":/img/images/icons4.png"), "焊接工艺管理", this);
+    m_manageProcessAction = new QAction(QIcon(":/img/images/icons4.png"), "工艺管理", this);
     m_imageProcessAction = new QAction(QIcon(":/img/images/DrawProcessing.png"), "图纸处理", this);
     QAction* m_positioningAction = new QAction("建立定位", this);
     m_connectAction = new QAction(QIcon(":/img/images/icons6.png"), "建立连接", this);
+    m_robotParamAction = new QAction(QIcon(":/img/images/icons4.png"), "机器参数设置", this);
     // --- 创建第一层：“选项卡”栏 ---
     QToolBar* tabBar = addToolBar("选项卡");
     tabBar->setMovable(false); // 禁止拖动
@@ -575,6 +502,39 @@ void MainWindow::setupUi()
         "QToolButton:hover { background-color: #E3F2FD; border: 1px solid #90CAF9; }"
         );
 
+
+    // =================================================================
+    // 👇【新增测试代码】：在“操作”菜单下注入测试 Action（极易查找、极易删除）
+    // =================================================================
+    QPushButton* mlinTestBtn = new QPushButton("测试界面", this);
+
+    // 设置按钮的大小和绝对位置 (X:20, Y:100, 宽:200, 高:40)
+    // 你可以根据你的主界面空缺位置，自己调整 20 和 100 这两个坐标数字
+    mlinTestBtn->setGeometry(20, 100, 200, 40);
+
+    // 给按钮加上醒目的黄色背景，方便测试完找到它并删掉
+    mlinTestBtn->setStyleSheet("background-color: #FFEB3B; font-weight: bold; border-radius: 5px;");
+    mlinTestBtn->show(); // 强制显示在最上层
+
+    // 绑定点击事件
+    connect(mlinTestBtn, &QPushButton::clicked, this, [this]() {
+        if (m_currentDevId == 0) {
+            QMessageBox::warning(this, "通信断开", "请确保主界面已成功建立机器人通信连接！");
+            return;
+        }
+        if (!m_motionTestDialog) {
+            m_motionTestDialog = new MotionTestDialog(m_currentDevId, this);
+            m_motionTestDialog->setWindowFlags(Qt::Tool);
+        } else {
+            m_motionTestDialog->setDevId(m_currentDevId);
+        }
+        m_motionTestDialog->show();       // 显示窗口
+        m_motionTestDialog->raise();      // 提到最上层
+        m_motionTestDialog->activateWindow(); // 激活焦点
+    });
+    // =================================================================
+
+
     // 5. 绑定选项卡点击逻辑，动态切换下方工具栏的内容
     auto switchTab = [=](QAction* currentTab) {
         toolBar->clear(); // 切换时先清空下方工具栏
@@ -582,8 +542,8 @@ void MainWindow::setupUi()
             toolBar->addAction(loadAction);
         } else if (currentTab == tabOperation) {
             toolBar->addAction(rotateAction);
-            toolBar->addAction(m_setupCoordAction);
             toolBar->addAction(m_manageProcessAction);
+            toolBar->addAction(m_robotParamAction);
         } else if (currentTab == tabTools) {
             toolBar->addAction(m_imageProcessAction);
             toolBar->addAction(m_positioningAction);
@@ -632,30 +592,38 @@ void MainWindow::setupUi()
     QLabel* separator2 = new QLabel(" | ", this);
     separator2->setStyleSheet("color: #999; font-weight: bold;");
     // 自动/手动模式
-    m_autoTextLabel = new QLabel("手动模式", this);
-    QFont autoFont = statusFontObj;
-    autoFont.setBold(true);
-    m_autoTextLabel->setFont(autoFont);
-    m_autoTextLabel->setStyleSheet("color: #FF9800;");
+    m_modeCombo = new QComboBox(this);
+    m_modeCombo->setCursor(Qt::PointingHandCursor);
+    m_modeCombo->addItem("手动低速", 0);   // 对应 ROBOX_MODE_MANUAL
+    m_modeCombo->addItem("手动高速", 1);   // 对应 ROBOX_MODE_MANUFAST
+    m_modeCombo->addItem("自动模式", 2); // 对应 ROBOX_MODE_AUTO
+    m_modeCombo->setStyleSheet("QComboBox { background-color: #4CAF50; color: white; font-weight: bold; border-radius: 3px; padding: 2px 6px; }");
+    // 分隔符 3
+    QLabel* separator3 = new QLabel(" | ", this);
+    separator2->setStyleSheet("color: #999; font-weight: bold;");
+    //
+    m_permissionBtn = new QPushButton("获取控制权", this);
+    m_permissionBtn->setCursor(Qt::PointingHandCursor);
+    m_permissionBtn->setStyleSheet("background-color: #9E9E9E; color: white; border-radius: 4px; padding: 3px 10px; font-weight: bold;");
     // 按顺序添加到布局
     statusLayout->addWidget(m_statusIconLabel);
     statusLayout->addWidget(m_statusTextLabel);
-    statusLayout->addSpacing(10);
+    statusLayout->addSpacing(5);
     statusLayout->addWidget(separator1);
-    statusLayout->addSpacing(10);
+    statusLayout->addSpacing(5);
     statusLayout->addWidget(m_servoIconLabel);
     statusLayout->addWidget(m_servoTextLabel);
-    statusLayout->addSpacing(10);
+    statusLayout->addSpacing(5);
     statusLayout->addWidget(separator2);
-    statusLayout->addSpacing(10);
-    statusLayout->addWidget(m_autoTextLabel);
+    statusLayout->addSpacing(5);
+    statusLayout->addWidget(m_modeCombo);
+    statusLayout->addSpacing(5);
+    statusLayout->addWidget(separator3);
+    statusLayout->addSpacing(5);
+    statusLayout->addWidget(m_permissionBtn);
     statusBar()->addPermanentWidget(statusContainer);
     statusLayout->setContentsMargins(5, 0, 5, 0);
     statusLayout->setSpacing(5);
-
-    // 7. 初始化坐标管理器
-    m_coordManager = new usercoordinatemanager(this);
-    m_coordManager->initialize(renderArea, dataTable, weldHoles, mainPlateHole, m_statusLabel);
 
     // 8. 信号槽连接
     connect(loadAction, &QAction::triggered, this, &MainWindow::importDxf);
@@ -663,11 +631,7 @@ void MainWindow::setupUi()
             this, &MainWindow::handleTableSelectionChanged);
     connect(dataTable, &QTableWidget::itemSelectionChanged,this, &MainWindow::handleTableSelectionChanged);
     connect(rotateAction, &QAction::triggered, this, &MainWindow::applyRotationMatrix);
-    connect(m_setupCoordAction, &QAction::triggered, this, &MainWindow::setupCoordinateWizard);
-    connect(m_toggleCoordBtn, &QPushButton::clicked, this, [this](bool checked) {
-        m_coordManager->toggleCoordinateDisplay(checked);
-        m_toggleCoordBtn->setText(checked ? "隐藏用户坐标系" : "显示用户坐标系");
-    });
+    connect(m_robotParamAction, &QAction::triggered, this, &MainWindow::onRobotParameterSettings);
 
     // 焊接工艺
     connect(m_manageProcessAction, &QAction::triggered, this, &MainWindow::onManageWeldingProcess);
@@ -678,8 +642,6 @@ void MainWindow::setupUi()
     // 通信
     connect(m_connectAction, &QAction::triggered, this, &MainWindow::onConnectTriggered);
     connect(m_startBtn, &QPushButton::clicked, this, &MainWindow::onStartClicked);
-    connect(m_pauseBtn, &QPushButton::clicked, this, &MainWindow::onPauseClicked);
-    connect(m_resetBtn, &QPushButton::clicked, this, &MainWindow::onResetClicked);
     connect(m_powerBtn, &QPushButton::clicked, this, &MainWindow::toggleRobotPower);
     connect(m_floatingToolWidget->btnRestore, &QPushButton::clicked, this, &MainWindow::restoreDrawing);
     connect(m_floatingToolWidget->btnUndo, &QPushButton::clicked, this, &MainWindow::undo);
@@ -691,7 +653,8 @@ void MainWindow::setupUi()
     connect(m_floatingToolWidget->btnClose, &QPushButton::clicked, this, [this](){
         m_floatingToolWidget->hide();
         m_floatingToolWidget->btnEraser->setChecked(false);
-        m_floatingToolWidget->btnLasso->setChecked(false);
+        m_floatingToolWidget->btnRotate->setChecked(false);
+        m_floatingToolWidget->btnMirror->setChecked(false);
         m_floatingToolWidget->btnMove->setChecked(false);
         m_floatingToolWidget->setSliderVisible(false);
     });
@@ -703,29 +666,36 @@ void MainWindow::setupUi()
         m_floatingToolWidget->raise();
     });
     connect(renderArea, &RenderArea::itemDeleted, this, &MainWindow::handleItemDeleted);
+    connect(m_permissionBtn, &QPushButton::clicked, this, &MainWindow::onPermissionBtnClicked);
 
     connect(m_floatingToolWidget->sliderEraserSize, &QSlider::valueChanged, this, [this](int value){
         m_floatingToolWidget->lblEraserSize->setText(QString::number(value));
         renderArea->setEraserSize(value);
     });
-    connect(m_floatingToolWidget->btnLasso, &QPushButton::toggled, this, [this](bool checked){
-        if (checked) { m_floatingToolWidget->btnEraser->setChecked(false); m_floatingToolWidget->btnMove->setChecked(false); }
-        renderArea->setLassoMode(checked);
+    connect(m_floatingToolWidget->btnRotate, &QPushButton::toggled, this, [this](bool checked){
+        if (checked) { m_floatingToolWidget->btnEraser->setChecked(false); m_floatingToolWidget->btnMove->setChecked(false); m_floatingToolWidget->btnMirror->setChecked(false); }
+        renderArea->setRotateMode(checked);
+    });
+    connect(m_floatingToolWidget->btnMirror, &QPushButton::toggled, this, [this](bool checked){
+        if (checked) { m_floatingToolWidget->btnEraser->setChecked(false); m_floatingToolWidget->btnMove->setChecked(false); m_floatingToolWidget->btnRotate->setChecked(false); }
+        renderArea->setMirrorMode(checked);
     });
     connect(m_floatingToolWidget->btnEraser, &QPushButton::toggled, this, [this](bool checked){
-        if (checked) { m_floatingToolWidget->btnLasso->setChecked(false); m_floatingToolWidget->btnMove->setChecked(false); }
+        if (checked) { m_floatingToolWidget->btnRotate->setChecked(false); m_floatingToolWidget->btnMove->setChecked(false); m_floatingToolWidget->btnMirror->setChecked(false); }
         m_floatingToolWidget->setSliderVisible(checked);
         renderArea->setEraserMode(checked);
     });
     connect(m_floatingToolWidget->btnMove, &QPushButton::toggled, this, [this](bool checked){
-        if (checked) { m_floatingToolWidget->btnLasso->setChecked(false); m_floatingToolWidget->btnEraser->setChecked(false); }
+        if (checked) { m_floatingToolWidget->btnRotate->setChecked(false); m_floatingToolWidget->btnEraser->setChecked(false); m_floatingToolWidget->btnMirror->setChecked(false); }
         renderArea->setMoveMode(checked);
     });
     // 连接批量删除信号
     connect(renderArea, &RenderArea::bulkPathsDeleted, this, &MainWindow::handleBulkPathsDeleted);
+    connect(renderArea, &RenderArea::reorderPathsRequested, this, &MainWindow::reorderPathsGeo);
     connect(renderArea, &RenderArea::cancelModesRequested, this, [this](){
-        m_floatingToolWidget->btnLasso->setChecked(false);
+        m_floatingToolWidget->btnRotate->setChecked(false);
         m_floatingToolWidget->btnEraser->setChecked(false);
+        m_floatingToolWidget->btnMirror->setChecked(false);
         m_floatingToolWidget->btnMove->setChecked(false);
         m_floatingToolWidget->setSliderVisible(false);
     });
@@ -741,12 +711,10 @@ void MainWindow::setupUi()
             renderArea->setPositioningBlocks(dlg.getBlocks());
         }
     });
+    connect(m_modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::onRoboxModeChanged);
 
     m_floatingToolWidget->installEventFilter(this);
-    m_toggleCoordBtn->installEventFilter(this);
     m_startBtn->installEventFilter(this);
-    m_pauseBtn->installEventFilter(this);
-    m_resetBtn->installEventFilter(this);
 
     resize(1200, 700);
 }
@@ -899,6 +867,13 @@ void MainWindow::loadDrawingData(const QString &filePath)
                     contour.points.append(QPointF(xy[0].toDouble(), xy[1].toDouble()));
                 }
             }
+            if (contour.type == "圆" && contour.points.size() >= 3) {
+                QPointF firstPt = contour.points.first();
+                QPointF lastPt = contour.points.last();
+                if (std::hypot(firstPt.x() - lastPt.x(), firstPt.y() - lastPt.y()) > 1e-4) {
+                    contour.points.append(firstPt);
+                }
+            }
             m_displayPaths.append(contour);
         }
     }
@@ -942,7 +917,7 @@ void MainWindow::handleTableSelectionChanged()
     // 1. 获取当前表格中所有被选中的行号
     QList<int> selectedRows;
     QList<QTableWidgetItem*> selectedItems = dataTable->selectedItems();
-    for (auto item : selectedItems) {
+    for (auto item : std::as_const(selectedItems)) {
         int row = item->row();
         if (!selectedRows.contains(row)) {
             selectedRows.append(row);
@@ -967,7 +942,7 @@ void MainWindow::handleTableSelectionChanged()
         m_rootFaceSpin->blockSignals(false);
         QString infoText;
 
-        // --- 几何参数计算逻辑（保留原样） ---
+        // --- 几何参数计算逻辑 ---
         if (c.type == "直线" && c.points.size() >= 2) {
             QPointF p1 = c.points.first(), p2 = c.points.last();
             double length = std::hypot(p2.x() - p1.x(), p2.y() - p1.y());
@@ -994,46 +969,26 @@ void MainWindow::handleTableSelectionChanged()
                            .arg(c.points.first().x(), 0, 'f', 2).arg(c.points.first().y(), 0, 'f', 2)
                            .arg(c.points.last().x(), 0, 'f', 2).arg(c.points.last().y(), 0, 'f', 2)
                            .arg(arcLength, 0, 'f', 2);
-        } else {
-            struct ArcSegment { QPointF start, end, center; double radius; bool isLine; };
-            QList<ArcSegment> segments;
 
-            // 拟合误差阈值。数值越大，拟合的段数越少（圆弧越少），但会轻微失真。
-            // 建议：如果是毫米为单位，0.5是个不错的选择。
-            const double TOLERANCE = 0.5;
+        } else if (c.type.contains("样条") || c.type.contains("拟合")) {
+            int numSegments = (c.points.size() - 1) / 2;
+            infoText = QString("<span style='font-size:14px; font-weight:bold; color:#333;'>【 %1 参数 】</span><br>"
+                               "控制点集:%2 &nbsp;&nbsp;&nbsp; 拟合段数:%3<br>")
+                           .arg(c.type).arg(c.points.size()).arg(numSegments);
 
-            auto distToLine = [](const QPointF& p, const QPointF& a, const QPointF& b) {
-                double l2 = std::pow(a.x() - b.x(), 2) + std::pow(a.y() - b.y(), 2);
-                if (l2 == 0) return std::hypot(p.x() - a.x(), p.y() - a.y());
-                double t = ((p.x() - a.x()) * (b.x() - a.x()) + (p.y() - a.y()) * (b.y() - a.y())) / l2;
-                t = std::max(0.0, std::min(1.0, t));
-                return std::hypot(p.x() - (a.x() + t * (b.x() - a.x())), p.y() - (a.y() + t * (b.y() - a.y())));
-            };
+            for (int s = 0; s < numSegments; ++s) {
+                if (s * 2 + 2 < c.points.size()) { // 防越界保护
+                    QPointF p1 = c.points[s * 2];       // 起点
+                    QPointF p2 = c.points[s * 2 + 1];   // 途经点
+                    QPointF p3 = c.points[s * 2 + 2];   // 终点
 
-            int n = c.points.size();
-            int i = 0;
-
-            // 贪心搜索循环
-            while (i < n - 1) {
-                int best_j = i + 1;
-                ArcSegment best_arc = {c.points[i], c.points[i+1], QPointF(), 0, true};
-
-                for (int j = n - 1; j >= i + 2; --j) {
-                    int mid = i + (j - i) / 2;
-                    QPointF p1 = c.points[i], p2 = c.points[mid], p3 = c.points[j];
-
+                    // 利用简单的数学公式判断这3个点是直是弯（三点共线判定）
                     double D = 2 * (p1.x()*(p2.y() - p3.y()) + p2.x()*(p3.y() - p1.y()) + p3.x()*(p1.y() - p2.y()));
-
                     if (std::abs(D) < 1e-6) {
-                        bool goodLine = true;
-                        for(int k = i + 1; k < j; ++k) {
-                            if (distToLine(c.points[k], p1, p3) > TOLERANCE) { goodLine = false; break; }
-                        }
-                        if (goodLine) {
-                            best_j = j;
-                            best_arc = {p1, p3, QPointF(), 0, true};
-                            break;
-                        }
+                        infoText += QString("<b>段%1 [直线]</b> 起点:(%2,%3) &nbsp;终点:(%4,%5) &nbsp;长度:%6<br>")
+                                        .arg(s+1).arg(p1.x(), 0, 'f', 1).arg(p1.y(), 0, 'f', 1)
+                                        .arg(p3.x(), 0, 'f', 1).arg(p3.y(), 0, 'f', 1)
+                                        .arg(std::hypot(p3.x()-p1.x(), p3.y()-p1.y()), 0, 'f', 1);
                     } else {
                         double xc = ((p1.x()*p1.x() + p1.y()*p1.y())*(p2.y() - p3.y()) +
                                      (p2.x()*p2.x() + p2.y()*p2.y())*(p3.y() - p1.y()) +
@@ -1043,42 +998,17 @@ void MainWindow::handleTableSelectionChanged()
                                      (p3.x()*p3.x() + p3.y()*p3.y())*(p2.x() - p1.x())) / D;
                         double R = std::hypot(p1.x() - xc, p1.y() - yc);
 
-                        bool goodArc = true;
-                        for(int k = i + 1; k < j; ++k) {
-                            double dist = std::abs(std::hypot(c.points[k].x() - xc, c.points[k].y() - yc) - R);
-                            if (dist > TOLERANCE) { goodArc = false; break; }
-                        }
-                        if (goodArc) {
-                            best_j = j;
-                            best_arc = {p1, p3, QPointF(xc, yc), R, false};
-                            break;
-                        }
+                        infoText += QString("<b>段%1 [圆弧]</b> 起点:(%2,%3) &nbsp;终点:(%4,%5) &nbsp;半径:%6<br>")
+                                        .arg(s+1).arg(p1.x(), 0, 'f', 1).arg(p1.y(), 0, 'f', 1)
+                                        .arg(p3.x(), 0, 'f', 1).arg(p3.y(), 0, 'f', 1).arg(R, 0, 'f', 1);
                     }
                 }
-
-                segments.append(best_arc);
-                i = best_j;
             }
-
-            infoText = QString("<span style='font-size:14px; font-weight:bold; color:#333;'>【 %1 参数 (拟合) 】</span><br>"
-                               "原始点数:%2 &nbsp;&nbsp;&nbsp; 拟合段数:%3<br>")
-                           .arg(c.type).arg(n).arg(segments.size());
-
-            for (int s = 0; s < segments.size(); ++s) {
-                const auto& seg = segments[s];
-                if (seg.isLine) {
-                    infoText += QString("<b>段%1 [直线]</b> 起点:(%2,%3) &nbsp;终点:(%4,%5) &nbsp;长度:%6<br>")
-                                    .arg(s+1).arg(seg.start.x(), 0, 'f', 1).arg(seg.start.y(), 0, 'f', 1)
-                                    .arg(seg.end.x(), 0, 'f', 1).arg(seg.end.y(), 0, 'f', 1)
-                                    .arg(std::hypot(seg.end.x()-seg.start.x(), seg.end.y()-seg.start.y()), 0, 'f', 1);
-                } else {
-                    infoText += QString("<b>段%1 [圆弧]</b> 起点:(%2,%3) &nbsp;终点:(%4,%5) &nbsp;半径:%6<br>")
-                                    .arg(s+1).arg(seg.start.x(), 0, 'f', 1).arg(seg.start.y(), 0, 'f', 1)
-                                    .arg(seg.end.x(), 0, 'f', 1).arg(seg.end.y(), 0, 'f', 1).arg(seg.radius, 0, 'f', 1);
-                }
-            }
-            infoText = infoText.trimmed();
+        } else {
+            infoText = QString("<span style='font-size:14px; font-weight:bold; color:#333;'>【 %1 】</span><br>包含 %2 个控制点")
+                           .arg(c.type).arg(c.points.size());
         }
+
         if (selectedRows.size() > 1) {
             infoText = QString("<span style='color:#999; font-size:11px;'>（多选 %1 条，仅显首条）</span><br>").arg(selectedRows.size()) + infoText;
         }
@@ -1087,7 +1017,6 @@ void MainWindow::handleTableSelectionChanged()
     } else {
         detailWidget->hide(); // 没有选中时隐藏面板
     }
-
     renderArea->setHighlightedPathIndices(selectedRows);
 }
 
@@ -1224,112 +1153,6 @@ void MainWindow::applyRotationMatrix()
     }
 }
 
-// ----------------------------------------------------
-// 功能：建立用户坐标系向导
-// ----------------------------------------------------
-void MainWindow::setupCoordinateWizard()
-{
-    // 如果没有管孔数据，弹窗提示并返回
-    if (weldHoles.isEmpty()) {
-        QMessageBox::warning(this, "操作提示", "当前没有管孔数据，无法建立坐标系。\n请先点击“文件 -> 导入DXF”加载图纸。");
-        return;
-    }
-
-    if (m_coordManager && m_coordManager->isSetupComplete()) {
-        QMessageBox::StandardButton reply;
-        reply = QMessageBox::question(this,
-                                      "重新建立",
-                                      "检测到当前已建立用户坐标系，是否重新建立？\n（重新建立将覆盖原有坐标系数据）",
-                                      QMessageBox::Yes | QMessageBox::Cancel,
-                                      QMessageBox::Cancel);
-
-        if (reply == QMessageBox::Cancel) {
-            return;
-        }
-    }
-
-    QDialog* dialog = new QDialog(this);
-    // 添加自动销毁属性，避免内存泄漏
-    dialog->setAttribute(Qt::WA_DeleteOnClose);
-    dialog->setWindowTitle("用户坐标系建立向导");
-    dialog->setWindowFlags(dialog->windowFlags() & ~Qt::WindowContextHelpButtonHint);
-    dialog->setMinimumWidth(400);
-
-    QVBoxLayout* layout = new QVBoxLayout(dialog);
-    layout->setContentsMargins(15, 15, 15, 15);
-    layout->setSpacing(15);
-
-    // 标题标签
-    QLabel* titleLabel = new QLabel("请按照提示操作机器人", dialog);
-    QFont font = titleLabel->font();
-    font.setBold(true);
-    font.setPointSize(14);
-    titleLabel->setFont(font);
-    titleLabel->setAlignment(Qt::AlignCenter);
-    layout->addWidget(titleLabel);
-
-    QLabel* infoLabel = new QLabel("初始化中...", dialog);
-    infoLabel->setWordWrap(true);
-    infoLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-    infoLabel->setStyleSheet(R"(
-        QLabel {
-            color: blue;
-            font-size: 14px;
-            padding: 10px; /* 标签内部上下左右内边距，避免文本贴边 */
-            line-height: 1.5; /* 行间距1.5倍，文本不拥挤 */
-        }
-    )");
-    infoLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    infoLabel->setMinimumHeight(60);
-    layout->addWidget(infoLabel);
-
-    QHBoxLayout* btnLayout = new QHBoxLayout();
-    QPushButton* confirmBtn = new QPushButton("确定 (当前步骤完成)", dialog);
-    QPushButton* cancelBtn = new QPushButton("取消", dialog);
-    btnLayout->addWidget(confirmBtn);
-    btnLayout->addWidget(cancelBtn);
-    layout->addLayout(btnLayout);
-
-    // 使用定时器同步 Manager 的状态文字到对话框
-    QTimer* syncTimer = new QTimer(dialog);
-    connect(syncTimer, &QTimer::timeout, this, [this, infoLabel]() {
-        if (m_statusLabel) infoLabel->setText(m_statusLabel->text());
-    });
-    syncTimer->start(200);
-
-    // 确认按钮逻辑
-    connect(confirmBtn, &QPushButton::clicked, this, [this, dialog]() {
-        m_coordManager->confirmCurrentStep();
-        if (m_coordManager->isSetupComplete()) {
-            dialog->accept();
-            QMessageBox::information(this, "成功", "用户坐标系已建立！\n三维坐标已更新。");
-            m_toggleCoordBtn->setVisible(true); // 按照要求，完成后显示控制按钮
-            m_toggleCoordBtn->setChecked(true);
-        }
-    });
-
-    // 取消按钮逻辑
-    connect(cancelBtn, &QPushButton::clicked, this, [this, dialog]() {
-        m_coordManager->cancelCurrentStep();
-        dialog->reject();
-    });
-
-    // 右上角叉号，执行取消逻辑
-    connect(dialog, &QDialog::finished, this, [this](int result) {
-
-        if (result == QDialog::Rejected) {
-            m_coordManager->cancelCurrentStep();
-        }
-    });
-
-    // 启动向导
-    m_coordManager->startSetup();
-
-    dialog->adjustSize();
-    dialog->move(this->geometry().center() - dialog->rect().center());
-
-    dialog->exec();
-}
 
 // ----------------------------------------------------
 // 功能：打开焊接工艺管理对话框
@@ -1346,7 +1169,6 @@ void MainWindow::onManageWeldingProcess()
 // ----------------------------------------------------
 void MainWindow::loadWeldingProcesses()
 {
-    // 路径：exe 同级目录下的 welding_processes.json
     QString path = QCoreApplication::applicationDirPath() + "/welding_processes.json";
     QFile file(path);
 
@@ -1376,138 +1198,99 @@ void MainWindow::loadWeldingProcesses()
 // =============================================================================
 void MainWindow::onConnectTriggered()
 {
+    if (m_isRobotCommandRunning) {
+        showAndSaveLog("机器人连接操作正在执行，请稍候...");
+        return;
+    }
+
     ConnectionDialog dlg(this);
     dlg.setIp(m_lastIp);
-    dlg.setPort(m_lastPort);
 
     if (dlg.exec() == QDialog::Accepted) {
-        int action = dlg.getAction();
-
-        if (action == 1) {
+        if (dlg.getAction() == 1) {
             m_lastIp = dlg.getIp();
-            m_lastPort = dlg.getPort();
-
             QSettings settings(QCoreApplication::applicationDirPath() + "/config.ini", QSettings::IniFormat);
             settings.setValue("RobotIP", m_lastIp);
-            settings.setValue("RobotPort", m_lastPort);
 
-            m_modbusManager->connectToRobot(m_lastIp, m_lastPort);
+            m_isRobotCommandRunning = true;
+            m_connectAction->setEnabled(false);
+            showAndSaveLog(QString("正在连接机器人 %1 ...").arg(m_lastIp));
 
-            // 👇【救命代码 2】：手动连接时也必须强切工作目录！
-            QDir::setCurrent(QCoreApplication::applicationDirPath());
+            QThread* worker = QThread::create([this, ip = m_lastIp]() {
+                RobotConnectResult result;
+                QDir::setCurrent(QCoreApplication::applicationDirPath());
+                result.ret = RobotAPI::ConnectRobot(ip.toStdString(), result.devId, true);
+                if (result.ret == 0 || result.ret == 10021) {
+                    RobotAPI::SelectRobot(result.devId);
+                    result.apiRet = RobotAPI::EnableApiControl(true, result.devId);
+                }
 
-            QString logDir = QCoreApplication::applicationDirPath() + "/log";
-            QDir().mkpath(logDir);
-            static QByteArray logPathBa = logDir.toLocal8Bit();
-            RobotAPI::SetLogPath(logPathBa.data());
+                QMetaObject::invokeMethod(this, [this, result]() {
+                    m_isRobotCommandRunning = false;
+                    m_connectAction->setEnabled(true);
 
-            // 恢复使用 std::string
-            std::string ipStr = m_lastIp.toStdString();
-            int ret = RobotAPI::ConnectRobot(ipStr, m_currentDevId);
+                    if (result.ret == 0 || result.ret == 10021) {
+                        m_currentDevId = result.devId;
+                        showAndSaveLog(QString("SDK连接就绪！分配ID为: %1").arg(m_currentDevId));
+                        if (result.apiRet == 0) {
+                            showAndSaveLog("已使能当前机器人外部 API 控制权限。");
+                        } else {
+                            showAndSaveLog(QString("警告：使能 API 权限失败，错误码: %1").arg(result.apiRet));
+                        }
 
-            if (ret == 0 || ret == 10021) {
-                RobotAPI::SelectRobot(m_currentDevId);
-                showAndSaveLog(QString("SDK连接就绪！当前操作设备ID为: %1").arg(m_currentDevId));
-            } else {
-                showAndSaveLog(QString("SDK连接失败！错误码: %1").arg(ret));
-                QMessageBox::critical(this, "SDK 错误", QString("无法建立 SDK 核心连接，错误码: %1").arg(ret));
-            }
-
-        } else if (action == 2) {
-            m_modbusManager->disconnectFromRobot();
-
+                        m_statusTimer->start(200); // 启动状态轮询
+                    } else {
+                        showAndSaveLog(QString("SDK连接失败！错误码: %1").arg(result.ret));
+                        m_currentDevId = 0;
+                    }
+                }, Qt::QueuedConnection);
+            });
+            connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+            worker->start();
+        } else if (dlg.getAction() == 2) {
             if (m_currentDevId != 0) {
-                // 恢复为 RobotAPI
-                RobotAPI::DisconnectRobot(m_currentDevId);
-                showAndSaveLog(QString("SDK连接已断开 (Id: %1)").arg(m_currentDevId));
+                m_isRobotCommandRunning = true;
+                m_connectAction->setEnabled(false);
+                m_statusTimer->stop(); // 停止轮询
+                unsigned int devId = m_currentDevId;
                 m_currentDevId = 0;
+                showAndSaveLog(QString("正在断开机器人连接(Id: %1)...").arg(devId));
+
+                QThread* worker = QThread::create([this, devId]() mutable {
+                    RobotAPI::DisconnectRobot(devId);
+
+                    QMetaObject::invokeMethod(this, [this]() {
+                        m_isRobotCommandRunning = false;
+                        m_connectAction->setEnabled(true);
+                        showAndSaveLog("机器人连接已断开。");
+                        onStatusTimer();
+                    }, Qt::QueuedConnection);
+                });
+                connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+                worker->start();
             }
         }
     }
 }
 
-void MainWindow::onModbusStateChanged(int state)
-{
-    if (state == 2) { // 已连接 (绿色)
-        m_statusIconLabel->setStyleSheet("background-color: #4CAF50; border-radius: 8px;");
-        m_statusTextLabel->setText("已连接");
-        m_statusLabel->setText(QString("已连接到机器人: %1:%2").arg(m_lastIp).arg(m_lastPort));
-
-        m_startBtn->setVisible(true);
-        m_pauseBtn->setVisible(false);
-        m_resetBtn->setVisible(true);
-    }
-    else if (state == 1) { // 正在连接 (黄色)
-        m_statusIconLabel->setStyleSheet("background-color: #FFC107; border-radius: 8px;");
-        m_statusTextLabel->setText("正在连接...");
-        m_statusLabel->setText("尝试连接中...");
-
-        m_startBtn->setVisible(false);
-        m_pauseBtn->setVisible(false);
-        m_resetBtn->setVisible(false);
-    }
-    else { // 未连接 / 断开 (红色)
-        m_statusIconLabel->setStyleSheet("background-color: #F44336; border-radius: 8px;");
-        m_statusTextLabel->setText("未连接");
-        m_statusLabel->setText("未连接 / 连接断开");
-
-        m_startBtn->setVisible(false);
-        m_pauseBtn->setVisible(false);
-        m_resetBtn->setVisible(false);
-    }
-}
-
 // =============================================================================
-// 机器人控制逻辑
+// 生成运行程序界面
 // =============================================================================
 void MainWindow::onStartClicked()
 {
-    if (m_startBtn->text() == "预约") {
-        // 触发启动信号 (40129.9) - 跑步骤1和2
-        m_modbusManager->prepareAndStart();
+    if (m_currentDevId == 0 || !RobotAPI::IsConnected(m_currentDevId)) {
+        QMessageBox::warning(this, "未连接", "请先连接机器人。");
+        return;
     }
-    else if (m_startBtn->text() == "启动") {
-        // 到达启动之后，不再跑步骤2，而是持续跑步骤3！
-        if (weldHoles.isEmpty()) {
-            QMessageBox::warning(this, "警告", "没有管孔数据可供焊接！");
-            return;
-        }
 
-        m_currentWeldIndex = 0;
-        m_isWeldingProcessRunning = true;
-        m_startBtn->setText("连续焊接中...");
-        m_startBtn->setEnabled(false); // 防止中途乱点
-
-        m_pauseBtn->setVisible(true);
-        m_pauseBtn->setChecked(false); // 确保按钮处于没被按下的状态
-        m_pauseBtn->setText("暂停");
-
-        m_modbusManager->startWeldingProcess();
+    if (m_displayPaths.isEmpty()) {
+        QMessageBox::warning(this, "无图纸", "当前没有可运行的加工线条，请先导入 DXF 图纸！");
+        return;
     }
-}
 
-// ----------------------------------------------------
-// 暂停按钮：处理暂停和恢复
-// ----------------------------------------------------
-void MainWindow::onPauseClicked()
-{
-    bool isPaused = m_pauseBtn->isChecked(); // 按钮按下状态为 true (暂停中)
-
-    if (isPaused) {
-        m_pauseBtn->setText("继续");
-        m_modbusManager->setPause(true); // 发送暂停信号
-    } else {
-        m_pauseBtn->setText("暂停");
-        m_modbusManager->setPause(false); // 清除暂停并触发启动信号
-    }
-}
-
-// ----------------------------------------------------
-// 复位按钮
-// ----------------------------------------------------
-void MainWindow::onResetClicked()
-{
-    m_modbusManager->resetAlarm();
+    TaskProgramDialog* dlg = new TaskProgramDialog(m_currentDevId, m_displayPaths, this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->show();
 }
 
 // ----------------------------------------------------
@@ -1515,104 +1298,62 @@ void MainWindow::onResetClicked()
 // ----------------------------------------------------
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    if (m_isShuttingDown || !m_modbusManager || !m_modbusManager->isConnected()) {
-        if (m_modbusManager) {
-            m_modbusManager->disconnectFromRobot();
+    if (m_isShuttingDown) {
+        event->ignore();
+        return;
+    }
+
+    if (m_isRobotCommandRunning) {
+        if (m_statusLabel) {
+            m_statusLabel->setText("机器人连接操作正在执行，请稍候再关闭。");
         }
-        event->accept();
+        event->ignore();
         return;
     }
 
-    event->ignore();
-    m_isShuttingDown = true;
-    m_statusLabel->setText("正在安全关闭机器人并清理状态...");
-
-    // 监听底层的“关机完成”信号。收到信号后，立刻重新触发关闭
-    connect(m_modbusManager, &ModbusManager::shutdownFinished, this, [this]() {
-        this->close();
-    });
-
-    // 调用底层的安全关闭逻辑
-    m_modbusManager->safeShutdown();
-}
-
-// =============================================================================
-// 更新伺服使能 UI 状态
-// =============================================================================
-void MainWindow::onServoStateChanged(bool enabled)
-{
-    if (enabled) {
-        // 绿色：伺服已上电
-        m_servoIconLabel->setStyleSheet("background-color: #4CAF50; border-radius: 8px;");
-        m_servoTextLabel->setText("伺服使能");
-    } else {
-        // 灰色：伺服未上电/断开
-        m_servoIconLabel->setStyleSheet("background-color: #9E9E9E; border-radius: 8px;");
-        m_servoTextLabel->setText("伺服断开");
+    if (m_statusTimer && m_statusTimer->isActive()) {
+        m_statusTimer->stop();
     }
-}
 
-// =============================================================================
-// 更新自动/手动 UI 状态
-// =============================================================================
-void MainWindow::onAutoStateChanged(bool isAuto)
-{
-    if (isAuto) {
-        m_autoTextLabel->setStyleSheet("color: #4CAF50;"); // 绿色文字
-        m_autoTextLabel->setText("自动模式");
-    } else {
-        m_autoTextLabel->setStyleSheet("color: #FF9800;"); // 橙色文字
-        m_autoTextLabel->setText("手动模式");
-    }
-}
+    if (m_currentDevId != 0 && RobotAPI::IsConnected(m_currentDevId)) {
+        if (m_statusLabel) {
+            m_statusLabel->setText("正在安全停止机器人并清理状态...");
+        }
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        m_isShuttingDown = true;
+        m_isRobotCommandRunning = true;
+        m_connectAction->setEnabled(false);
+        unsigned int devId = m_currentDevId;
+        m_currentDevId = 0;
+        event->ignore();
 
-// ----------------------------------------------------
-// 功能：持续下发步骤三的数据 (从表格里依次取点)
-// ----------------------------------------------------
-void MainWindow::sendNextWeldHole()
-{
-    if (!m_isWeldingProcessRunning) return;
+        QThread* worker = QThread::create([this, devId]() mutable {
+            RobotAPI::MOVEHOLD(devId);
+            RobotAPI::MOVECLEAR(devId);
+            RobotAPI::TerminateProgram(devId);
+            RobotAPI::PowerOff(devId);
+            RobotAPI::DisconnectRobot(devId);
 
-    if (m_currentWeldIndex >= weldHoles.size()) {
-
-        m_statusLabel->setText("所有管孔焊接完成！下发全 0 数据...");
-        m_modbusManager->sendWeldingFinished();
-
-        m_isWeldingProcessRunning = false;
-        m_startBtn->setText("预约");
-        m_startBtn->setEnabled(true);
-        m_pauseBtn->setVisible(false);
-
-        QTimer::singleShot(500, this, [this](){
-            QMessageBox::information(this, "完成", "恭喜，所有管孔已连续焊接完毕！");
+            QMetaObject::invokeMethod(this, [this]() {
+                QApplication::restoreOverrideCursor();
+                m_isRobotCommandRunning = false;
+                m_isShuttingDown = false;
+                close();
+            }, Qt::QueuedConnection);
         });
+        connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+        worker->start();
         return;
     }
 
-    const Hole& hole = weldHoles[m_currentWeldIndex];
-
-    WeldingData data;
-    data.x = hole.center3D.x();
-    data.y = hole.center3D.y();
-    data.z = hole.center3D.z();
-    data.r = hole.radius;
-    data.processId = 1;
-
-    dataTable->selectRow(m_currentWeldIndex);
-    m_statusLabel->setText(QString("正在下发并焊接第 %1 / %2 个管孔...")
-                               .arg(m_currentWeldIndex + 1)
-                               .arg(weldHoles.size()));
-
-    // 调用专属的管孔数据下发函数
-    m_modbusManager->sendWeldHoleData(data);
+    event->accept();
 }
 
 void MainWindow::restoreDrawing()
 {
     m_floatingToolWidget->btnRestore->clearFocus();
     m_floatingToolWidget->btnRestore->setDown(false);
-
-    m_floatingToolWidget->btnLasso->setChecked(false);
+    m_floatingToolWidget->btnRotate->setChecked(false);
     m_floatingToolWidget->btnEraser->setChecked(false);
 
     if (m_originalDisplayPaths.isEmpty() && m_originalWeldHoles.isEmpty()) return;
@@ -1649,6 +1390,7 @@ void MainWindow::restoreDrawing()
         renderArea->setHighlightedPathIndices(QList<int>());
         renderArea->setDisplayPaths(m_displayPaths);
         renderArea->setData(weldHoles, mainPlateHole, mainPlateContour, isRectangularPlate, false);
+        showAndSaveLog("图纸已还原到导入后的初始状态。");
     }
 }
 
@@ -1731,10 +1473,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         return true;
     }
     if (watched == m_floatingToolWidget ||
-        watched == m_toggleCoordBtn ||
         watched == m_startBtn ||
-        watched == m_pauseBtn ||
-        watched == m_resetBtn ||
         watched == m_powerBtn)
     {
         if (event->type() == QEvent::Enter || event->type() == QEvent::Leave) {
@@ -2192,8 +1931,7 @@ void MainWindow::toggleRobotPower()
     if (!m_isRobotPoweredOn) {
         showAndSaveLog(QString("正在尝试为机器人(Id: %1)上电...").arg(m_currentDevId));
 
-        // 👇 传入刚才 ConnectRobot 拿到的那个 m_currentDevId
-        int ret = RobotAPI::PowerOn(m_currentDevId);
+        int ret = RobotAPI::PowerOn();
 
         if (ret == 0) {
             m_isRobotPoweredOn = true;
@@ -2211,8 +1949,7 @@ void MainWindow::toggleRobotPower()
     } else {
         showAndSaveLog(QString("正在尝试关闭机器人(Id: %1)伺服...").arg(m_currentDevId));
 
-        // 👇 同样传入获取到的 ID
-        int ret = RobotAPI::PowerOff(m_currentDevId);
+        int ret = RobotAPI::PowerOff();
 
         if (ret == 0) {
             m_isRobotPoweredOn = false;
@@ -2228,4 +1965,362 @@ void MainWindow::toggleRobotPower()
             showAndSaveLog(QString("断电失败！错误码: %1").arg(ret));
         }
     }
+}
+
+void MainWindow::onStatusTimer()
+{
+    if (m_currentDevId == 0 || !RobotAPI::IsConnected(m_currentDevId)) {
+        // 如果断线了，UI 变红
+        m_statusIconLabel->setStyleSheet("background-color: #F44336; border-radius: 8px;");
+        m_statusTextLabel->setText("未连接");
+        m_startBtn->setVisible(false);
+        return;
+    }
+
+    // 正常连接时，UI 变绿
+    m_statusIconLabel->setStyleSheet("background-color: #4CAF50; border-radius: 8px;");
+    m_statusTextLabel->setText("已连接");
+    m_startBtn->setVisible(true);
+
+    // 1. 获取伺服状态
+    bool servoStatus = false;
+    RobotAPI::GetCurrentServoStatus(servoStatus, m_currentDevId);
+    if (servoStatus) {
+        m_servoIconLabel->setStyleSheet("background-color: #4CAF50; border-radius: 8px;");
+        m_servoTextLabel->setText("伺服使能");
+    } else {
+        m_servoIconLabel->setStyleSheet("background-color: #9E9E9E; border-radius: 8px;");
+        m_servoTextLabel->setText("伺服断开");
+    }
+    if (servoStatus != m_isRobotPoweredOn) {
+        m_isRobotPoweredOn = servoStatus; // 同步标志位
+
+        if (m_isRobotPoweredOn) {
+            m_powerBtn->setText("机器人断电");
+            m_powerBtn->setStyleSheet(
+                "QPushButton {"
+                "   background-color: #E53935; color: white; border: 1px solid #D32F2F; border-radius: 4px; padding: 5px 15px;"
+                "}"
+                "QPushButton:hover { background-color: #EF5350; }"
+                );
+        } else {
+            m_powerBtn->setText("机器人上电");
+            m_powerBtn->setStyleSheet(
+                "QPushButton {"
+                "   background-color: #2196F3; color: white; border: 1px solid #1E88E5; border-radius: 4px; padding: 5px 15px;"
+                "}"
+                "QPushButton:hover { background-color: #42A5F5; }"
+                );
+        }
+    }
+
+    // 2. 获取自动/手动模式
+    RoboxKeyMode keyMode = RoboxKeyMode::ROBOX_MODE_MANUAL;
+    RobotAPI::GetCurrentKeyMode(keyMode, m_currentDevId);
+
+    if (m_modeCombo) {
+        m_modeCombo->blockSignals(true);
+        if (keyMode == RoboxKeyMode::ROBOX_MODE_AUTO) {
+            m_modeCombo->setCurrentIndex(2);
+            m_modeCombo->setStyleSheet("QComboBox { background-color: #E53935; color: white; border-radius: 3px; padding: 2px 6px; }");
+        } else if (keyMode == RoboxKeyMode::ROBOX_MODE_MANUFAST) {
+            m_modeCombo->setCurrentIndex(1);
+            m_modeCombo->setStyleSheet("QComboBox { background-color: #FF9800; color: white; border-radius: 3px; padding: 2px 6px; }");
+        } else {
+            m_modeCombo->setCurrentIndex(0);
+            m_modeCombo->setStyleSheet("QComboBox { background-color: #4CAF50; color: white; border-radius: 3px; padding: 2px 6px; }");
+        }
+
+        m_lastModeIndex = m_modeCombo->currentIndex(); // 记录正确的底层状态
+        m_modeCombo->blockSignals(false); // 解除阻塞
+    }
+
+    // 3. 监控报警状态
+    bool alarmStatus = false;
+    RobotAPI::GetCurrentAlarmStatus(alarmStatus, m_currentDevId);
+    if (alarmStatus) {
+        m_statusLabel->setText("机器人当前存在报警，请复位！");
+    }
+}
+
+// ----------------------------------------------------
+// 功能：打开机器参数设置对话框
+// ----------------------------------------------------
+void MainWindow::onRobotParameterSettings()
+{
+    // 如果还没连接，拦住不让进
+    if (m_currentDevId == 0) {
+        QMessageBox::warning(this, "未连接", "请先在“连接”选项卡中建立机器人通信！");
+        return;
+    }
+
+    RobotParameterDialog* dialog = new RobotParameterDialog(m_currentDevId, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowFlags(Qt::Tool);
+    dialog->show();
+}
+
+// =================================================================
+// 功能：示教器权限获取与释放 (异步无阻塞)
+// =================================================================
+void MainWindow::onPermissionBtnClicked()
+{
+    // 防呆拦截：必须先建立网络连接
+    if (m_currentDevId == 0) {
+        QMessageBox::warning(this, "未连接", "请先连接机器人，再尝试获取控制权！");
+        return;
+    }
+
+    // 防止用户狂点导致指令堆叠，先禁用按钮并变色提示
+    m_permissionBtn->setEnabled(false);
+    m_permissionBtn->setText("正在切换权限...");
+    m_permissionBtn->setStyleSheet("background-color: #FF9800; color: white; border-radius: 4px; padding: 3px 10px; font-weight: bold;");
+
+    // 开启子线程去跟控制器通信
+    QThread* worker = QThread::create([this]() {
+        int ret = -1;
+        bool targetState = !m_hasPermission; // 目标状态是当前状态的反转
+
+        // 调用对应的 SDK 接口
+        if (targetState) {
+            ret = RobotAPI::GetPermission(m_currentDevId); // 去获取
+        } else {
+            ret = RobotAPI::ReleasePermission(m_currentDevId); // 去释放
+        }
+
+        // 通信完毕，安全切回主 UI 线程更新界面
+        QMetaObject::invokeMethod(this, [this, ret, targetState]() {
+            m_permissionBtn->setEnabled(true); // 恢复按钮可点
+
+            if (ret == 0) {
+                // 成功：更新本地标志位
+                m_hasPermission = targetState;
+
+                // 根据新状态，改变右下角按钮的颜色和文字
+                if (m_hasPermission) {
+                    m_permissionBtn->setText("释放控制权");
+                    m_permissionBtn->setStyleSheet("background-color: #4CAF50; color: white; border-radius: 4px; padding: 3px 10px; font-weight: bold;");
+                } else {
+                    m_permissionBtn->setText("获取控制权");
+                    m_permissionBtn->setStyleSheet("background-color: #9E9E9E; color: white; border-radius: 4px; padding: 3px 10px; font-weight: bold;");
+                }
+            } else {
+                // 失败：报错并恢复原本的按钮样式
+                QMessageBox::warning(this, "权限切换失败",
+                                     QString("操作失败！\n错误码: %1\n\n提示：如果是获取失败，请检查示教器屏幕上的【权限状态灯】是否为黄色（已释放状态）。").arg(ret));
+
+                if (m_hasPermission) {
+                    m_permissionBtn->setText("释放控制权");
+                    m_permissionBtn->setStyleSheet("background-color: #4CAF50; color: white; border-radius: 4px; padding: 3px 10px; font-weight: bold;");
+                } else {
+                    m_permissionBtn->setText("获取控制权");
+                    m_permissionBtn->setStyleSheet("background-color: #9E9E9E; color: white; border-radius: 4px; padding: 3px 10px; font-weight: bold;");
+                }
+            }
+        }, Qt::QueuedConnection);
+    });
+
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    worker->start();
+}
+
+// =================================================================
+// 功能：异步切换机器人运行模式 (手动/自动)
+// =================================================================
+void MainWindow::onRoboxModeChanged(int index)
+{
+    // 防呆 1：未连接机器人
+    if (m_currentDevId == 0) {
+        QMessageBox::warning(this, "未连接", "请先连接机器人！");
+        m_modeCombo->blockSignals(true);
+        m_modeCombo->setCurrentIndex(m_lastModeIndex); // 强行把下拉框切回原来的样子
+        m_modeCombo->blockSignals(false);
+        return;
+    }
+
+    // 防呆 2：未获取控制权
+    if (!m_hasPermission) {
+        QMessageBox::warning(this, "无控制权", "切换运行模式极度危险！\n必须先在右侧点击【获取控制权】！");
+        m_modeCombo->blockSignals(true);
+        m_modeCombo->setCurrentIndex(m_lastModeIndex);
+        m_modeCombo->blockSignals(false);
+        return;
+    }
+
+    // 冻结下拉框，防止在网络通信期间用户乱拨
+    m_modeCombo->setEnabled(false);
+
+    // 取出对应的枚举值 (0, 1, 或 2)
+    int modeValue = m_modeCombo->itemData(index).toInt();
+    unsigned int devId = m_currentDevId;
+
+    QThread* worker = QThread::create([this, modeValue, devId]() {
+
+        // 调用底层 SDK 切换模式
+        int ret = RobotAPI::SwitchRoboxMode(static_cast<RoboxKeyMode>(modeValue), devId);
+
+        // 切回主 UI 线程处理结果
+        QMetaObject::invokeMethod(this, [this, ret]() {
+            m_modeCombo->setEnabled(true);
+
+            if (ret == 0) {
+                // 成功：立马刷新一下状态，让按钮变色
+                showAndSaveLog(QString("运行模式切换成功！"));
+                onStatusTimer();
+            } else {
+                // 失败：弹窗报错，并安全地把下拉框 UI 拨回到修改前的状态
+                QMessageBox::warning(this, "模式切换失败",
+                                     QString("控制器拒绝了模式切换请求！错误码: %1\n\n核心排查：请确保已拔掉或在后台断开了一切实体/虚拟示教器！").arg(ret));
+
+                m_modeCombo->blockSignals(true);
+                m_modeCombo->setCurrentIndex(m_lastModeIndex);
+                m_modeCombo->blockSignals(false);
+            }
+        }, Qt::QueuedConnection);
+    });
+
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    worker->start();
+}
+
+// =============================================================================
+// 空间几何排序
+// =============================================================================
+void MainWindow::reorderPathsGeo()
+{
+    if (m_displayPaths.isEmpty()) return;
+
+    // saveUndoState(); // 如果你实现了撤销队列，保留此行以支持 Ctrl+Z
+
+    QVector<Contour> original = m_displayPaths;
+    QVector<Contour> reordered;
+    QList<int> unvisited;
+    for(int i = 0; i < original.size(); ++i) {
+        unvisited.append(i);
+    }
+
+    // 辅助函数：计算图元的“左下角评分”（数值越小，越靠近左下角）
+    auto getBottomLeftScore = [](const Contour& c) {
+        double minX = std::numeric_limits<double>::max();
+        double minY = std::numeric_limits<double>::max();
+        for (const QPointF& pt : c.points) {
+            if (pt.x() < minX) minX = pt.x();
+            if (pt.y() < minY) minY = pt.y(); // DXF坐标中 Y越小越靠下
+        }
+        double score = minX + minY;
+
+        // 【核心】：如果是直线，给予极高的优先级权重，让它优先作为起刀点
+        if (c.type.contains("直线")) {
+            score -= 1000.0;
+        }
+        return score;
+    };
+
+    const double TOL = 0.5; // 首尾相连的吸附容差（0.5毫米）
+
+    // 核心算法大循环：由外向内逐层剥离
+    while (!unvisited.isEmpty()) {
+
+        // 1. 寻找当前剩余图元中，最左下角（且优先直线）的图元，作为新一圈（层）的起点
+        int bestStartIdx = -1;
+        double bestScore = std::numeric_limits<double>::max();
+
+        for (int idx : unvisited) {
+            double score = getBottomLeftScore(original[idx]);
+            if (score < bestScore) {
+                bestScore = score;
+                bestStartIdx = idx;
+            }
+        }
+
+        // 2. 剥离并加入新一层的起点
+        int currentIdx = bestStartIdx;
+        unvisited.removeOne(currentIdx);
+        reordered.append(original[currentIdx]);
+
+        // 3. 贪心缝合：顺藤摸瓜，寻找首尾相连的下一根线，直到走完这一整圈闭环
+        bool foundNext = true;
+        while (foundNext && !unvisited.isEmpty()) {
+            foundNext = false;
+            QPointF currentEnd = reordered.last().points.last(); // 当前轨迹的物理终点
+
+            int nextIdx = -1;
+            bool needReverse = false;
+            double bestDist = std::numeric_limits<double>::max();
+
+            // 在未访问的图元中找最近的连接点
+            for (int idx : unvisited) {
+                const Contour& candidate = original[idx];
+                if (candidate.points.isEmpty()) continue;
+
+                QPointF candStart = candidate.points.first();
+                QPointF candEnd = candidate.points.last();
+
+                double distToStart = std::hypot(candStart.x() - currentEnd.x(), candStart.y() - currentEnd.y());
+                double distToEnd = std::hypot(candEnd.x() - currentEnd.x(), candEnd.y() - currentEnd.y());
+
+                // 情况A：下一根线的起点 连着 当前终点（标准正向）
+                if (distToStart <= TOL && distToStart < bestDist) {
+                    bestDist = distToStart;
+                    nextIdx = idx;
+                    needReverse = false;
+                }
+                // 情况B：下一根线的终点 连着 当前终点（说明画图时线画反了，记录翻转需求）
+                if (distToEnd <= TOL && distToEnd < bestDist) {
+                    bestDist = distToEnd;
+                    nextIdx = idx;
+                    needReverse = true;
+                }
+            }
+
+            // 如果找到了相连的线，将其加入队列并继续顺藤摸瓜
+            if (nextIdx != -1) {
+                Contour nextContour = original[nextIdx];
+                if (needReverse) {
+                    // 【智能纠错】：自动翻转画反的节点顺序，保证机器人在交接点不抬刀！
+                    QVector<QPointF> revPts;
+                    for (int i = nextContour.points.size() - 1; i >= 0; --i) {
+                        revPts.append(nextContour.points[i]);
+                    }
+                    nextContour.points = revPts;
+                }
+                reordered.append(nextContour);
+                unvisited.removeOne(nextIdx);
+                foundNext = true;
+            }
+        }
+        // 如果 foundNext 为 false，说明这一圈首尾闭合了或者断开了。
+        // While 循环会自动回到顶部，去剩下的内层图元里寻找下一个左下角起点！
+    }
+
+    // 4. 应用重新排序的数据
+    m_displayPaths = reordered;
+
+    // 清空并重新填充右侧表格
+    dataTable->blockSignals(true);
+    dataTable->setRowCount(0);
+
+    for (int i = 0; i < m_displayPaths.size(); ++i) {
+        dataTable->insertRow(i);
+
+        QTableWidgetItem *indexItem = new QTableWidgetItem(QString::number(i + 1));
+        indexItem->setTextAlignment(Qt::AlignCenter);
+        indexItem->setFlags(indexItem->flags() & ~Qt::ItemIsEditable);
+        dataTable->setItem(i, 0, indexItem);
+
+        QTableWidgetItem *typeItem = new QTableWidgetItem(m_displayPaths[i].type);
+        typeItem->setTextAlignment(Qt::AlignCenter);
+        typeItem->setFlags(typeItem->flags() & ~Qt::ItemIsEditable);
+        dataTable->setItem(i, 1, typeItem);
+    }
+    dataTable->blockSignals(false);
+
+    // 清理状态并刷新视图
+    renderArea->clearSelection();
+    if (detailWidget) detailWidget->hide();
+
+    renderArea->setDisplayPaths(m_displayPaths);
+    renderArea->update();
+
+    QMessageBox::information(this, "排序完成", "轨迹已按照【外层至内层、左下角起刀、连续首尾相连】的逻辑优化完毕！");
 }

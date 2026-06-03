@@ -67,7 +67,7 @@ public:
 WeldingProcessDialog::WeldingProcessDialog(QVector<WeldingProcess>* processList, QWidget *parent)
     : QDialog(parent), m_processList(processList)
 {
-    setWindowTitle("焊接工艺管理");
+    setWindowTitle("工艺管理");
     setMinimumSize(600, 400);
     setupUi();                                                                      // 初始化界面布局
     refreshTable();                                                                 // 初始化表格数据
@@ -117,7 +117,7 @@ void WeldingProcessDialog::setupUi()
         }
     )");
 
-    m_table->setHorizontalHeaderLabels({"工艺编号", "焊接策略", "备注"});
+    m_table->setHorizontalHeaderLabels({"工艺编号", "策略", "备注"});
     m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows); // 整行选中
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);  // 禁止直接双击编辑

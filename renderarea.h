@@ -14,6 +14,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include "positioningdialog.h"
+#include <QTime>
 
 struct Hole;
 struct Contour;
@@ -28,19 +29,17 @@ public:
 
     void setHighlightedIndex(int index);
 
-    void setUserCoordinatePoints(const QPointF& origin, const QPointF& xAxis, const QPointF& planePoint);
-    void setShowUserCoordinate(bool show);
-
     void setDisplayPaths(const QVector<Contour>& paths);
     void setHighlightedPathIndices(const QList<int> &indices);
     void setEraserMode(bool enabled);
     double scaleFactor() const { return m_scaleFactor; }
     double distancePointToSegment(const QPointF& p, const QPointF& p1, const QPointF& p2);
     void setEraserSize(int size);
-    void setLassoMode(bool enabled);
+    void setRotateMode(bool enabled);
+    void setMirrorMode(bool enabled);
     void clearSelection();
 
-    enum MoveState { MS_Select, MS_BasePoint, MS_Input };
+    enum TransformState { TS_Select, TS_BasePoint, TS_SecondPoint, TS_Input, TS_SelectShapeFeature, TS_DraggingToBlock };
     void setMoveMode(bool enabled);
     void findSnapPoint(const QPoint &pos);
 
@@ -49,6 +48,7 @@ public:
     QList<PositioningBlock> getPositioningBlocks() const { return m_posBlocks; }
 public slots:
     void executeMove();
+    void executeRotate();
 protected:
     void paintEvent(QPaintEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
@@ -65,6 +65,7 @@ signals:
     void bulkPathsDeleted(QList<int> indices);
     void cancelModesRequested();
     void pathsMoved(const QVector<Contour> &updatedPaths);
+    void reorderPathsRequested();
 private:
     // 管板数据
     QVector<Hole> weldHoles;                                // 仅焊接管孔（不含主体圆）
@@ -89,12 +90,6 @@ private:
     bool m_firstPaint = true;
     void applyCurrentTransform(QPainter &painter);          // 应用所有变换
 
-    // 用户坐标系显示相关
-    bool m_showUserCoordinate = false;                      // 显示/隐藏用户坐标系
-    QPointF m_userOrigin;                                   // 用户坐标系原点
-    QPointF m_userXAxis;                                    // 用户坐标系 x轴
-    QPointF m_userPlanePoint;                               // 用户坐标系 y轴
-
     QVector<Contour> m_displayPaths;
     int m_highlightPathIndex = -1;
     int m_highlightIndex = -1;
@@ -103,7 +98,8 @@ private:
     QPoint m_currentMousePos;
     int m_eraserSize = 20;
     void updateLassoSelection();
-    bool m_isLassoMode = false;
+    bool m_isRotateMode = false;
+    bool m_isMirrorMode = false;
     bool m_isLassoDragging = false;
     QPoint m_lassoStartPos;
     QPoint m_lassoCurrentPos;
@@ -113,7 +109,9 @@ private:
     bool m_isMiddlePanning = false;
 
     bool m_isMoveMode = false;
-    MoveState m_moveState = MS_Select;
+    TransformState m_transformState = TS_Select;
+    QWidget *m_rotateInputWidget;
+    QLineEdit *m_editRotateAngle;
     bool m_isSnapped = false;
     QPointF m_snappedDxfPos;
     QPoint m_snappedScreenPos;
@@ -125,6 +123,28 @@ private:
     QList<PositioningBlock> m_posBlocks;
 
     int m_lineWidth = 2;
+    QPointF m_mirrorAxisPoint1;
+
+    bool m_hasHoveredFeature = false;
+    QPointF m_hoveredPoint;
+    QLineF m_hoveredLine;
+
+    bool m_isSnappedToBlock = false;
+    int m_snappedBlockIndex = -1;
+    QTransform m_previewTransform; // 动态拖拽时的临时变换矩阵
+
+    PosBlockType m_alignTargetType;
+    struct AlignConstraint {
+        PosBlockType type;
+        QPointF shapePt;
+        QLineF shapeLine;
+        PositioningBlock block;
+    };
+    QList<AlignConstraint> m_alignConstraints; // 当前选中零件的受力约束栈
+    QPointF m_alignShapePoint;
+    QLineF m_alignShapeLine;
+
+    void applyAlignmentConstraint(const PositioningBlock& block);
 };
 
 #endif // RENDERAREA_H

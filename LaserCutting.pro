@@ -1,6 +1,6 @@
 QT       += core gui
-# Modbus TCP
-QT += serialbus serialport network
+
+QT += network
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
@@ -14,11 +14,12 @@ SOURCES += \
     connectiondialog.cpp \
     main.cpp \
     mainwindow.cpp \
-    modbusmanager.cpp \
+    motiontestdialog.cpp \
     positioningdialog.cpp \
     renderarea.cpp \
+    robotparameterdialog.cpp \
     rotationmatrixdialog.cpp \
-    usercoordinatemanager.cpp \
+    taskprogramdialog.cpp \
     weldingprocessdialog.cpp
 
 HEADERS += \
@@ -30,11 +31,12 @@ HEADERS += \
     libs/efort-robotics/include/irobot.h \
     libs/efort-robotics/include/math_pose.hpp \
     mainwindow.h \
-    modbusmanager.h \
+    motiontestdialog.h \
     positioningdialog.h \
     renderarea.h \
+    robotparameterdialog.h \
     rotationmatrixdialog.h \
-    usercoordinatemanager.h \
+    taskprogramdialog.h \
     weldingprocessdialog.h
 
 FORMS += \
@@ -138,7 +140,7 @@ RC_ICONS=icons1.ico
 DEFINES += NOMINMAX
 INCLUDEPATH += $$PWD
 CONFIG(debug, debug|release) {
-    LIBS += "$$PWD/libs/x64/EftSdk.lib"  # 注意看你本地是不是叫这个名字
+    LIBS += "$$PWD/libs/x64/EftSdk.lib"
 } else {
     LIBS += "$$PWD/libs/x64/EftSdk.lib"
 }

@@ -1,33 +1,36 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
-#include <QMainWindow>
-#include <QTableWidget>
-#include <QVector>
 #include <QAction>
-#include <QLabel>
-#include <QVector3D>
-#include <QMatrix4x4>
-#include <QTimer>
-#include <QPushButton>
-#include "weldingprocessdialog.h"
-#include "modbusmanager.h"
 #include <QCloseEvent>
-#include <QSettings>
-#include <QSplitter>
-#include <QWidget>
-#include <QMouseEvent>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QSlider>
-#include <QTextEdit>
-#include <QDoubleSpinBox>
 #include <QDate>
 #include <QDialog>
-#include "EfortSdk.h"
+#include <QDoubleSpinBox>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QList>
+#include <QMainWindow>
+#include <QMatrix4x4>
+#include <QMenu>
+#include <QMouseEvent>
+#include <QPointF>
+#include <QPolygonF>
+#include <QPushButton>
+#include <QSettings>
+#include <QSlider>
+#include <QSplitter>
+#include <QTableWidget>
+#include <QTextEdit>
+#include <QTimer>
+#include <QToolBar>
+#include <QVector>
+#include <QVector3D>
+#include <QVBoxLayout>
+#include <QWidget>
 
 class QCalendarWidget;
-class QTextEdit;
+class RenderArea;
+
 class LogViewerDialog : public QDialog {
     Q_OBJECT
 public:
@@ -41,11 +44,8 @@ private:
     QDate findEarliestLogDate();
 };
 
-class RenderArea;
-class usercoordinatemanager;
-
-struct Hole { QPointF center; QVector3D center3D; double radius = 0.0; };             // 管孔的二维坐标（二维点类，浮点型）、管孔的三维坐标（三维点类，浮点型）、管孔的半径
-struct Contour { QString type; QVector<QPointF> points; double bevelAngle = 0.0; double rootFace = 0.0;};
+struct Hole { QPointF center; QVector3D center3D; double radius = 0.0; };
+struct Contour { QString type; QVector<QPointF> points; double bevelAngle = 0.0; double rootFace = 0.0; };
 struct DrawingState {
     QVector<Contour> displayPaths;
     QVector<Hole> weldHoles;
@@ -53,12 +53,17 @@ struct DrawingState {
     QPolygonF mainPlateContour;
 };
 
+#include "robotparameterdialog.h"
+#include "weldingprocessdialog.h"
+#include "motiontestdialog.h"
+
 class FloatingToolWidget : public QWidget {
     Q_OBJECT
 public:
     QPushButton *btnRestore;
     QPushButton *btnEraser;
-    QPushButton *btnLasso;
+    QPushButton *btnRotate;
+    QPushButton *btnMirror;
     QPushButton *btnClose;
     QPushButton *btnMove;
     QPushButton *btnUndo;
@@ -91,71 +96,46 @@ public:
     ~MainWindow();
 
 private slots:
-    // 导入DXF的触发
     void importDxf();
-
-    // 处理右侧列表点击的槽函数
     void handleTableSelectionChanged();
-    // 修改表格数据触发
     void handleTableCellChanged(int row, int column);
-
     void applyRotationMatrix();
-
-    // 建立用户坐标系向导
-    void setupCoordinateWizard();
-
-    // 管理焊接工艺
     void onManageWeldingProcess();
-
-    // Modbus
     void onConnectTriggered();
-    void onModbusStateChanged(int state);
     void onStartClicked();
-    void onPauseClicked();
-    void onResetClicked();
-
-    // 响应伺服状态变化的槽函数
-    void onServoStateChanged(bool enabled);
-
-    // 响应自动模式变化的槽函数
-    void onAutoStateChanged(bool isAuto);
-
-    // 持续发送下一个管孔的函数
-    void sendNextWeldHole();
-
     void restoreDrawing();
     void handleItemDeleted(const QPointF &pos);
     void handleBulkPathsDeleted(QList<int> indices);
-
     void onBevelParametersChanged();
-
     void showAndSaveLog(const QString& msg);
     void showLogViewer();
-
     void showTableContextMenu(const QPoint &pos);
     void moveSelectedRowsUp();
     void moveSelectedRowsDown();
     void moveSelectedRowsToTop();
     void moveSelectedRowsToBottom();
-
     void toggleRobotPower();
+    void onStatusTimer();
+    void onRobotParameterSettings();
+    void onPermissionBtnClicked();
+    void onRoboxModeChanged(int index);
+    void reorderPathsGeo();
+
 private:
-    void loadDrawingData(const QString &filePath);      // 核心数据加载函数
-    void setupUi();                                     // UI初始化函数
-
-    void loadWeldingProcesses();                        // 从 JSON文件加载焊接工艺
-
+    void loadDrawingData(const QString &filePath);
+    void setupUi();
+    void loadWeldingProcesses();
     void updateTableIndices();
 
-    QVector<Hole> allHoles;                             // 所有圆（含主体圆+焊接管孔）
-    QVector<Hole> weldHoles;                            // 仅焊接管孔（不含主体圆）
-    Hole mainPlateHole;                                 // 管板主体圆（最大半径)
+    QVector<Hole> allHoles;
+    QVector<Hole> weldHoles;
+    Hole mainPlateHole;
     QVector<Contour> contours;
-    QPolygonF mainPlateContour;                         // 方形/多边形管板数据
-    bool isRectangularPlate = false;                    // 标记当前是否为方形管板
+    QPolygonF mainPlateContour;
+    bool isRectangularPlate = false;
 
-    RenderArea* renderArea;                             // 左侧绘图区
-    QTableWidget* dataTable;                            // 右侧数据表格
+    RenderArea* renderArea;
+    QTableWidget* dataTable;
 
     QSplitter* rightSplitter;
     QWidget* detailWidget;
@@ -165,45 +145,36 @@ private:
     QMenu* fileMenu;
     QToolBar* toolBar;
 
-    int m_currentSelectedIndex = -1;                    // 存储当前选中的孔洞索引 (-1表示未选中)
-
     QAction* rotateAction;
-    QMatrix4x4 rotationMatrix;                          // 存储旋转矩阵
+    QMatrix4x4 rotationMatrix;
 
-    usercoordinatemanager* m_coordManager;              // 自定义坐标类
-    QAction* m_setupCoordAction;
-    QPushButton* m_toggleCoordBtn;
-    QLabel* m_statusLabel;                              // 状态栏标签
+    QLabel* m_statusLabel;
     QMenu* m_operationMenu;
 
-    QVector<WeldingProcess> m_weldingProcesses;         // 存储所有的焊接工艺数据
-    QAction* m_manageProcessAction;                     // 菜单动作
+    QVector<WeldingProcess> m_weldingProcesses;
+    QAction* m_manageProcessAction;
 
-    ModbusManager* m_modbusManager;
-    QMenu* m_connectMenu;
     QAction* m_connectAction;
 
     QPushButton* m_startBtn;
-    QPushButton* m_pauseBtn;
-    QPushButton* m_resetBtn;
 
-    QString m_lastIp = "192.168.1.10";                  // 记住上次IP
-    int m_lastPort = 502;
-    QLabel* m_statusIconLabel;                          // 连接状态指示灯
-    QLabel* m_statusTextLabel;                          // 文字标签
+    QString m_lastIp = "192.168.1.10";
+    QLabel* m_statusIconLabel;
+    QLabel* m_statusTextLabel;
 
-    QLabel* m_servoIconLabel;                           // 伺服状态相关的 UI 控件
+    QLabel* m_servoIconLabel;
     QLabel* m_servoTextLabel;
 
-    QLabel* m_autoTextLabel;                            // 自动/手动状态相关的 UI 控件
+    QPushButton* m_permissionBtn = nullptr;
+    bool m_hasPermission = false;
+    QComboBox* m_modeCombo = nullptr;
+    int m_lastModeIndex = 0;
 
-    bool m_isShuttingDown = false;                      // 用于标记是否正在执行安全退出
+    bool m_isShuttingDown = false;
+    bool m_isRobotCommandRunning = false;
 
-    int m_currentWeldIndex = 0;                         // 当前正在焊接的管孔索引
-    bool m_isWeldingProcessRunning = false;             // 是否正在连续焊接中
-
-    QAction* m_imageProcessAction;                      // 图纸处理菜单按钮
-    FloatingToolWidget* m_floatingToolWidget;           // 悬浮工具箱
+    QAction* m_imageProcessAction;
+    FloatingToolWidget* m_floatingToolWidget;
 
     QMenu* m_toolsMenu;
     QVector<Contour> m_originalDisplayPaths;
@@ -212,9 +183,9 @@ private:
     QPolygonF m_originalMainPlateContour;
     QTextEdit* m_detailContentText;
 
-    QList<DrawingState> m_undoStack;                    // 存储历史图纸数据的栈
-    void saveUndoState();                               // 保存当前状态
-    void undo();                                        // 执行撤销
+    QList<DrawingState> m_undoStack;
+    void saveUndoState();
+    void undo();
 
     QDoubleSpinBox* m_bevelAngleSpin;
     QDoubleSpinBox* m_rootFaceSpin;
@@ -222,8 +193,16 @@ private:
     void appendLogToFile(const QString& msg);
     LogViewerDialog* m_logViewerDialog = nullptr;
 
-    QPushButton* m_powerBtn = nullptr;       // 👇【新增】：上电/断电按钮指针
+    QPushButton* m_powerBtn = nullptr;
     bool m_isRobotPoweredOn = false;
-    unsigned int m_currentDevId = 1;
+    unsigned int m_currentDevId = 0;
+
+    QTimer* m_statusTimer;
+
+    QAction* m_robotParamAction;
+
+    MotionTestDialog* m_motionTestDialog = nullptr;
+
 };
+
 #endif
