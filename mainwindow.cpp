@@ -466,6 +466,7 @@ void MainWindow::setupUi()
     // --- 提前创建好所有的功能 Action---
     loadAction = new QAction(QIcon(":/img/images/import.png"), "导入DXF", this);
     rotateAction = new QAction("应用旋转矩阵", this);
+    m_ucsAction = new QAction("建立用户坐标系", this);
     m_manageProcessAction = new QAction(QIcon(":/img/images/icons4.png"), "工艺管理", this);
     m_imageProcessAction = new QAction(QIcon(":/img/images/DrawProcessing.png"), "图纸处理", this);
     QAction* m_positioningAction = new QAction("建立定位", this);
@@ -542,6 +543,7 @@ void MainWindow::setupUi()
             toolBar->addAction(loadAction);
         } else if (currentTab == tabOperation) {
             toolBar->addAction(rotateAction);
+            toolBar->addAction(m_ucsAction);
             toolBar->addAction(m_manageProcessAction);
             toolBar->addAction(m_robotParamAction);
         } else if (currentTab == tabTools) {
@@ -2327,4 +2329,209 @@ void MainWindow::reorderPathsGeo()
     renderArea->update();
 
     QMessageBox::information(this, "排序完成", "轨迹已按照【外层至内层、左下角起刀、连续首尾相连】的逻辑优化完毕！");
+}
+
+// ========================================================
+// 建立用户坐标系 (UCS) 交互向导对话框
+// ========================================================
+UserCoordDialog::UserCoordDialog(RenderArea* renderArea, QWidget* parent)
+    : QDialog(parent), m_renderArea(renderArea)
+{
+    setWindowTitle("建立用户坐标系");
+    setMinimumWidth(380);
+
+    QVBoxLayout* mainLayout = new QVBoxLayout(this);
+
+    m_lblStatus = new QLabel("请在下方依次完成设定", this);
+    m_lblStatus->setStyleSheet("color: #1976D2; font-weight: bold; font-size: 13px;");
+    mainLayout->addWidget(m_lblStatus);
+
+    m_rbKnowOrigin = new QRadioButton("已知用户坐标系原点", this);
+    m_rbUnknownOrigin = new QRadioButton("未知原点 (暂不支持)", this);
+    m_rbUnknownOrigin->setEnabled(false);
+    m_rbKnowOrigin->setChecked(true);
+
+    mainLayout->addWidget(m_rbKnowOrigin);
+    mainLayout->addWidget(m_rbUnknownOrigin);
+
+    m_knowOriginWidget = new QWidget(this);
+    QVBoxLayout* knowLayout = new QVBoxLayout(m_knowOriginWidget);
+    knowLayout->setContentsMargins(0, 5, 0, 0);
+
+    // 原点
+    QGroupBox* gbOrigin = new QGroupBox("1. 原点设定");
+    QVBoxLayout* vbOrigin = new QVBoxLayout(gbOrigin);
+    m_btnSelectOrigin = new QPushButton("📍 在图纸上选取原点");
+    m_lblOrigin = new QLabel("原点坐标: 未选取");
+    m_lblOrigin->setStyleSheet("color: #555; font-family: monospace;");
+    vbOrigin->addWidget(m_btnSelectOrigin);
+    vbOrigin->addWidget(m_lblOrigin);
+    knowLayout->addWidget(gbOrigin);
+
+    // X轴
+    QGroupBox* gbX = new QGroupBox("2. 确立 X 轴");
+    QVBoxLayout* vbX = new QVBoxLayout(gbX);
+    m_cbXMethod = new QComboBox();
+    m_cbXMethod->addItems({"两点确立 (起点 -> 终点)", "直线确立 (所选直线的方向)"});
+    m_btnSelectX = new QPushButton("↗ 在图纸上选取 X 轴特征");
+    m_btnRevX = new QPushButton("🔄 反转 X 轴正方向");
+    m_lblX = new QLabel("X 轴向量: 未确立");
+    m_lblX->setStyleSheet("color: #555; font-family: monospace;");
+    vbX->addWidget(m_cbXMethod);
+    vbX->addWidget(m_btnSelectX);
+    vbX->addWidget(m_btnRevX);
+    vbX->addWidget(m_lblX);
+    knowLayout->addWidget(gbX);
+
+    // Y轴
+    QGroupBox* gbY = new QGroupBox("3. 确立 Y 轴");
+    QVBoxLayout* vbY = new QVBoxLayout(gbY);
+    m_cbYMethod = new QComboBox();
+    m_cbYMethod->addItems({"两点确立 (起点 -> 终点)", "直线确立 (所选直线的方向)"});
+    m_btnSelectY = new QPushButton("↖ 在图纸上选取 Y 轴特征");
+    m_btnRevY = new QPushButton("🔄 反转 Y 轴正方向");
+    m_lblY = new QLabel("Y 轴向量: 未确立");
+    m_lblY->setStyleSheet("color: #555; font-family: monospace;");
+    vbY->addWidget(m_cbYMethod);
+    vbY->addWidget(m_btnSelectY);
+    vbY->addWidget(m_btnRevY);
+    vbY->addWidget(m_lblY);
+    knowLayout->addWidget(gbY);
+
+    mainLayout->addWidget(m_knowOriginWidget);
+
+    m_btnFinish = new QPushButton("确认完成 (自动生成 Z 轴)");
+    m_btnFinish->setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 8px; border-radius: 4px;");
+    mainLayout->addWidget(m_btnFinish);
+
+    connect(m_btnSelectOrigin, &QPushButton::clicked, this, [this](){
+        m_step = 1; m_renderArea->setUCSSelectionMode(1);
+        m_lblStatus->setText("状态：请在图纸上点击选择【原点】...");
+    });
+
+    connect(m_btnSelectX, &QPushButton::clicked, this, [this](){
+        if(m_cbXMethod->currentIndex() == 1) {
+            m_step = 4; m_renderArea->setUCSSelectionMode(2);
+            m_lblStatus->setText("状态：请在图纸上点击一条直线作为【X 轴】...");
+        } else {
+            m_step = 2; m_renderArea->setUCSSelectionMode(1);
+            m_lblStatus->setText("状态：请在图纸上点击 X 轴的【起点】...");
+        }
+    });
+
+    connect(m_btnSelectY, &QPushButton::clicked, this, [this](){
+        if(m_cbYMethod->currentIndex() == 1) {
+            m_step = 7; m_renderArea->setUCSSelectionMode(2);
+            m_lblStatus->setText("状态：请在图纸上点击一条直线作为【Y 轴】...");
+        } else {
+            m_step = 5; m_renderArea->setUCSSelectionMode(1);
+            m_lblStatus->setText("状态：请在图纸上点击 Y 轴的【起点】...");
+        }
+    });
+
+    connect(m_btnRevX, &QPushButton::clicked, this, [this](){
+        if(m_xAxis.length() > 0.1) {
+            m_xAxis = -m_xAxis;
+            m_lblX->setText(QString("X 轴向量: (%1, %2)").arg(m_xAxis.x(), 0, 'f', 2).arg(m_xAxis.y(), 0, 'f', 2));
+            updateUCSDisplay();
+        }
+    });
+
+    connect(m_btnRevY, &QPushButton::clicked, this, [this](){
+        if(m_yAxis.length() > 0.1) {
+            m_yAxis = -m_yAxis;
+            m_lblY->setText(QString("Y 轴向量: (%1, %2)").arg(m_yAxis.x(), 0, 'f', 2).arg(m_yAxis.y(), 0, 'f', 2));
+            updateUCSDisplay();
+        }
+    });
+
+    connect(m_btnFinish, &QPushButton::clicked, this, [this](){
+        if(m_xAxis.length() < 0.1 || m_yAxis.length() < 0.1) {
+            QMessageBox::warning(this, "数据缺失", "请先完成 X 轴和 Y 轴特征的提取！");
+            return;
+        }
+        // 核心约束：X 和 Y 必须垂直 (容差 1e-2，约等于 0.5度 工业制造误差内)
+        double dot = QVector2D::dotProduct(m_xAxis, m_yAxis);
+        if (std::abs(dot) > 1e-2) {
+            QMessageBox::critical(this, "构建失败", "X 轴与 Y 轴不垂直！无法构建右手笛卡尔系！\n请重新选择或者点击反转修正！");
+            return;
+        }
+
+        QMessageBox::information(this, "坐标系就绪", "物理坐标系 (UCS) 构建成功！\nZ 轴已根据右手螺旋定则自动生成。");
+        accept();
+    });
+
+    connect(m_renderArea, &RenderArea::ucsPointSelected, this, &UserCoordDialog::onUCSPointSelected);
+    connect(m_renderArea, &RenderArea::ucsLineSelected, this, &UserCoordDialog::onUCSLineSelected);
+}
+
+UserCoordDialog::~UserCoordDialog() {
+    m_renderArea->setUCSSelectionMode(0); // 销毁面板时自动关闭绘图区的十字线
+}
+
+void UserCoordDialog::onUCSPointSelected(QPointF pt) {
+    if (m_step == 1) { // 选原点
+        m_origin = pt;
+        m_lblOrigin->setText(QString("原点坐标: (%1, %2)").arg(pt.x(), 0, 'f', 2).arg(pt.y(), 0, 'f', 2));
+        m_step = 0; m_renderArea->setUCSSelectionMode(0);
+        m_lblStatus->setText("状态：✅ 原点提取成功。");
+        updateUCSDisplay();
+    } else if (m_step == 2) { // X起点
+        m_tempPt1 = pt; m_step = 3;
+        m_lblStatus->setText("状态：已选起点，请点击 X 轴的【终点】...");
+    } else if (m_step == 3) { // X终点
+        QVector2D vec(pt - m_tempPt1);
+        if (vec.length() < 1e-5) {
+            QMessageBox::warning(this, "无效向量", "起点与终点重合！请重新点击。");
+            m_step = 2; m_lblStatus->setText("状态：请重新点击 X 轴【起点】...");
+            return;
+        }
+        m_xAxis = vec.normalized(); // 向量归一化
+        m_lblX->setText(QString("X 轴向量: (%1, %2)").arg(m_xAxis.x(), 0, 'f', 2).arg(m_xAxis.y(), 0, 'f', 2));
+        m_step = 0; m_renderArea->setUCSSelectionMode(0);
+        m_lblStatus->setText("状态：✅ X 轴向量提取成功。");
+        updateUCSDisplay();
+    } else if (m_step == 5) { // Y起点
+        m_tempPt1 = pt; m_step = 6;
+        m_lblStatus->setText("状态：已选起点，请点击 Y 轴的【终点】...");
+    } else if (m_step == 6) { // Y终点
+        QVector2D vec(pt - m_tempPt1);
+        if (vec.length() < 1e-5) {
+            QMessageBox::warning(this, "无效向量", "起点与终点重合！请重新点击。");
+            m_step = 5; m_lblStatus->setText("状态：请重新点击 Y 轴【起点】...");
+            return;
+        }
+        m_yAxis = vec.normalized();
+        m_lblY->setText(QString("Y 轴向量: (%1, %2)").arg(m_yAxis.x(), 0, 'f', 2).arg(m_yAxis.y(), 0, 'f', 2));
+        m_step = 0; m_renderArea->setUCSSelectionMode(0);
+        m_lblStatus->setText("状态：✅ Y 轴向量提取成功。");
+        updateUCSDisplay();
+    }
+}
+
+void UserCoordDialog::onUCSLineSelected(QLineF line) {
+    if (m_step == 4) { // X 线
+        QVector2D vec(line.p2() - line.p1());
+        m_xAxis = vec.normalized();
+        m_lblX->setText(QString("X 轴向量: (%1, %2)").arg(m_xAxis.x(), 0, 'f', 2).arg(m_xAxis.y(), 0, 'f', 2));
+        m_step = 0; m_renderArea->setUCSSelectionMode(0);
+        m_lblStatus->setText("状态：✅ X 轴向量提取成功。");
+        updateUCSDisplay();
+    } else if (m_step == 7) { // Y 线
+        QVector2D vec(line.p2() - line.p1());
+        m_yAxis = vec.normalized();
+        m_lblY->setText(QString("Y 轴向量: (%1, %2)").arg(m_yAxis.x(), 0, 'f', 2).arg(m_yAxis.y(), 0, 'f', 2));
+        m_step = 0; m_renderArea->setUCSSelectionMode(0);
+        m_lblStatus->setText("状态：✅ Y 轴向量提取成功。");
+        updateUCSDisplay();
+    }
+}
+
+void UserCoordDialog::updateUCSDisplay() {
+    UserCoordSystem ucs;
+    ucs.valid = true;
+    ucs.origin = m_origin;
+    ucs.xAxis = m_xAxis;
+    ucs.yAxis = m_yAxis;
+    m_renderArea->setUCS(ucs);
 }

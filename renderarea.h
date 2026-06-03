@@ -38,6 +38,8 @@ public:
     void setRotateMode(bool enabled);
     void setMirrorMode(bool enabled);
     void clearSelection();
+    void setUCSSelectionMode(int mode);
+    void setUCS(const UserCoordSystem& ucs);
 
     enum TransformState { TS_Select, TS_BasePoint, TS_SecondPoint, TS_Input, TS_SelectShapeFeature, TS_DraggingToBlock };
     void setMoveMode(bool enabled);
@@ -65,6 +67,8 @@ signals:
     void cancelModesRequested();
     void pathsMoved(const QVector<Contour> &updatedPaths);
     void reorderPathsRequested();
+    void ucsPointSelected(QPointF pt);
+    void ucsLineSelected(QLineF line);
 private:
     QVector<Hole> weldHoles;
     Hole mainPlateHole;
@@ -139,6 +143,9 @@ private:
     QLineF m_alignShapeLine;
 
     void applyAlignmentConstraint(const PositioningBlock& block);
+
+    int m_ucsSelectMode = 0;
+    UserCoordSystem m_ucs;
 };
 
 #endif // RENDERAREA_H

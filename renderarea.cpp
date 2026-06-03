@@ -110,6 +110,22 @@ RenderArea::RenderArea(QWidget *parent): QWidget(parent),
     setFocusPolicy(Qt::StrongFocus);
 }
 
+void RenderArea::setUCSSelectionMode(int mode) {
+    m_ucsSelectMode = mode;
+    if (mode != 0) {
+        setCursor(Qt::CrossCursor);
+    } else {
+        setCursor(Qt::OpenHandCursor);
+        m_hasHoveredFeature = false;
+    }
+    update();
+}
+
+void RenderArea::setUCS(const UserCoordSystem& ucs) {
+    m_ucs = ucs;
+    update();
+}
+
 // ----------------------------------------------------
 // 功能：数据管理，负责接收外部数据并触发重绘
 // 讲解：setData，加载孔洞和轮廓数据
@@ -199,19 +215,65 @@ void RenderArea::paintEvent(QPaintEvent *event)
             }
         }
     }
-    if (m_transformState == TS_SelectShapeFeature && m_hasHoveredFeature) {
+    if ((m_transformState == TS_SelectShapeFeature || m_ucsSelectMode != 0) && m_hasHoveredFeature) {
         painter.save();
         QPen blinkPen((QTime::currentTime().msec() % 500 < 250) ? Qt::cyan : Qt::red, 0);
         blinkPen.setWidth(m_lineWidth + 2);
         blinkPen.setCosmetic(true);
         painter.setPen(blinkPen);
-        if (m_alignTargetType == PosBlockType::Line) {
+        if (m_ucsSelectMode == 2 || (m_transformState == TS_SelectShapeFeature && m_alignTargetType == PosBlockType::Line)) {
             painter.drawLine(m_hoveredLine);
         } else {
             double safeScale = (m_scaleFactor > 0.001) ? m_scaleFactor : 1.0;
             double r = 10.0 / safeScale;
             painter.setBrush(Qt::NoBrush);
             painter.drawEllipse(m_hoveredPoint, r, r);
+        }
+        painter.restore();
+    }
+
+    if (m_ucs.valid) {
+        painter.save();
+        double safeScale = (m_scaleFactor > 0.001) ? m_scaleFactor : 1.0;
+        double axisLen = 60.0 / safeScale;
+        QPointF origin = m_ucs.origin;
+
+        painter.setBrush(Qt::blue);
+        painter.setPen(Qt::NoPen);
+        painter.drawEllipse(origin, 4.0/safeScale, 4.0/safeScale);
+
+        // 画 X 轴
+        if (m_ucs.xAxis.length() > 0.1) {
+            QPointF xEnd = origin + QPointF(m_ucs.xAxis.x(), m_ucs.xAxis.y()) * axisLen;
+            QPen xPen(Qt::red, 2.0 / safeScale);
+            painter.setPen(xPen);
+            painter.drawLine(origin, xEnd);
+
+            painter.save();
+            painter.translate(xEnd);
+            painter.rotate(std::atan2(m_ucs.xAxis.y(), m_ucs.xAxis.x()) * 180.0 / M_PI);
+            painter.setBrush(Qt::red);
+            QPolygonF arrow; arrow << QPointF(0, 0) << QPointF(-10/safeScale, 4/safeScale) << QPointF(-10/safeScale, -4/safeScale);
+            painter.drawPolygon(arrow);
+            painter.restore();
+            painter.drawText(xEnd + QPointF(5/safeScale, 5/safeScale), "X");
+        }
+
+        // 画 Y 轴
+        if (m_ucs.yAxis.length() > 0.1) {
+            QPointF yEnd = origin + QPointF(m_ucs.yAxis.x(), m_ucs.yAxis.y()) * axisLen;
+            QPen yPen(Qt::green, 2.0 / safeScale);
+            painter.setPen(yPen);
+            painter.drawLine(origin, yEnd);
+
+            painter.save();
+            painter.translate(yEnd);
+            painter.rotate(std::atan2(m_ucs.yAxis.y(), m_ucs.yAxis.x()) * 180.0 / M_PI);
+            painter.setBrush(Qt::green);
+            QPolygonF arrow; arrow << QPointF(0, 0) << QPointF(-10/safeScale, 4/safeScale) << QPointF(-10/safeScale, -4/safeScale);
+            painter.drawPolygon(arrow);
+            painter.restore();
+            painter.drawText(yEnd + QPointF(5/safeScale, 5/safeScale), "Y");
         }
         painter.restore();
     }
@@ -363,7 +425,6 @@ void RenderArea::mousePressEvent(QMouseEvent *event) {
             return;
 
         } else if (m_transformState == TS_SecondPoint && m_isMirrorMode) {
-            // 👇【核心修复点】：把它移到了最外层 if 的内部！
             // 镜像模式的第二点点击！
             if (!m_isSnapped) {
                 QTransform transform;
@@ -460,6 +521,18 @@ void RenderArea::mousePressEvent(QMouseEvent *event) {
         }
         event->accept();
     }
+
+    if (m_ucsSelectMode != 0 && event->button() == Qt::LeftButton) {
+        if (m_hasHoveredFeature) {
+            if (m_ucsSelectMode == 1) {
+                emit ucsPointSelected(m_hoveredPoint);
+            } else if (m_ucsSelectMode == 2) {
+                emit ucsLineSelected(m_hoveredLine);
+            }
+        }
+        event->accept();
+        return;
+    }
 }
 
 // ----------------------------------------------------
@@ -471,6 +544,60 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event) {
         QPoint delta = event->pos() - m_lastMousePos;
         m_panOffsetDXF += QPointF(delta.x() / m_scaleFactor, -delta.y() / m_scaleFactor);
         m_lastMousePos = event->pos();
+        update();
+        event->accept();
+        return;
+    }
+
+    if (m_ucsSelectMode != 0) {
+        m_hasHoveredFeature = false;
+        QTransform transform;
+        transform.translate(width() / 2.0, height() / 2.0);
+        transform.scale(m_scaleFactor, -m_scaleFactor);
+        transform.translate(m_panOffsetDXF.x(), m_panOffsetDXF.y());
+        QPointF dxfPos = transform.inverted().map(QPointF(event->pos()));
+
+        double minDist = 15.0 / m_scaleFactor;
+
+        for (int idx = 0; idx < m_displayPaths.size(); ++idx) {
+            const auto& contour = m_displayPaths[idx];
+
+            if (m_ucsSelectMode == 2) { // 选线
+                if (contour.type == "直线" || contour.type.contains("多段线") || contour.type.contains("矩形")) {
+                    for (int i = 0; i < contour.points.size() - 1; ++i) {
+                        QPointF p1 = contour.points[i];
+                        QPointF p2 = contour.points[i+1];
+                        double dist = distancePointToSegment(dxfPos, p1, p2);
+                        if (dist < minDist) {
+                            minDist = dist;
+                            m_hasHoveredFeature = true;
+                            m_hoveredLine = QLineF(p1, p2);
+                            m_hoveredPoint = (p1 + p2) / 2.0;
+                        }
+                    }
+                }
+            } else if (m_ucsSelectMode == 1) { // 选点
+                if (contour.type == "圆" || contour.type.contains("弧") || contour.type.contains("拟合") || contour.type.contains("样条")) {
+                    double cMinX = contour.points[0].x(), cMaxX = cMinX, cMinY = contour.points[0].y(), cMaxY = cMinY;
+                    for (const QPointF& pt : contour.points) {
+                        if (pt.x() < cMinX) cMinX = pt.x(); if (pt.x() > cMaxX) cMaxX = pt.x();
+                        if (pt.y() < cMinY) cMinY = pt.y(); if (pt.y() > cMaxY) cMaxY = pt.y();
+                    }
+                    QPointF center((cMinX + cMaxX)/2.0, (cMinY + cMaxY)/2.0);
+                    double dist = std::hypot(center.x() - dxfPos.x(), center.y() - dxfPos.y());
+                    if (dist < minDist) {
+                        minDist = dist; m_hasHoveredFeature = true; m_hoveredPoint = center;
+                    }
+                } else {
+                    for (const QPointF& pt : contour.points) {
+                        double dist = std::hypot(pt.x() - dxfPos.x(), pt.y() - dxfPos.y());
+                        if (dist < minDist) {
+                            minDist = dist; m_hasHoveredFeature = true; m_hoveredPoint = pt;
+                        }
+                    }
+                }
+            }
+        }
         update();
         event->accept();
         return;
@@ -816,7 +943,10 @@ void RenderArea::keyPressEvent(QKeyEvent *event) {
         }
     }
     else if (event->key() == Qt::Key_Escape) {
-        if (m_isMoveMode || m_isRotateMode || m_isMirrorMode) {
+        if (m_ucsSelectMode != 0) {
+            setUCSSelectionMode(0);
+            update();
+        } else if (m_isMoveMode || m_isRotateMode || m_isMirrorMode) {
             if (m_transformState == TS_Input || m_transformState == TS_SecondPoint) {
                 if (m_isMoveMode) m_moveInputWidget->hide();
                 if (m_isRotateMode) m_rotateInputWidget->hide();
@@ -1214,3 +1344,4 @@ void RenderArea::applyAlignmentConstraint(const PositioningBlock& block)
         update();
     }
 }
+

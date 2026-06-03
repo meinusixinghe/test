@@ -205,10 +205,8 @@ void PreviewArea::wheelEvent(QWheelEvent *event) {
     update();
 }
 
-// 👇 右键：基于选中的参考点计算全局刚体移动/旋转
 void PreviewArea::contextMenuEvent(QContextMenuEvent *event) {
     if (m_selectedBlockIdx < 0) {
-        QMessageBox::information(this, "提示", "请先在预览区左键点击选中定位块上的参考点（圆心或角点）作为物理基准点。");
         return;
     }
 
@@ -341,8 +339,8 @@ PositioningDialog::PositioningDialog(QWidget *parent) : QDialog(parent) {
         connect(btn, &QToolButton::clicked, [this, i]() {
             m_stackedWidget->setCurrentIndex(i);
             m_currentType = static_cast<PosBlockType>(i);
-            m_infoContainer->setVisible(false);  // 点击按钮，隐藏信息面板
-            m_detailContainer->setVisible(true); // 显示新建设置面板
+            m_infoContainer->setVisible(false);
+            m_detailContainer->setVisible(true);
         });
     }
     QHBoxLayout *gridWrapper = new QHBoxLayout();
@@ -351,7 +349,6 @@ PositioningDialog::PositioningDialog(QWidget *parent) : QDialog(parent) {
     gridWrapper->addStretch();
     rightLayout->addLayout(gridWrapper);
 
-    // --- 容器 1：新建详细设置面板 ---
     m_detailContainer = new QWidget();
     QVBoxLayout *detailVBox = new QVBoxLayout(m_detailContainer);
     detailVBox->setContentsMargins(0, 0, 0, 0);
@@ -406,7 +403,6 @@ PositioningDialog::PositioningDialog(QWidget *parent) : QDialog(parent) {
     detailVBox->addWidget(detailFrame);
     m_detailContainer->setVisible(false);
 
-    // --- 容器 2：动态展示特征点信息面板 (默认隐藏) ---
     m_infoContainer = new QWidget();
     QVBoxLayout *infoVBox = new QVBoxLayout(m_infoContainer);
     infoVBox->setContentsMargins(0, 0, 0, 0);
@@ -430,7 +426,6 @@ PositioningDialog::PositioningDialog(QWidget *parent) : QDialog(parent) {
     rightLayout->addWidget(m_infoContainer);
     rightLayout->addStretch();
 
-    // 👇 捕捉选中信号，智能覆盖显示信息
     connect(m_previewArea, &PreviewArea::refPointSelected, this, [this, btnGroup](int bIdx, int ptIdx, QPointF pos) {
         if (btnGroup->checkedButton()) {
             btnGroup->setExclusive(false);
