@@ -14,6 +14,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include "positioningdialog.h"
+#include <QTime>
 
 struct Hole;
 struct Contour;
@@ -38,7 +39,7 @@ public:
     void setMirrorMode(bool enabled);
     void clearSelection();
 
-    enum TransformState { TS_Select, TS_BasePoint, TS_SecondPoint, TS_Input, TS_SelectShapeFeature, TS_SelectBlock };
+    enum TransformState { TS_Select, TS_BasePoint, TS_SecondPoint, TS_Input, TS_SelectShapeFeature, TS_DraggingToBlock };
     void setMoveMode(bool enabled);
     void findSnapPoint(const QPoint &pos);
 
@@ -124,6 +125,15 @@ private:
     int m_lineWidth = 2;
     QPointF m_mirrorAxisPoint1;
 
+    bool m_hasHoveredFeature = false;
+    QPointF m_hoveredPoint;
+    QLineF m_hoveredLine;
+
+    bool m_isSnappedToBlock = false;
+    int m_snappedBlockIndex = -1;
+    QTransform m_previewTransform; // 动态拖拽时的临时变换矩阵
+
+    PosBlockType m_alignTargetType;
     struct AlignConstraint {
         PosBlockType type;
         QPointF shapePt;
@@ -131,9 +141,6 @@ private:
         PositioningBlock block;
     };
     QList<AlignConstraint> m_alignConstraints; // 当前选中零件的受力约束栈
-    PosBlockType m_alignTargetType;            // 用户想用什么类型的定位块
-    QLineF m_snappedLine;
-    bool m_snappedLineValid = false;
     QPointF m_alignShapePoint;
     QLineF m_alignShapeLine;
 
