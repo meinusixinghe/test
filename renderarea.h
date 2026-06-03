@@ -64,6 +64,7 @@ signals:
     void bulkPathsDeleted(QList<int> indices);
     void cancelModesRequested();
     void pathsMoved(const QVector<Contour> &updatedPaths);
+    void reorderPathsRequested();
 private:
     // 管板数据
     QVector<Hole> weldHoles;                                // 仅焊接管孔（不含主体圆）

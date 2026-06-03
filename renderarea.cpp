@@ -866,6 +866,7 @@ void RenderArea::setPositioningBlocks(const QList<PositioningBlock> &blocks) {
 void RenderArea::contextMenuEvent(QContextMenuEvent *event) {
     QMenu menu(this);
     QAction *actSetWidth = menu.addAction("设置线宽");
+    QAction *actReorder = menu.addAction("重新按空间排序");
 
     // 在鼠标点击的位置弹出菜单
     QAction *res = menu.exec(event->globalPos());
@@ -877,5 +878,8 @@ void RenderArea::contextMenuEvent(QContextMenuEvent *event) {
             m_lineWidth = newWidth;
             update();
         }
+    }
+    else if (res == actReorder) {
+        emit reorderPathsRequested();
     }
 }

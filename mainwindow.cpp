@@ -691,6 +691,7 @@ void MainWindow::setupUi()
     });
     // 连接批量删除信号
     connect(renderArea, &RenderArea::bulkPathsDeleted, this, &MainWindow::handleBulkPathsDeleted);
+    connect(renderArea, &RenderArea::reorderPathsRequested, this, &MainWindow::reorderPathsGeo);
     connect(renderArea, &RenderArea::cancelModesRequested, this, [this](){
         m_floatingToolWidget->btnRotate->setChecked(false);
         m_floatingToolWidget->btnEraser->setChecked(false);
@@ -2180,4 +2181,146 @@ void MainWindow::onRoboxModeChanged(int index)
 
     connect(worker, &QThread::finished, worker, &QObject::deleteLater);
     worker->start();
+}
+
+// =============================================================================
+// 空间几何排序
+// =============================================================================
+void MainWindow::reorderPathsGeo()
+{
+    if (m_displayPaths.isEmpty()) return;
+
+    // saveUndoState(); // 如果你实现了撤销队列，保留此行以支持 Ctrl+Z
+
+    QVector<Contour> original = m_displayPaths;
+    QVector<Contour> reordered;
+    QList<int> unvisited;
+    for(int i = 0; i < original.size(); ++i) {
+        unvisited.append(i);
+    }
+
+    // 辅助函数：计算图元的“左下角评分”（数值越小，越靠近左下角）
+    auto getBottomLeftScore = [](const Contour& c) {
+        double minX = std::numeric_limits<double>::max();
+        double minY = std::numeric_limits<double>::max();
+        for (const QPointF& pt : c.points) {
+            if (pt.x() < minX) minX = pt.x();
+            if (pt.y() < minY) minY = pt.y(); // DXF坐标中 Y越小越靠下
+        }
+        double score = minX + minY;
+
+        // 【核心】：如果是直线，给予极高的优先级权重，让它优先作为起刀点
+        if (c.type.contains("直线")) {
+            score -= 1000.0;
+        }
+        return score;
+    };
+
+    const double TOL = 0.5; // 首尾相连的吸附容差（0.5毫米）
+
+    // 核心算法大循环：由外向内逐层剥离
+    while (!unvisited.isEmpty()) {
+
+        // 1. 寻找当前剩余图元中，最左下角（且优先直线）的图元，作为新一圈（层）的起点
+        int bestStartIdx = -1;
+        double bestScore = std::numeric_limits<double>::max();
+
+        for (int idx : unvisited) {
+            double score = getBottomLeftScore(original[idx]);
+            if (score < bestScore) {
+                bestScore = score;
+                bestStartIdx = idx;
+            }
+        }
+
+        // 2. 剥离并加入新一层的起点
+        int currentIdx = bestStartIdx;
+        unvisited.removeOne(currentIdx);
+        reordered.append(original[currentIdx]);
+
+        // 3. 贪心缝合：顺藤摸瓜，寻找首尾相连的下一根线，直到走完这一整圈闭环
+        bool foundNext = true;
+        while (foundNext && !unvisited.isEmpty()) {
+            foundNext = false;
+            QPointF currentEnd = reordered.last().points.last(); // 当前轨迹的物理终点
+
+            int nextIdx = -1;
+            bool needReverse = false;
+            double bestDist = std::numeric_limits<double>::max();
+
+            // 在未访问的图元中找最近的连接点
+            for (int idx : unvisited) {
+                const Contour& candidate = original[idx];
+                if (candidate.points.isEmpty()) continue;
+
+                QPointF candStart = candidate.points.first();
+                QPointF candEnd = candidate.points.last();
+
+                double distToStart = std::hypot(candStart.x() - currentEnd.x(), candStart.y() - currentEnd.y());
+                double distToEnd = std::hypot(candEnd.x() - currentEnd.x(), candEnd.y() - currentEnd.y());
+
+                // 情况A：下一根线的起点 连着 当前终点（标准正向）
+                if (distToStart <= TOL && distToStart < bestDist) {
+                    bestDist = distToStart;
+                    nextIdx = idx;
+                    needReverse = false;
+                }
+                // 情况B：下一根线的终点 连着 当前终点（说明画图时线画反了，记录翻转需求）
+                if (distToEnd <= TOL && distToEnd < bestDist) {
+                    bestDist = distToEnd;
+                    nextIdx = idx;
+                    needReverse = true;
+                }
+            }
+
+            // 如果找到了相连的线，将其加入队列并继续顺藤摸瓜
+            if (nextIdx != -1) {
+                Contour nextContour = original[nextIdx];
+                if (needReverse) {
+                    // 【智能纠错】：自动翻转画反的节点顺序，保证机器人在交接点不抬刀！
+                    QVector<QPointF> revPts;
+                    for (int i = nextContour.points.size() - 1; i >= 0; --i) {
+                        revPts.append(nextContour.points[i]);
+                    }
+                    nextContour.points = revPts;
+                }
+                reordered.append(nextContour);
+                unvisited.removeOne(nextIdx);
+                foundNext = true;
+            }
+        }
+        // 如果 foundNext 为 false，说明这一圈首尾闭合了或者断开了。
+        // While 循环会自动回到顶部，去剩下的内层图元里寻找下一个左下角起点！
+    }
+
+    // 4. 应用重新排序的数据
+    m_displayPaths = reordered;
+
+    // 清空并重新填充右侧表格
+    dataTable->blockSignals(true);
+    dataTable->setRowCount(0);
+
+    for (int i = 0; i < m_displayPaths.size(); ++i) {
+        dataTable->insertRow(i);
+
+        QTableWidgetItem *indexItem = new QTableWidgetItem(QString::number(i + 1));
+        indexItem->setTextAlignment(Qt::AlignCenter);
+        indexItem->setFlags(indexItem->flags() & ~Qt::ItemIsEditable);
+        dataTable->setItem(i, 0, indexItem);
+
+        QTableWidgetItem *typeItem = new QTableWidgetItem(m_displayPaths[i].type);
+        typeItem->setTextAlignment(Qt::AlignCenter);
+        typeItem->setFlags(typeItem->flags() & ~Qt::ItemIsEditable);
+        dataTable->setItem(i, 1, typeItem);
+    }
+    dataTable->blockSignals(false);
+
+    // 清理状态并刷新视图
+    renderArea->clearSelection();
+    if (detailWidget) detailWidget->hide();
+
+    renderArea->setDisplayPaths(m_displayPaths);
+    renderArea->update();
+
+    QMessageBox::information(this, "排序完成", "轨迹已按照【外层至内层、左下角起刀、连续首尾相连】的逻辑优化完毕！");
 }

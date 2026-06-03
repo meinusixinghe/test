@@ -119,6 +119,7 @@ private slots:
     void onRobotParameterSettings();
     void onPermissionBtnClicked();
     void onRoboxModeChanged(int index);
+    void reorderPathsGeo();
 
 private:
     void loadDrawingData(const QString &filePath);
