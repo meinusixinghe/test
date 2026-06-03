@@ -705,11 +705,14 @@ void MainWindow::setupUi()
     });
 
     connect(m_positioningAction, &QAction::triggered, this, [this](){
-        PositioningDialog dlg(this);
-        dlg.setInitialBlocks(renderArea->getPositioningBlocks());
-        if(dlg.exec() == QDialog::Accepted) {
-            renderArea->setPositioningBlocks(dlg.getBlocks());
-        }
+        PositioningDialog* dlg = new PositioningDialog(this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->setWindowFlags(Qt::Tool);
+        dlg->setInitialBlocks(renderArea->getPositioningBlocks());
+        connect(dlg, &PositioningDialog::accepted, this, [this, dlg]() {
+            renderArea->setPositioningBlocks(dlg->getBlocks());
+        });
+        dlg->show();
     });
     connect(m_modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::onRoboxModeChanged);
 
@@ -1159,9 +1162,10 @@ void MainWindow::applyRotationMatrix()
 // ----------------------------------------------------
 void MainWindow::onManageWeldingProcess()
 {
-    // 创建对话框，并传入当前工艺列表的指针
-    WeldingProcessDialog dialog(&m_weldingProcesses, this);
-    dialog.exec(); // 模态显示
+    WeldingProcessDialog* dialog = new WeldingProcessDialog(&m_weldingProcesses, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowFlags(Qt::Tool);
+    dialog->show();
 }
 
 // ----------------------------------------------------

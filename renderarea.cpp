@@ -580,7 +580,6 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event) {
         m_previewTransform.reset();
 
         if (m_alignConstraints.size() == 1) {
-            // 已有约束1：拖动时只能受限滑动或旋转！
             auto c1 = m_alignConstraints[0];
             if (c1.type == PosBlockType::Line) {
                 double rad = c1.block.angle * M_PI / 180.0;
@@ -603,7 +602,6 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event) {
             if (m_isSnappedToBlock) {
                 const auto& block = m_posBlocks[m_snappedBlockIndex];
                 if (block.type == PosBlockType::Line) {
-                    // 【核心修改】：直线定位时，完美捕捉并贴合阻挡块的【边缘线】，且随鼠标方向滑动
                     QTransform blockT;
                     blockT.translate(block.x, block.y);
                     blockT.rotate(block.angle);
