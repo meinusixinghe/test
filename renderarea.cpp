@@ -15,6 +15,7 @@
 #include <QStyleOption>
 #include <QStyle>
 #include <QTimer>
+#include <QMessageBox>
 
 using std::min;
 using std::max;
@@ -400,6 +401,43 @@ void RenderArea::mousePressEvent(QMouseEvent *event) {
             update();
             event->accept();
             return;
+        }else if (m_transformState == TS_SelectShapeFeature) {
+            if (m_isSnapped) {
+                m_alignShapePoint = m_snappedDxfPos;
+                if (m_alignTargetType == PosBlockType::Line) {
+                    if (m_snappedLineValid) {
+                        m_alignShapeLine = m_snappedLine;
+                        m_transformState = TS_SelectBlock;
+                    }
+                } else {
+                    m_transformState = TS_SelectBlock;
+                }
+                update();
+            }
+            event->accept();
+            return;
+        } else if (m_transformState == TS_SelectBlock) {
+            // 点击目标定位块
+            QTransform transform;
+            transform.translate(width() / 2.0, height() / 2.0);
+            transform.scale(m_scaleFactor, -m_scaleFactor);
+            transform.translate(m_panOffsetDXF.x(), m_panOffsetDXF.y());
+            QPointF dxfPos = transform.inverted().map(QPointF(event->pos()));
+
+            int blockIdx = -1;
+            for (int i=0; i < m_posBlocks.size(); ++i) {
+                if (m_posBlocks[i].type == m_alignTargetType) {
+                    // QPainterPath 的 contains 完美支持旋转过的任何几何体
+                    if (m_posBlocks[i].getPath().contains(dxfPos)) {
+                        blockIdx = i; break;
+                    }
+                }
+            }
+            if (blockIdx != -1) {
+                applyAlignmentConstraint(m_posBlocks[blockIdx]);
+            }
+            event->accept();
+            return;
         }
     }
 
@@ -597,7 +635,9 @@ void RenderArea::setEraserSize(int size) {
 
 void RenderArea::clearSelection() {
     m_selectedPathIndices.clear();
+    m_baseSelectedIndices.clear();
     m_isLassoDragging = false;
+    m_alignConstraints.clear();
     update();
 }
 
@@ -632,7 +672,47 @@ void RenderArea::keyPressEvent(QKeyEvent *event) {
         }
     }
     else if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
-        if ((m_isMoveMode || m_isRotateMode || m_isMirrorMode) && m_transformState == TS_Select && !m_selectedPathIndices.isEmpty()) {
+        if (m_isMoveMode && m_transformState == TS_Select && !m_selectedPathIndices.isEmpty()) {
+            QMenu moveMenu(this);
+            QAction* actFree = moveMenu.addAction("1. 自由移动 (输入坐标偏移)");
+            QAction* actBlock = moveMenu.addAction("2. 使用定位块对齐");
+
+            if (m_posBlocks.isEmpty()) actBlock->setEnabled(false); // 没有定位块就禁用
+
+            QAction* res = moveMenu.exec(QCursor::pos());
+            if (res == actFree) {
+                m_transformState = TS_BasePoint;
+                update();
+            } else if (res == actBlock) {
+                QMenu blockMenu(this);
+                QAction* actLine = blockMenu.addAction("1. 直线定位块对齐");
+                QAction* actPoint = blockMenu.addAction("2. 点定位块对齐");
+                QAction* actArc = blockMenu.addAction("3. 圆弧定位块对齐");
+                QAction* actCircle = blockMenu.addAction("4. 圆定位块对齐");
+
+                // 动态检查：如果没有该类型的定位块，直接置灰禁用
+                bool hasLine=false, hasPt=false, hasArc=false, hasCir=false;
+                for(const auto& b: std::as_const(m_posBlocks)) {
+                    if(b.type == PosBlockType::Line) hasLine = true;
+                    if(b.type == PosBlockType::Point) hasPt = true;
+                    if(b.type == PosBlockType::Arc) hasArc = true;
+                    if(b.type == PosBlockType::Circle) hasCir = true;
+                }
+                actLine->setEnabled(hasLine); actPoint->setEnabled(hasPt);
+                actArc->setEnabled(hasArc); actCircle->setEnabled(hasCir);
+
+                QAction* res2 = blockMenu.exec(QCursor::pos());
+                if (res2) {
+                    m_transformState = TS_SelectShapeFeature;
+                    if (res2 == actLine) m_alignTargetType = PosBlockType::Line;
+                    else if (res2 == actPoint) m_alignTargetType = PosBlockType::Point;
+                    else if (res2 == actArc) m_alignTargetType = PosBlockType::Arc;
+                    else if (res2 == actCircle) m_alignTargetType = PosBlockType::Circle;
+                    update();
+                }
+            }
+        }
+        else if ((m_isRotateMode || m_isMirrorMode) && m_transformState == TS_Select && !m_selectedPathIndices.isEmpty()) {
             m_transformState = TS_BasePoint;
             update();
         }
@@ -713,6 +793,29 @@ void RenderArea::findSnapPoint(const QPoint &pos) {
     transform.translate(width() / 2.0, height() / 2.0);
     transform.scale(m_scaleFactor, -m_scaleFactor);
     transform.translate(m_panOffsetDXF.x(), m_panOffsetDXF.y());
+
+    if (m_isMoveMode && m_transformState == TS_SelectShapeFeature && m_alignTargetType == PosBlockType::Line) {
+        double minLineDist = 15.0 / m_scaleFactor;
+        QPointF dxfPos = transform.inverted().map(QPointF(pos));
+        for (int idx : std::as_const(m_selectedPathIndices)) {
+            if (idx < 0 || idx >= m_displayPaths.size()) continue;
+            const auto& contour = m_displayPaths[idx];
+            for (int i=0; i<contour.points.size()-1; ++i) {
+                QPointF p1 = contour.points[i];
+                QPointF p2 = contour.points[i+1];
+                double dist = distancePointToSegment(dxfPos, p1, p2);
+                if (dist < minLineDist) {
+                    minLineDist = dist;
+                    m_isSnapped = true;
+                    m_snappedLineValid = true;
+                    m_snappedLine = QLineF(p1, p2);
+                    m_snappedDxfPos = (p1+p2)/2.0;
+                    m_snappedScreenPos = transform.map(m_snappedDxfPos).toPoint();
+                }
+            }
+        }
+        return;
+    }
 
     QList<QPointF> candidates;
 
@@ -881,5 +984,106 @@ void RenderArea::contextMenuEvent(QContextMenuEvent *event) {
     }
     else if (res == actReorder) {
         emit reorderPathsRequested();
+    }
+}
+
+// =========================================================================
+// 核心：处理刚体对齐、旋转平移变换与过约束(Over-constraint)判定
+// =========================================================================
+void RenderArea::applyAlignmentConstraint(const PositioningBlock& block)
+{
+    // 如果零件已经被两个几何体固定，再次添加直接弹出过约束！
+    if (m_alignConstraints.size() >= 2) {
+        QMessageBox::warning(this, "过约束 (Over-Constrained)", "该零件已被多个定位块完全固定！\n继续添加定位将导致自由度冲突，出现过约束！");
+        m_transformState = TS_Select;
+        update();
+        return;
+    }
+
+    // 情况 1：已有 1 个约束，现在试图附加第 2 个约束
+    if (m_alignConstraints.size() == 1) {
+        auto c1 = m_alignConstraints[0];
+
+        // 当两次都是【点 / 圆心 / 圆弧心】定位时：触发距离锁死检测
+        if (c1.type != PosBlockType::Line && block.type != PosBlockType::Line) {
+            // 算出图形上两点特征的距离，和两个定位块的距离
+            double d_shape = std::hypot(m_alignShapePoint.x() - c1.block.x, m_alignShapePoint.y() - c1.block.y);
+            double d_block = std::hypot(block.x - c1.block.x, block.y - c1.block.y);
+
+            // 1.0mm 的制造容差
+            if (std::abs(d_shape - d_block) > 1.0) {
+                QMessageBox::warning(this, "过约束拦截",
+                                     QString("无法吸附！\n零件上的特征间距为 %1 mm\n两个定位块的间距为 %2 mm\n物理尺寸不匹配，发生过约束！")
+                                         .arg(d_shape, 0, 'f', 2).arg(d_block, 0, 'f', 2));
+                m_transformState = TS_Select; update(); return;
+            }
+
+            // 尺寸一致：执行刚体旋转，绕第一个约束点旋转，让第二个点合拢
+            double angleShape = std::atan2(m_alignShapePoint.y() - c1.block.y, m_alignShapePoint.x() - c1.block.x);
+            double angleBlock = std::atan2(block.y - c1.block.y, block.x - c1.block.x);
+            double angleDiff = angleBlock - angleShape;
+
+            double cosA = std::cos(angleDiff);
+            double sinA = std::sin(angleDiff);
+            for (int idx : std::as_const(m_selectedPathIndices)) {
+                for (int i = 0; i < m_displayPaths[idx].points.size(); ++i) {
+                    double x = m_displayPaths[idx].points[i].x() - c1.block.x;
+                    double y = m_displayPaths[idx].points[i].y() - c1.block.y;
+                    m_displayPaths[idx].points[i].setX(x * cosA - y * sinA + c1.block.x);
+                    m_displayPaths[idx].points[i].setY(x * sinA + y * cosA + c1.block.y);
+                }
+            }
+            m_alignConstraints.append({block.type, m_alignShapePoint, QLineF(), block});
+            emit pathsMoved(m_displayPaths);
+            m_transformState = TS_Select; update();
+            QMessageBox::information(this, "定位成功", "两点定位完成，该零件目前处于全固定状态。");
+            return;
+        }
+
+        // 当涉及 直线约束 + 其他约束时，判定逻辑极其复杂，直接保护性拦截
+        QMessageBox::warning(this, "过约束警告", "当前零件已被直线或其他复杂几何体约束！\n叠加此定位块将导致运动自由度打架 (过约束)，已自动拦截！");
+        m_transformState = TS_Select; update(); return;
+    }
+
+    // 情况 2：这是第 1 个约束 (自由度拉满，可以随意平移旋转)
+    if (m_alignConstraints.isEmpty()) {
+        if (block.type == PosBlockType::Line) {
+            // 【直线对齐】：将选中直线的中心点平移到块的中心，并旋转到块的角度
+            QPointF shapeCenter = (m_alignShapeLine.p1() + m_alignShapeLine.p2()) / 2.0;
+            double shapeAngle = std::atan2(m_alignShapeLine.p2().y() - m_alignShapeLine.p1().y(), m_alignShapeLine.p2().x() - m_alignShapeLine.p1().x()) * 180.0 / M_PI;
+            double angleDiff = block.angle - shapeAngle;
+
+            double angleRad = angleDiff * M_PI / 180.0;
+            double cosA = std::cos(angleRad);
+            double sinA = std::sin(angleRad);
+
+            for (int idx : std::as_const(m_selectedPathIndices)) {
+                for (int i = 0; i < m_displayPaths[idx].points.size(); ++i) {
+                    double x = m_displayPaths[idx].points[i].x() - shapeCenter.x();
+                    double y = m_displayPaths[idx].points[i].y() - shapeCenter.y();
+                    double nx = x * cosA - y * sinA;
+                    double ny = x * sinA + y * cosA;
+                    m_displayPaths[idx].points[i].setX(nx + block.x);
+                    m_displayPaths[idx].points[i].setY(ny + block.y);
+                }
+            }
+            m_alignConstraints.append({block.type, shapeCenter, m_alignShapeLine, block});
+        } else {
+            // 【点/圆心/弧心对齐】：只平移，不旋转
+            double dx = block.x - m_alignShapePoint.x();
+            double dy = block.y - m_alignShapePoint.y();
+            for (int idx : std::as_const(m_selectedPathIndices)) {
+                for (int i = 0; i < m_displayPaths[idx].points.size(); ++i) {
+                    m_displayPaths[idx].points[i].setX(m_displayPaths[idx].points[i].x() + dx);
+                    m_displayPaths[idx].points[i].setY(m_displayPaths[idx].points[i].y() + dy);
+                }
+            }
+            m_alignConstraints.append({block.type, m_alignShapePoint, QLineF(), block});
+        }
+
+        emit pathsMoved(m_displayPaths);
+        // 保留选中状态，支持用户继续点其他块产生二次约束
+        m_transformState = TS_Select;
+        update();
     }
 }

@@ -38,7 +38,7 @@ public:
     void setMirrorMode(bool enabled);
     void clearSelection();
 
-    enum TransformState { TS_Select, TS_BasePoint, TS_SecondPoint, TS_Input };
+    enum TransformState { TS_Select, TS_BasePoint, TS_SecondPoint, TS_Input, TS_SelectShapeFeature, TS_SelectBlock };
     void setMoveMode(bool enabled);
     void findSnapPoint(const QPoint &pos);
 
@@ -123,6 +123,21 @@ private:
 
     int m_lineWidth = 2;
     QPointF m_mirrorAxisPoint1;
+
+    struct AlignConstraint {
+        PosBlockType type;
+        QPointF shapePt;
+        QLineF shapeLine;
+        PositioningBlock block;
+    };
+    QList<AlignConstraint> m_alignConstraints; // 当前选中零件的受力约束栈
+    PosBlockType m_alignTargetType;            // 用户想用什么类型的定位块
+    QLineF m_snappedLine;
+    bool m_snappedLineValid = false;
+    QPointF m_alignShapePoint;
+    QLineF m_alignShapeLine;
+
+    void applyAlignmentConstraint(const PositioningBlock& block);
 };
 
 #endif // RENDERAREA_H

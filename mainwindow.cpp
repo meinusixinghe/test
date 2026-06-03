@@ -673,20 +673,20 @@ void MainWindow::setupUi()
         renderArea->setEraserSize(value);
     });
     connect(m_floatingToolWidget->btnRotate, &QPushButton::toggled, this, [this](bool checked){
-        if (checked) { m_floatingToolWidget->btnEraser->setChecked(false); m_floatingToolWidget->btnMove->setChecked(false); }
+        if (checked) { m_floatingToolWidget->btnEraser->setChecked(false); m_floatingToolWidget->btnMove->setChecked(false); m_floatingToolWidget->btnMirror->setChecked(false); }
         renderArea->setRotateMode(checked);
     });
-    connect(m_floatingToolWidget->btnMirror, &QPushButton::toggled, this, [this](bool checked){ // 👈 新增镜像切换
+    connect(m_floatingToolWidget->btnMirror, &QPushButton::toggled, this, [this](bool checked){
         if (checked) { m_floatingToolWidget->btnEraser->setChecked(false); m_floatingToolWidget->btnMove->setChecked(false); m_floatingToolWidget->btnRotate->setChecked(false); }
         renderArea->setMirrorMode(checked);
     });
     connect(m_floatingToolWidget->btnEraser, &QPushButton::toggled, this, [this](bool checked){
-        if (checked) { m_floatingToolWidget->btnRotate->setChecked(false); m_floatingToolWidget->btnMove->setChecked(false); }
+        if (checked) { m_floatingToolWidget->btnRotate->setChecked(false); m_floatingToolWidget->btnMove->setChecked(false); m_floatingToolWidget->btnMirror->setChecked(false); }
         m_floatingToolWidget->setSliderVisible(checked);
         renderArea->setEraserMode(checked);
     });
     connect(m_floatingToolWidget->btnMove, &QPushButton::toggled, this, [this](bool checked){
-        if (checked) { m_floatingToolWidget->btnRotate->setChecked(false); m_floatingToolWidget->btnEraser->setChecked(false); }
+        if (checked) { m_floatingToolWidget->btnRotate->setChecked(false); m_floatingToolWidget->btnEraser->setChecked(false); m_floatingToolWidget->btnMirror->setChecked(false); }
         renderArea->setMoveMode(checked);
     });
     // 连接批量删除信号
