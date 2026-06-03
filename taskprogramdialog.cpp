@@ -88,56 +88,124 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
         const Contour& c = paths[idx];
         if (c.points.isEmpty()) continue;
 
-        // 生成针对工人的提示前缀：例如 "图元1[Arc]"
-        QString shapeName = QString("图元%1[%2]").arg(idx + 1).arg(c.type);
+        QString typeStr = c.type;
+        QString shapeName = QString("图元%1[%2]").arg(idx + 1).arg(typeStr);
 
-        // 智能判定：如果图纸轮廓类型包含"圆"或"Arc"或"Circle"，底层使用圆弧插补(3)，否则用直线(2)
-        bool isArc = c.type.contains("圆") || c.type.contains("Arc", Qt::CaseInsensitive) || c.type.contains("Circle", Qt::CaseInsensitive);
-        int contourMoveType = isArc ? 3 : 2;
+        QVector<QPointF> targetPoints;
+        QVector<int> targetMoveTypes;
+        QVector<QString> targetRemarks;
 
-        for (int i = 0; i < c.points.size(); ++i) {
-            QPointF pt = c.points[i];
+        int n = c.points.size();
+        bool isFittedData = typeStr.contains("拟合") || typeStr.contains("样条") || typeStr.contains("Spline", Qt::CaseInsensitive);
+        bool isCircle = typeStr.contains("圆") && !typeStr.contains("弧") && !typeStr.contains("角");
+        bool isArc = typeStr.contains("弧") || typeStr.contains("Arc", Qt::CaseInsensitive);
 
-            // ① 【缝合判断】：计算当前点与上一动作终点的距离 (公差设为 0.001 mm)
+        if (isCircle && n >= 4) {
+            // 【整圆处理】：拆分为两段完美的圆弧 (共5个特征点)
+            targetPoints << c.points[0];         targetMoveTypes << 2; targetRemarks << "-起点(圆弧1开始)";
+            targetPoints << c.points[n / 4];     targetMoveTypes << 3; targetRemarks << "-圆弧1途经点";
+            targetPoints << c.points[n / 2];     targetMoveTypes << 3; targetRemarks << "-圆弧1终点(圆弧2开始)";
+            targetPoints << c.points[3 * n / 4]; targetMoveTypes << 3; targetRemarks << "-圆弧2途经点";
+            targetPoints << c.points[n - 1];     targetMoveTypes << 3; targetRemarks << "-圆弧2终点";
+        }
+        else if (isFittedData && n >= 3) {
+            // 【读取 Python 的拟合数据】：格式为 [起点, 途经点, 终点, 途经点, 终点...]
+            targetPoints << c.points[0];
+            targetMoveTypes << 2; // 起点必定用直线(2)空飞过去
+            targetRemarks << "-样条起点";
+
+            for (int i = 1; i < n - 1; i += 2) {
+                int segIdx = (i + 1) / 2;
+                QPointF p1 = c.points[i-1];
+                QPointF p2 = c.points[i];
+                QPointF p3 = c.points[i+1];
+
+                // 防呆：防止三点共线导致机器人圆弧指令报警
+                double D = 2 * (p1.x()*(p2.y() - p3.y()) + p2.x()*(p3.y() - p1.y()) + p3.x()*(p1.y() - p2.y()));
+                if (std::abs(D) < 1e-6) {
+                    targetPoints << p3;
+                    targetMoveTypes << 2; // 降级为直线插补
+                    targetRemarks << QString("-段%1[直线] 终点").arg(segIdx);
+                } else {
+                    targetPoints << p2;
+                    targetMoveTypes << 3; // 圆弧途经点
+                    targetRemarks << QString("-段%1[圆弧] 途经点").arg(segIdx);
+                    targetPoints << p3;
+                    targetMoveTypes << 3; // 圆弧终点
+                    targetRemarks << QString("-段%1[圆弧] 终点").arg(segIdx);
+                }
+            }
+            // 容错：尾部多余点用直线收尾
+            if (n % 2 == 0) {
+                targetPoints << c.points[n - 1];
+                targetMoveTypes << 2;
+                targetRemarks << "-尾部收尾";
+            }
+        }
+        else if (isArc && n >= 3) {
+            targetPoints << c.points[0];         targetMoveTypes << 2; targetRemarks << "-圆弧起点";
+            targetPoints << c.points[n / 2];     targetMoveTypes << 3; targetRemarks << "-圆弧途经点";
+            targetPoints << c.points[n - 1];     targetMoveTypes << 3; targetRemarks << "-圆弧终点";
+        }
+        else {
+            for (int i = 0; i < n; ++i) {
+                targetPoints << c.points[i];
+                targetMoveTypes << 2;
+                if (i == 0) targetRemarks << "-起点";
+                else if (i == n - 1) targetRemarks << "-终点";
+                else targetRemarks << QString("-途经点%1").arg(i);
+            }
+        }
+
+        // --- 缝合计算：前瞻下一个图元的起点 ---
+        bool isConnectedWithNext = false;
+        if (idx + 1 < paths.size() && !paths[idx + 1].points.isEmpty()) {
+            QPointF nextStart = paths[idx + 1].points.first();
+            QPointF myEnd = targetPoints.last();
+            double nx = myEnd.x() - nextStart.x();
+            double ny = myEnd.y() - nextStart.y();
+            if (std::sqrt(nx*nx + ny*ny) < 0.001) {
+                isConnectedWithNext = true;
+            }
+        }
+
+        // --- 开始下发点位表 ---
+        for (int i = 0; i < targetPoints.size(); ++i) {
+            QPointF pt = targetPoints[i];
+            int moveType = targetMoveTypes[i];
+            QString baseRemark = shapeName + targetRemarks[i];
+
             double dx = pt.x() - lastEndPos.x();
             double dy = pt.y() - lastEndPos.y();
             bool isConnectedWithPrev = (std::sqrt(dx*dx + dy*dy) < 0.001);
 
-            // 如果这是当前图元的第1个点，且与上个图元完全相连，直接跳过！不发重复指令！
+            // 拦截：如果起点和上一个图形终点无缝重合，直接丢弃该重合点
             if (i == 0 && isConnectedWithPrev) {
                 continue;
             }
 
-            // ② 【前瞻判断】：看看这个图元的终点，是否和【下一个】图元的起点连在一起
-            bool isConnectedWithNext = false;
-            if (i == c.points.size() - 1 && idx + 1 < paths.size()) {
-                QPointF nextStart = paths[idx + 1].points.first();
-                double nx = pt.x() - nextStart.x();
-                double ny = pt.y() - nextStart.y();
-                if (std::sqrt(nx*nx + ny*ny) < 0.001) {
-                    isConnectedWithNext = true;
-                }
-            }
-
-            // 这里将 Z坐标暂定为 0.0，实际可根据工艺偏移量调整
             double p[6] = { pt.x(), pt.y(), 0.0, currentPose.a, currentPose.b, currentPose.c };
 
+            double overlap = 0.0;
+            double speed = 50.0;
+
             if (i == 0) {
-                // 如果能走到这里，说明【不连贯】，必须空移过去。
-                // 注意：无论后面是走圆弧还是直线，飞到起点这个动作一定是直线(2)，停准 overlap=0
-                addRow(2, 2, p, 100, 80, 80, 0, shapeName + "-空走跳转到起点");
-            } else if (isConnectedWithNext) {
-                // 虽然是本图元终点，但与下个图元无缝相连 -> 保持 overlap 平滑过渡，不减速到0
-                addRow(contourMoveType, 2, p, 50, 50, 50, 2, shapeName + "-无缝过渡下个图元");
-            } else if (i == c.points.size() - 1) {
-                // 真正的断点/终点 -> 必须减速停准，overlap设为 0
-                addRow(contourMoveType, 2, p, 50, 50, 50, 0, shapeName + "-终点(抬刀/加工结束)");
+                speed = 100.0;
+                overlap = 0.0;
+                baseRemark += "(空走跳转)";
+            } else if (i == targetPoints.size() - 1) {
+                if (isConnectedWithNext) {
+                    overlap = 2.0;
+                    baseRemark += "(无缝衔接下个)";
+                } else {
+                    overlap = 0.0;
+                    baseRemark += "(加工结束抬刀)";
+                }
             } else {
-                // 中间点 (如圆弧的中点，或多段线的折点) -> 保持连贯平滑
-                addRow(contourMoveType, 2, p, 50, 50, 50, 2, shapeName + QString("-途经点%1").arg(i));
+                overlap = 2.0;
             }
 
-            // 刷新机器人当前所在的末端物理位置
+            addRow(moveType, 2, p, speed, 50, 50, overlap, baseRemark);
             lastEndPos = pt;
         }
     }

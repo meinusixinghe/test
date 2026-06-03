@@ -73,7 +73,6 @@ def parse_dxf(file_path):
                     elements.append({'type': '圆', 'points': pts, 'start': pts[0], 'end': pts[-1], 'is_closed': True})
             except: pass
         elif dxftype in ['LWPOLYLINE', 'POLYLINE']:
-            # 【彩蛋】：利用底层的 virtual_entities，将多段线完美炸开为纯粹的“直线”和“圆弧”！
             try:
                 for v_ent in entity.virtual_entities():
                     process_entity(v_ent)

@@ -920,7 +920,7 @@ void MainWindow::handleTableSelectionChanged()
         m_rootFaceSpin->blockSignals(false);
         QString infoText;
 
-        // --- 几何参数计算逻辑（保留原样） ---
+        // --- 几何参数计算逻辑 ---
         if (c.type == "直线" && c.points.size() >= 2) {
             QPointF p1 = c.points.first(), p2 = c.points.last();
             double length = std::hypot(p2.x() - p1.x(), p2.y() - p1.y());
@@ -947,46 +947,26 @@ void MainWindow::handleTableSelectionChanged()
                            .arg(c.points.first().x(), 0, 'f', 2).arg(c.points.first().y(), 0, 'f', 2)
                            .arg(c.points.last().x(), 0, 'f', 2).arg(c.points.last().y(), 0, 'f', 2)
                            .arg(arcLength, 0, 'f', 2);
-        } else {
-            struct ArcSegment { QPointF start, end, center; double radius; bool isLine; };
-            QList<ArcSegment> segments;
 
-            // 拟合误差阈值。数值越大，拟合的段数越少（圆弧越少），但会轻微失真。
-            // 建议：如果是毫米为单位，0.5是个不错的选择。
-            const double TOLERANCE = 0.5;
+        } else if (c.type.contains("样条") || c.type.contains("拟合")) {
+            int numSegments = (c.points.size() - 1) / 2;
+            infoText = QString("<span style='font-size:14px; font-weight:bold; color:#333;'>【 %1 参数 】</span><br>"
+                               "控制点集:%2 &nbsp;&nbsp;&nbsp; 拟合段数:%3<br>")
+                           .arg(c.type).arg(c.points.size()).arg(numSegments);
 
-            auto distToLine = [](const QPointF& p, const QPointF& a, const QPointF& b) {
-                double l2 = std::pow(a.x() - b.x(), 2) + std::pow(a.y() - b.y(), 2);
-                if (l2 == 0) return std::hypot(p.x() - a.x(), p.y() - a.y());
-                double t = ((p.x() - a.x()) * (b.x() - a.x()) + (p.y() - a.y()) * (b.y() - a.y())) / l2;
-                t = std::max(0.0, std::min(1.0, t));
-                return std::hypot(p.x() - (a.x() + t * (b.x() - a.x())), p.y() - (a.y() + t * (b.y() - a.y())));
-            };
+            for (int s = 0; s < numSegments; ++s) {
+                if (s * 2 + 2 < c.points.size()) { // 防越界保护
+                    QPointF p1 = c.points[s * 2];       // 起点
+                    QPointF p2 = c.points[s * 2 + 1];   // 途经点
+                    QPointF p3 = c.points[s * 2 + 2];   // 终点
 
-            int n = c.points.size();
-            int i = 0;
-
-            // 贪心搜索循环
-            while (i < n - 1) {
-                int best_j = i + 1;
-                ArcSegment best_arc = {c.points[i], c.points[i+1], QPointF(), 0, true};
-
-                for (int j = n - 1; j >= i + 2; --j) {
-                    int mid = i + (j - i) / 2;
-                    QPointF p1 = c.points[i], p2 = c.points[mid], p3 = c.points[j];
-
+                    // 利用简单的数学公式判断这3个点是直是弯（三点共线判定）
                     double D = 2 * (p1.x()*(p2.y() - p3.y()) + p2.x()*(p3.y() - p1.y()) + p3.x()*(p1.y() - p2.y()));
-
                     if (std::abs(D) < 1e-6) {
-                        bool goodLine = true;
-                        for(int k = i + 1; k < j; ++k) {
-                            if (distToLine(c.points[k], p1, p3) > TOLERANCE) { goodLine = false; break; }
-                        }
-                        if (goodLine) {
-                            best_j = j;
-                            best_arc = {p1, p3, QPointF(), 0, true};
-                            break;
-                        }
+                        infoText += QString("<b>段%1 [直线]</b> 起点:(%2,%3) &nbsp;终点:(%4,%5) &nbsp;长度:%6<br>")
+                                        .arg(s+1).arg(p1.x(), 0, 'f', 1).arg(p1.y(), 0, 'f', 1)
+                                        .arg(p3.x(), 0, 'f', 1).arg(p3.y(), 0, 'f', 1)
+                                        .arg(std::hypot(p3.x()-p1.x(), p3.y()-p1.y()), 0, 'f', 1);
                     } else {
                         double xc = ((p1.x()*p1.x() + p1.y()*p1.y())*(p2.y() - p3.y()) +
                                      (p2.x()*p2.x() + p2.y()*p2.y())*(p3.y() - p1.y()) +
@@ -996,42 +976,17 @@ void MainWindow::handleTableSelectionChanged()
                                      (p3.x()*p3.x() + p3.y()*p3.y())*(p2.x() - p1.x())) / D;
                         double R = std::hypot(p1.x() - xc, p1.y() - yc);
 
-                        bool goodArc = true;
-                        for(int k = i + 1; k < j; ++k) {
-                            double dist = std::abs(std::hypot(c.points[k].x() - xc, c.points[k].y() - yc) - R);
-                            if (dist > TOLERANCE) { goodArc = false; break; }
-                        }
-                        if (goodArc) {
-                            best_j = j;
-                            best_arc = {p1, p3, QPointF(xc, yc), R, false};
-                            break;
-                        }
+                        infoText += QString("<b>段%1 [圆弧]</b> 起点:(%2,%3) &nbsp;终点:(%4,%5) &nbsp;半径:%6<br>")
+                                        .arg(s+1).arg(p1.x(), 0, 'f', 1).arg(p1.y(), 0, 'f', 1)
+                                        .arg(p3.x(), 0, 'f', 1).arg(p3.y(), 0, 'f', 1).arg(R, 0, 'f', 1);
                     }
                 }
-
-                segments.append(best_arc);
-                i = best_j;
             }
-
-            infoText = QString("<span style='font-size:14px; font-weight:bold; color:#333;'>【 %1 参数 (拟合) 】</span><br>"
-                               "原始点数:%2 &nbsp;&nbsp;&nbsp; 拟合段数:%3<br>")
-                           .arg(c.type).arg(n).arg(segments.size());
-
-            for (int s = 0; s < segments.size(); ++s) {
-                const auto& seg = segments[s];
-                if (seg.isLine) {
-                    infoText += QString("<b>段%1 [直线]</b> 起点:(%2,%3) &nbsp;终点:(%4,%5) &nbsp;长度:%6<br>")
-                                    .arg(s+1).arg(seg.start.x(), 0, 'f', 1).arg(seg.start.y(), 0, 'f', 1)
-                                    .arg(seg.end.x(), 0, 'f', 1).arg(seg.end.y(), 0, 'f', 1)
-                                    .arg(std::hypot(seg.end.x()-seg.start.x(), seg.end.y()-seg.start.y()), 0, 'f', 1);
-                } else {
-                    infoText += QString("<b>段%1 [圆弧]</b> 起点:(%2,%3) &nbsp;终点:(%4,%5) &nbsp;半径:%6<br>")
-                                    .arg(s+1).arg(seg.start.x(), 0, 'f', 1).arg(seg.start.y(), 0, 'f', 1)
-                                    .arg(seg.end.x(), 0, 'f', 1).arg(seg.end.y(), 0, 'f', 1).arg(seg.radius, 0, 'f', 1);
-                }
-            }
-            infoText = infoText.trimmed();
+        } else {
+            infoText = QString("<span style='font-size:14px; font-weight:bold; color:#333;'>【 %1 】</span><br>包含 %2 个控制点")
+                           .arg(c.type).arg(c.points.size());
         }
+
         if (selectedRows.size() > 1) {
             infoText = QString("<span style='color:#999; font-size:11px;'>（多选 %1 条，仅显首条）</span><br>").arg(selectedRows.size()) + infoText;
         }
@@ -1040,7 +995,6 @@ void MainWindow::handleTableSelectionChanged()
     } else {
         detailWidget->hide(); // 没有选中时隐藏面板
     }
-
     renderArea->setHighlightedPathIndices(selectedRows);
 }
 
