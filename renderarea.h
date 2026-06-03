@@ -54,7 +54,6 @@ protected:
     void wheelEvent(QWheelEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
 
-    // 用于平移的鼠标事件
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
@@ -67,28 +66,23 @@ signals:
     void pathsMoved(const QVector<Contour> &updatedPaths);
     void reorderPathsRequested();
 private:
-    // 管板数据
-    QVector<Hole> weldHoles;                                // 仅焊接管孔（不含主体圆）
-    Hole mainPlateHole;                                     // 管板主体圆（最大半径)
+    QVector<Hole> weldHoles;
+    Hole mainPlateHole;
     QVector<Contour> contours;
-    QPolygonF m_mainPlatePolygon;                           // 存储方形轮廓
-    bool m_isRectangular = false;                           // 标记
+    QPolygonF m_mainPlatePolygon;
+    bool m_isRectangular = false;
 
-    // 缩放和平移参数
-    double m_scaleFactor;                                   // 总缩放比例 (包含初始自适应)
-    QPointF m_panOffsetDXF;                                 // 用户累积的平移量 (DXF坐标单位)
+    double m_scaleFactor;
+    QPointF m_panOffsetDXF;
 
-    // DXF数据的边界 (用于限制平移)
     QPointF m_dxfMinBound;
     QPointF m_dxfMaxBound;
 
-    // 当前要高亮显示的孔洞索引
     QList<int> m_highlightPathIndices;
 
-    // 鼠标拖拽
-    QPoint m_lastMousePos;                                  // 记录鼠标上一次的位置 (Widget像素单位)
+    QPoint m_lastMousePos;
     bool m_firstPaint = true;
-    void applyCurrentTransform(QPainter &painter);          // 应用所有变换
+    void applyCurrentTransform(QPainter &painter);
 
     QVector<Contour> m_displayPaths;
     int m_highlightPathIndex = -1;
@@ -131,7 +125,7 @@ private:
 
     bool m_isSnappedToBlock = false;
     int m_snappedBlockIndex = -1;
-    QTransform m_previewTransform; // 动态拖拽时的临时变换矩阵
+    QTransform m_previewTransform;
 
     PosBlockType m_alignTargetType;
     struct AlignConstraint {
@@ -140,7 +134,7 @@ private:
         QLineF shapeLine;
         PositioningBlock block;
     };
-    QList<AlignConstraint> m_alignConstraints; // 当前选中零件的受力约束栈
+    QList<AlignConstraint> m_alignConstraints;
     QPointF m_alignShapePoint;
     QLineF m_alignShapeLine;
 
