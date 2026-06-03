@@ -374,13 +374,12 @@ void RenderArea::mousePressEvent(QMouseEvent *event) {
                 double C = dy * p1.x() - dx * p1.y();
                 double denominator = A * A + B * B;
 
-                for (int idx : m_selectedPathIndices) {
+                for (int idx : std::as_const(m_selectedPathIndices)) {
                     if (idx >= 0 && idx < m_displayPaths.size()) {
                         for (int i = 0; i < m_displayPaths[idx].points.size(); ++i) {
                             double x0 = m_displayPaths[idx].points[i].x();
                             double y0 = m_displayPaths[idx].points[i].y();
 
-                            // 点到直线的镜像点公式
                             double nx = x0 - 2 * A * (A * x0 + B * y0 + C) / denominator;
                             double ny = y0 - 2 * B * (A * x0 + B * y0 + C) / denominator;
 
@@ -723,7 +722,6 @@ void RenderArea::findSnapPoint(const QPoint &pos) {
     double maxY = std::numeric_limits<double>::lowest();
     bool hasSelection = false;
 
-    // 收集所有用户要求的点位
     for (int idx : std::as_const(m_selectedPathIndices)) {
         if (idx < 0 || idx >= m_displayPaths.size()) continue;
 
@@ -731,35 +729,50 @@ void RenderArea::findSnapPoint(const QPoint &pos) {
         if (contour.points.isEmpty()) continue;
 
         hasSelection = true;
-        // 线段交点、端点、所有多边形节点
+
+        // 1. 先计算该图元的局部包围盒
+        double cMinX = contour.points[0].x(), cMaxX = cMinX, cMinY = contour.points[0].y(), cMaxY = cMinY;
         for (const QPointF& pt : contour.points) {
-            candidates << pt;
+            if (pt.x() < cMinX) cMinX = pt.x();
+            if (pt.x() > cMaxX) cMaxX = pt.x();
+            if (pt.y() < cMinY) cMinY = pt.y();
+            if (pt.y() > cMaxY) cMaxY = pt.y();
+
+            // 顺便累计全局包围盒
             if (pt.x() < minX) minX = pt.x();
             if (pt.x() > maxX) maxX = pt.x();
             if (pt.y() < minY) minY = pt.y();
             if (pt.y() > maxY) maxY = pt.y();
         }
 
-        // 智能找圆心
-        if (contour.type == "圆" && contour.points.size() >= 3) {
-            double cMinX = contour.points[0].x(), cMaxX = cMinX, cMinY = contour.points[0].y(), cMaxY = cMinY;
-            for (const QPointF& p : contour.points) {
-                if (p.x() < cMinX) cMinX = p.x(); if (p.x() > cMaxX) cMaxX = p.x();
-                if (p.y() < cMinY) cMinY = p.y(); if (p.y() > cMaxY) cMaxY = p.y();
+        if (contour.type == "圆") {
+            QPointF center((cMinX + cMaxX)/2.0, (cMinY + cMaxY)/2.0);
+            double radius = (cMaxX - cMinX)/2.0;
+            candidates << center;                                      // 圆心
+            candidates << QPointF(center.x(), center.y() + radius);    // 上象限
+            candidates << QPointF(center.x(), center.y() - radius);    // 下象限
+            candidates << QPointF(center.x() + radius, center.y());    // 右象限
+            candidates << QPointF(center.x() - radius, center.y());    // 左象限
+        }
+        else if (contour.type.contains("弧") || contour.type.contains("样条") || contour.type.contains("拟合")) {
+            candidates << contour.points.first();
+            candidates << contour.points.last();
+            candidates << QPointF((cMinX + cMaxX)/2.0, (cMinY + cMaxY)/2.0); // 几何中心
+        }
+        else {
+            for (const QPointF& pt : contour.points) {
+                candidates << pt;
             }
-            candidates << QPointF((cMinX + cMaxX)/2.0, (cMinY + cMaxY)/2.0);
         }
     }
 
     if (hasSelection) {
-        // 选中物体构成的矩形包围盒的中心点
         candidates << QPointF((minX + maxX)/2.0, (minY + maxY)/2.0);
     }
 
-    // 永远将绝对坐标系原点(0,0)作为最高优先级候选项
     candidates << QPointF(0, 0);
 
-    for (const QPointF& pt : candidates) {
+    for (const QPointF& pt : std::as_const(candidates)) {
         QPoint screenPt = transform.map(pt).toPoint();
         double dist = std::hypot(screenPt.x() - pos.x(), screenPt.y() - pos.y());
         if (dist < minDistance) {
@@ -787,7 +800,7 @@ void RenderArea::executeMove() {
     double dx = targetX - m_snappedDxfPos.x();
     double dy = targetY - m_snappedDxfPos.y();
 
-    for (int idx : m_selectedPathIndices) {
+    for (int idx : std::as_const(m_selectedPathIndices)) {
         if (idx >= 0 && idx < m_displayPaths.size()) {
             for (int i = 0; i < m_displayPaths[idx].points.size(); ++i) {
                 m_displayPaths[idx].points[i].setX(m_displayPaths[idx].points[i].x() + dx);
@@ -819,7 +832,7 @@ void RenderArea::executeRotate() {
     double cx = m_snappedDxfPos.x();
     double cy = m_snappedDxfPos.y();
 
-    for (int idx : m_selectedPathIndices) {
+    for (int idx : std::as_const(m_selectedPathIndices)) {
         if (idx >= 0 && idx < m_displayPaths.size()) {
             for (int i = 0; i < m_displayPaths[idx].points.size(); ++i) {
                 double x = m_displayPaths[idx].points[i].x() - cx;

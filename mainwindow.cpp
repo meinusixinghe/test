@@ -181,7 +181,7 @@ FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     mainLayout->addWidget(sliderContainer);
 
     sliderContainer->setVisible(false);
-    setFixedWidth(220);
+    setFixedWidth(280);
     adjustSize();
 
     setCursor(Qt::ArrowCursor);
@@ -864,6 +864,13 @@ void MainWindow::loadDrawingData(const QString &filePath)
                 QJsonArray xy = ptRef.toArray();
                 if (xy.size() >= 2) {
                     contour.points.append(QPointF(xy[0].toDouble(), xy[1].toDouble()));
+                }
+            }
+            if (contour.type == "圆" && contour.points.size() >= 3) {
+                QPointF firstPt = contour.points.first();
+                QPointF lastPt = contour.points.last();
+                if (std::hypot(firstPt.x() - lastPt.x(), firstPt.y() - lastPt.y()) > 1e-4) {
+                    contour.points.append(firstPt);
                 }
             }
             m_displayPaths.append(contour);
