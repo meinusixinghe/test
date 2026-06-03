@@ -257,7 +257,6 @@ void RenderArea::paintEvent(QPaintEvent *event)
 
 // ----------------------------------------------------
 // 功能：鼠标滚轮缩放
-// 核心：通过滚轮角度计算缩放因子，限制缩放范围，避免过度缩放
 // ----------------------------------------------------
 void RenderArea::wheelEvent(QWheelEvent *event)
 {
@@ -278,7 +277,7 @@ void RenderArea::wheelEvent(QWheelEvent *event)
 }
 
 // ----------------------------------------------------
-// 功能：左键按下时，记录鼠标初始位置，改变鼠标样式为 “闭手”
+// 功能：左键按下时，记录鼠标初始位置，改变鼠标样式为闭手
 // ----------------------------------------------------
 void RenderArea::mousePressEvent(QMouseEvent *event) {
     if (event->button() == Qt::MiddleButton) {
@@ -314,6 +313,7 @@ void RenderArea::mousePressEvent(QMouseEvent *event) {
                 m_snappedDxfPos = transform.inverted().map(QPointF(event->pos()));
                 m_snappedScreenPos = event->pos();
             }
+
             if (m_isMirrorMode) {
                 m_mirrorAxisPoint1 = m_snappedDxfPos;
                 m_transformState = TS_SecondPoint;
@@ -349,57 +349,59 @@ void RenderArea::mousePressEvent(QMouseEvent *event) {
             update();
             event->accept();
             return;
-        }
-    }else if (m_transformState == TS_SecondPoint && m_isMirrorMode) {
-        // 镜像模式的第二点点击！
-        if (!m_isSnapped) {
-            QTransform transform;
-            transform.translate(width() / 2.0, height() / 2.0);
-            transform.scale(m_scaleFactor, -m_scaleFactor);
-            transform.translate(m_panOffsetDXF.x(), m_panOffsetDXF.y());
-            m_snappedDxfPos = transform.inverted().map(QPointF(event->pos()));
-        }
 
-        QPointF p1 = m_mirrorAxisPoint1;
-        QPointF p2 = m_snappedDxfPos;
-
-        // 防呆：两点不能重合
-        if (std::hypot(p2.x() - p1.x(), p2.y() - p1.y()) > 1e-5) {
-            double dx = p2.x() - p1.x();
-            double dy = p2.y() - p1.y();
-            // 直线方程 Ax + By + C = 0 的参数
-            double A = -dy;
-            double B = dx;
-            double C = dy * p1.x() - dx * p1.y();
-            double denominator = A * A + B * B;
-
-            for (int idx : m_selectedPathIndices) {
-                if (idx >= 0 && idx < m_displayPaths.size()) {
-                    for (int i = 0; i < m_displayPaths[idx].points.size(); ++i) {
-                        double x0 = m_displayPaths[idx].points[i].x();
-                        double y0 = m_displayPaths[idx].points[i].y();
-
-                        // 点到直线的镜像点公式
-                        double nx = x0 - 2 * A * (A * x0 + B * y0 + C) / denominator;
-                        double ny = y0 - 2 * B * (A * x0 + B * y0 + C) / denominator;
-
-                        m_displayPaths[idx].points[i].setX(nx);
-                        m_displayPaths[idx].points[i].setY(ny);
-                    }
-                }
+        } else if (m_transformState == TS_SecondPoint && m_isMirrorMode) {
+            // 👇【核心修复点】：把它移到了最外层 if 的内部！
+            // 镜像模式的第二点点击！
+            if (!m_isSnapped) {
+                QTransform transform;
+                transform.translate(width() / 2.0, height() / 2.0);
+                transform.scale(m_scaleFactor, -m_scaleFactor);
+                transform.translate(m_panOffsetDXF.x(), m_panOffsetDXF.y());
+                m_snappedDxfPos = transform.inverted().map(QPointF(event->pos()));
             }
 
-            // 传回主界面并记录撤销
-            emit pathsMoved(m_displayPaths);
+            QPointF p1 = m_mirrorAxisPoint1;
+            QPointF p2 = m_snappedDxfPos;
 
-            // 重置状态
-            m_transformState = TS_Select;
-            m_selectedPathIndices.clear();
-            m_baseSelectedIndices.clear();
+            // 防呆：两点不能重合
+            if (std::hypot(p2.x() - p1.x(), p2.y() - p1.y()) > 1e-5) {
+                double dx = p2.x() - p1.x();
+                double dy = p2.y() - p1.y();
+                // 直线方程 Ax + By + C = 0 的参数
+                double A = -dy;
+                double B = dx;
+                double C = dy * p1.x() - dx * p1.y();
+                double denominator = A * A + B * B;
+
+                for (int idx : m_selectedPathIndices) {
+                    if (idx >= 0 && idx < m_displayPaths.size()) {
+                        for (int i = 0; i < m_displayPaths[idx].points.size(); ++i) {
+                            double x0 = m_displayPaths[idx].points[i].x();
+                            double y0 = m_displayPaths[idx].points[i].y();
+
+                            // 点到直线的镜像点公式
+                            double nx = x0 - 2 * A * (A * x0 + B * y0 + C) / denominator;
+                            double ny = y0 - 2 * B * (A * x0 + B * y0 + C) / denominator;
+
+                            m_displayPaths[idx].points[i].setX(nx);
+                            m_displayPaths[idx].points[i].setY(ny);
+                        }
+                    }
+                }
+
+                // 传回主界面并记录撤销
+                emit pathsMoved(m_displayPaths);
+
+                // 重置状态
+                m_transformState = TS_Select;
+                m_selectedPathIndices.clear();
+                m_baseSelectedIndices.clear();
+            }
+            update();
+            event->accept();
+            return;
         }
-        update();
-        event->accept();
-        return;
     }
 
     if (m_isEraserMode && event->button() == Qt::LeftButton) {
@@ -414,7 +416,8 @@ void RenderArea::mousePressEvent(QMouseEvent *event) {
 
     if (event->button() == Qt::LeftButton) {
         m_lastMousePos = event->pos();
-        if (!m_isEraserMode && !m_isRotateMode && !m_isMoveMode) {
+        // 加入 Mirror 判断，防止鼠标图标错乱
+        if (!m_isEraserMode && !m_isRotateMode && !m_isMoveMode && !m_isMirrorMode) {
             setCursor(Qt::ClosedHandCursor);
         }
         event->accept();
@@ -470,7 +473,7 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event) {
 void RenderArea::mouseReleaseEvent(QMouseEvent *event) {
     if (event->button() == Qt::MiddleButton) {
         m_isMiddlePanning = false;
-        if (m_isRotateMode || m_isMoveMode) setCursor(Qt::CrossCursor);
+        if (m_isRotateMode || m_isMoveMode || m_isMirrorMode) setCursor(Qt::CrossCursor); // 👈【修复】: 加入镜像判断
         else if (m_isEraserMode) setCursor(Qt::BlankCursor);
         else setCursor(Qt::OpenHandCursor);
         update();
@@ -485,7 +488,7 @@ void RenderArea::mouseReleaseEvent(QMouseEvent *event) {
         return;
     }
     if (event->button() == Qt::LeftButton) {
-        if (!m_isEraserMode && !m_isRotateMode && !m_isMoveMode) {
+        if (!m_isEraserMode && !m_isRotateMode && !m_isMoveMode && !m_isMirrorMode) {
             setCursor(Qt::OpenHandCursor);
         }
         event->accept();
