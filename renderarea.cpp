@@ -223,7 +223,20 @@ void RenderArea::paintEvent(QPaintEvent *event)
         blinkPen.setCosmetic(true);
         painter.setPen(blinkPen);
         if (m_ucsSelectMode == 2 || (m_transformState == TS_SelectShapeFeature && m_alignTargetType == PosBlockType::Line)) {
-            painter.drawLine(m_hoveredLine);
+            if (m_transformState == TS_SelectShapeFeature && m_alignTargetType == PosBlockType::Line) {
+                QPointF p1 = m_hoveredLine.p1();
+                QPointF p2 = m_hoveredLine.p2();
+                double len = std::hypot(p2.x() - p1.x(), p2.y() - p1.y());
+                if (len > 1e-6) {
+                    double nx = (p2.x() - p1.x()) / len;
+                    double ny = (p2.y() - p1.y()) / len;
+                    QPointF extP1 = p1 - QPointF(nx, ny) * 5000.0;
+                    QPointF extP2 = p2 + QPointF(nx, ny) * 5000.0;
+                    painter.drawLine(extP1, extP2);
+                }
+            } else {
+                painter.drawLine(m_hoveredLine);
+            }
         } else {
             double safeScale = (m_scaleFactor > 0.001) ? m_scaleFactor : 1.0;
             double r = 10.0 / safeScale;
@@ -685,12 +698,19 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event) {
                 for (int i = 0; i < contour.points.size() - 1; ++i) {
                     QPointF p1 = contour.points[i];
                     QPointF p2 = contour.points[i+1];
-                    double dist = distancePointToSegment(dxfPos, p1, p2);
+                    double dx = p2.x() - p1.x();
+                    double dy = p2.y() - p1.y();
+                    double len = std::hypot(dx, dy);
+                    if (len < 1e-6) continue;
+                    // 计算鼠标点到无限长直线的垂直距离
+                    double dist = std::abs((dxfPos.x() - p1.x()) * dy - (dxfPos.y() - p1.y()) * dx) / len;
                     if (dist < minDist) {
                         minDist = dist;
                         m_hasHoveredFeature = true;
                         m_hoveredLine = QLineF(p1, p2);
-                        m_hoveredPoint = (p1 + p2) / 2.0; // 线段中点作为基准点
+                        // 将抓取点严格设定为鼠标在无限长直线上的垂直投影点，实现平滑抓取！
+                        double t = ((dxfPos.x() - p1.x()) * dx + (dxfPos.y() - p1.y()) * dy) / (len * len);
+                        m_hoveredPoint = QPointF(p1.x() + t * dx, p1.y() + t * dy);
                     }
                 }
             } else if (m_alignTargetType == PosBlockType::Point || m_alignTargetType == PosBlockType::Arc || m_alignTargetType == PosBlockType::Circle) {
@@ -758,7 +778,17 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event) {
         for (int i = 0; i < m_posBlocks.size(); ++i) {
             const auto& block = m_posBlocks[i];
             if (block.type == m_alignTargetType) {
-                double dist = std::hypot(block.x - dxfPos.x(), block.y - dxfPos.y());
+                double dist = 0.0;
+                if (block.type == PosBlockType::Line) {
+                    QTransform blockT;
+                    blockT.translate(block.x, block.y);
+                    blockT.rotate(block.angle);
+                    QPointF localPos = blockT.inverted().map(dxfPos);
+                    dist = std::min(std::abs(localPos.x() - block.width / 2.0), std::abs(localPos.x() + block.width / 2.0));
+                } else {
+                    dist = std::hypot(block.x - dxfPos.x(), block.y - dxfPos.y());
+                }
+
                 if (dist < minBlockDist) {
                     minBlockDist = dist;
                     m_isSnappedToBlock = true;
