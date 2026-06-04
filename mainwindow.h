@@ -83,8 +83,12 @@ private:
     int m_step = 0;
 
     QPointF m_origin;
+    bool m_originValid = false;
     QVector2D m_xAxis;
     QVector2D m_yAxis;
+
+    QLineF m_xLine;
+    QLineF m_yLine;
 
     QPointF m_tempPt1;
 
@@ -93,6 +97,7 @@ private:
     QRadioButton* m_rbUnknownOrigin;
     QWidget* m_knowOriginWidget;
 
+    QComboBox* m_cbOriginMethod;
     QPushButton* m_btnSelectOrigin;
     QLabel* m_lblOrigin;
 
