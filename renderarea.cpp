@@ -222,7 +222,41 @@ void RenderArea::paintEvent(QPaintEvent *event)
         blinkPen.setWidth(m_lineWidth + 2);
         blinkPen.setCosmetic(true);
         painter.setPen(blinkPen);
+        if (m_ucsSelectMode == 2 || (m_transformState == TS_SelectShapeFeature && m_alignTargetType == PosBlockType::Line)) {
+            painter.drawLine(m_hoveredLine);
+        } else {
+            double safeScale = (m_scaleFactor > 0.001) ? m_scaleFactor : 1.0;
+            double r = 10.0 / safeScale;
+            painter.setBrush(Qt::NoBrush);
+            painter.drawEllipse(m_hoveredPoint, r, r);
+        }
         painter.restore();
+    }
+
+    if (m_transformState == TS_DraggingToBlock && m_alignTargetType == PosBlockType::Line) {
+        QPointF p1 = m_previewTransform.map(m_alignShapeLine.p1());
+        QPointF p2 = m_previewTransform.map(m_alignShapeLine.p2());
+        double len = std::hypot(p2.x() - p1.x(), p2.y() - p1.y());
+        if (len > 1e-6) {
+            double nx = (p2.x() - p1.x()) / len;
+            double ny = (p2.y() - p1.y()) / len;
+            // 沿线段两端各延长 5000 毫米作为虚拟辅助线
+            QPointF extP1 = p1 - QPointF(nx, ny) * 5000.0;
+            QPointF extP2 = p2 + QPointF(nx, ny) * 5000.0;
+
+            painter.save();
+            QPen extPen(Qt::magenta, 2, Qt::DashLine); // 品红色虚线
+            extPen.setCosmetic(true);
+            painter.setPen(extPen);
+            painter.drawLine(extP1, extP2);
+
+            // 将用户实际选中的那条边用加粗的品红色高亮！
+            QPen solidPen(Qt::magenta, 4);
+            solidPen.setCosmetic(true);
+            painter.setPen(solidPen);
+            painter.drawLine(p1, p2);
+            painter.restore();
+        }
     }
 
     if (m_ucsSelectMode != 0 || m_ucs.valid || m_ucs.originValid || m_ucs.xValid || m_ucs.yValid) {
@@ -672,6 +706,9 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event) {
             const auto& contour = m_displayPaths[idx];
 
             if (m_alignTargetType == PosBlockType::Line) {
+                if (contour.type == "圆" || contour.type.contains("弧") || contour.type.contains("拟合") || contour.type.contains("样条")) {
+                    continue;
+                }
                 // 直线对齐：只吸附图元里的直线段
                 for (int i = 0; i < contour.points.size() - 1; ++i) {
                     QPointF p1 = contour.points[i];
