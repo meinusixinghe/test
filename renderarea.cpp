@@ -218,7 +218,7 @@ void RenderArea::paintEvent(QPaintEvent *event)
 
     if ((m_transformState == TS_SelectShapeFeature || m_ucsSelectMode != 0) && m_hasHoveredFeature) {
         painter.save();
-        QPen blinkPen((QTime::currentTime().msec() % 500 < 250) ? Qt::cyan : Qt::red, 0);
+        QPen blinkPen((QTime::currentTime().msec() % 500 < 250) ? Qt::cyan : Qt::blue, 0);
         blinkPen.setWidth(m_lineWidth + 2);
         blinkPen.setCosmetic(true);
         painter.setPen(blinkPen);
@@ -796,15 +796,39 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event) {
             auto c1 = m_alignConstraints[0];
             if (c1.type == PosBlockType::Line) {
                 double rad = c1.block.angle * M_PI / 180.0;
-                QPointF D(-std::sin(rad), std::cos(rad));
-                QPointF targetPos = m_isSnappedToBlock ? QPointF(m_posBlocks[m_snappedBlockIndex].x, m_posBlocks[m_snappedBlockIndex].y) : dxfPos;
-                QPointF T(targetPos.x() - m_alignShapePoint.x(), targetPos.y() - m_alignShapePoint.y());
-                double proj = T.x() * D.x() + T.y() * D.y();
-                m_previewTransform.translate(proj * D.x(), proj * D.y());
+                QPointF D(-std::sin(rad), std::cos(rad)); // 沿着第一条挡板滑动的方向向量
+
+                if (m_isSnappedToBlock && m_posBlocks[m_snappedBlockIndex].type == PosBlockType::Line) {
+                    const auto& block2 = m_posBlocks[m_snappedBlockIndex];
+                    double rad2 = block2.angle * M_PI / 180.0;
+                    QPointF N2(std::cos(rad2), std::sin(rad2)); // 目标挡板的法向量
+
+                    QTransform blockT;
+                    blockT.translate(block2.x, block2.y);
+                    blockT.rotate(block2.angle);
+                    QPointF localPos = blockT.inverted().map(dxfPos);
+                    double snapLx = (localPos.x() > 0) ? (block2.width / 2.0) : (-block2.width / 2.0);
+                    QPointF P2 = blockT.map(QPointF(snapLx, 0)); // 目标挡板边缘上的一点
+
+                    // 计算两条直线的几何交界点，并滑动过去
+                    double denom = D.x() * N2.x() + D.y() * N2.y();
+                    if (std::abs(denom) > 1e-4) {
+                        double t = ((P2.x() - m_alignShapePoint.x()) * N2.x() + (P2.y() - m_alignShapePoint.y()) * N2.y()) / denom;
+                        m_previewTransform.translate(t * D.x(), t * D.y());
+                    } else {
+                        // 平行退化处理
+                        QPointF T(targetWorldPos.x() - m_alignShapePoint.x(), targetWorldPos.y() - m_alignShapePoint.y());
+                        double proj = T.x() * D.x() + T.y() * D.y();
+                        m_previewTransform.translate(proj * D.x(), proj * D.y());
+                    }
+                } else {
+                    QPointF T(targetWorldPos.x() - m_alignShapePoint.x(), targetWorldPos.y() - m_alignShapePoint.y());
+                    double proj = T.x() * D.x() + T.y() * D.y();
+                    m_previewTransform.translate(proj * D.x(), proj * D.y());
+                }
             } else {
-                QPointF targetPos = m_isSnappedToBlock ? QPointF(m_posBlocks[m_snappedBlockIndex].x, m_posBlocks[m_snappedBlockIndex].y) : dxfPos;
                 double angleShape = std::atan2(m_alignShapePoint.y() - c1.block.y, m_alignShapePoint.x() - c1.block.x);
-                double angleMouse = std::atan2(targetPos.y() - c1.block.y, targetPos.x() - c1.block.x);
+                double angleMouse = std::atan2(targetWorldPos.y() - c1.block.y, targetWorldPos.x() - c1.block.x);
                 double angleDiff = (angleMouse - angleShape) * 180.0 / M_PI;
                 m_previewTransform.translate(c1.block.x, c1.block.y);
                 m_previewTransform.rotate(angleDiff);
@@ -1388,8 +1412,33 @@ void RenderArea::applyAlignmentConstraint(const PositioningBlock& block)
                                          .arg(d_shape, 0, 'f', 2).arg(d_block, 0, 'f', 2));
                 m_transformState = TS_Select; update(); return;
             }
-        }
-        else if (c1.type == PosBlockType::Line && block.type != PosBlockType::Line) {
+        }else if (c1.type == PosBlockType::Line && block.type == PosBlockType::Line) {
+            double rad = c1.block.angle * M_PI / 180.0;
+            QPointF D(-std::sin(rad), std::cos(rad));
+            double rad2 = block.angle * M_PI / 180.0;
+            QPointF N2(std::cos(rad2), std::sin(rad2));
+
+            // 检查两条挡板是不是平行的
+            double denom = D.x() * N2.x() + D.y() * N2.y();
+            if (std::abs(denom) < 1e-4) {
+                QMessageBox::warning(this, "过约束拦截", "两条定位边平行，无法完成二维完全固定！");
+                m_transformState = TS_Select; update(); return;
+            }
+
+            // 校验角度强行扭曲是否超过 1 度
+            double shapeAngle = std::atan2(m_alignShapeLine.dy(), m_alignShapeLine.dx()) * 180.0 / M_PI;
+            double targetAngle = block.angle + 90.0;
+            double angleDiff = targetAngle - shapeAngle;
+            while (angleDiff > 90.0) angleDiff -= 180.0;
+            while (angleDiff <= -90.0) angleDiff += 180.0;
+
+            if (std::abs(angleDiff) > 1.0) {
+                QMessageBox::warning(this, "过约束拦截",
+                                     QString("无法吸附！\n将第二条边贴合需要强行扭转 %1 度\n这会破坏原有的第一条边贴合，引发过约束！")
+                                         .arg(angleDiff, 0, 'f', 2));
+                m_transformState = TS_Select; update(); return;
+            }
+        }else if (c1.type == PosBlockType::Line && block.type != PosBlockType::Line) {
             double rad = c1.block.angle * M_PI / 180.0;
             QPointF N(std::cos(rad), std::sin(rad));
             QPointF T(block.x - m_alignShapePoint.x(), block.y - m_alignShapePoint.y());
