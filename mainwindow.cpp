@@ -1312,6 +1312,13 @@ void MainWindow::onStartClicked()
         return;
     }
 
+    if (!RobotAPI::IsApiControl(m_currentDevId)) {
+        if (RobotAPI::EnableApiControl(true, m_currentDevId) != 0) {
+            QMessageBox::critical(this, "API 控制被拒", "无法下发运动，机器人外部控制未使能！");
+            return;
+        }
+    }
+
     if (m_displayPaths.isEmpty()) {
         QMessageBox::warning(this, "无图纸", "当前没有可运行的加工线条，请先导入 DXF 图纸！");
         return;
@@ -1952,15 +1959,28 @@ void MainWindow::moveSelectedRowsToBottom()
 void MainWindow::toggleRobotPower()
 {
     // 如果 ID 还是 0，说明压根还没点“建立连接”
-    if (m_currentDevId == 0) {
-        QMessageBox::warning(this, "未连接", "请先在上方菜单中建立机器人连接！");
+    if (m_currentDevId == 0 || !RobotAPI::IsConnected(m_currentDevId)) {
+        QMessageBox::warning(this, "未连接", "请先在上方菜单中建立机器人的网络连接！");
         return;
+    }
+
+    if (!RobotAPI::IsApiControl(m_currentDevId)) {
+        int apiRet = RobotAPI::EnableApiControl(true, m_currentDevId);
+        if (apiRet != 0) {
+            QMessageBox::critical(this, "权限拒绝 (ERROR_ACCESS_REJECTED)",
+                                  "无法获取机器人的外部 API 控制权！\n\n"
+                                  "【请严格检查机器人物理状态】\n"
+                                  "1. 控制柜钥匙是否已拨到【自动(AUT)/远程(Remote)】模式？\n"
+                                  "2. 实体示教器是否正在被操作或未释放控制权？\n"
+                                  "3. 是否有急停未复位？");
+            return; // 拦截危险指令，防止出现 Access Rejected
+        }
     }
 
     if (!m_isRobotPoweredOn) {
         showAndSaveLog(QString("正在尝试为机器人(Id: %1)上电...").arg(m_currentDevId));
 
-        int ret = RobotAPI::PowerOn();
+        int ret = RobotAPI::PowerOn(m_currentDevId);
 
         if (ret == 0) {
             m_isRobotPoweredOn = true;

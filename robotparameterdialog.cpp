@@ -244,12 +244,23 @@ QWidget* RobotParameterDialog::createMotionPage()
     layout->addWidget(powerGroup);
 
     connect(m_manualPowerBtn, &QPushButton::clicked, this, [this]() {
-        if (m_devId == 0) return;
+        if (m_devId == 0 || !RobotAPI::IsConnected(m_devId)) return;
         m_manualPowerBtn->setEnabled(false);
         m_manualPowerBtn->setText("动作中...");
         m_manualPowerBtn->setStyleSheet("QPushButton { padding: 6px 12px; font-weight: bold; background-color: #9E9E9E; color: white; border-radius: 4px; }");
 
         runAsyncCommand([this]() {
+            if (!RobotAPI::IsApiControl(m_devId)) {
+                if (RobotAPI::EnableApiControl(true, m_devId) != 0) {
+                    QMetaObject::invokeMethod(this, [this]() {
+                        m_manualPowerBtn->setEnabled(true);
+                        m_manualPowerBtn->setText("恢复状态");
+                        QMessageBox::critical(this, "API权限拒绝", "访问拒绝 (ERROR_ACCESS_REJECTED)！\n控制柜处于安全锁定模式，不允许远程上电！");
+                    }, Qt::QueuedConnection);
+                    return;
+                }
+            }
+
             bool isEnabled = false;
             RobotAPI::GetCurrentServoStatus(isEnabled, m_devId);
 
@@ -357,12 +368,19 @@ void RobotParameterDialog::handleJogButton(int axisIndex, bool positive, bool pr
 
     unsigned int devId = m_devId;
 
-    // ==========================================
-    // 👇 核心修复：必须把网络发送放到子线程中，绝对不阻塞 UI
-    // ==========================================
     runAsyncCommand([this, axisIndex, positive, pressed, statusLabel, devId]() {
 
-        // 1. 每次按下或松开前，必须强制确认获取一次操作令牌！(极其关键)
+        if (!RobotAPI::IsConnected(devId)) return;
+
+        if (pressed && !RobotAPI::IsApiControl(devId)) {
+            if (RobotAPI::EnableApiControl(true, devId) != 0) {
+                QMetaObject::invokeMethod(this, [statusLabel]() {
+                    statusLabel->setText("状态: API访问被拒绝(检查钥匙开关)");
+                }, Qt::QueuedConnection);
+                return;
+            }
+        }
+
         RobotAPI::GetPermission(devId);
 
         int ret = 0;
@@ -370,28 +388,22 @@ void RobotParameterDialog::handleJogButton(int axisIndex, bool positive, bool pr
         // 2. 发送 Jog 指令
         switch (axisIndex) {
         case 1:
-            ret = positive ? RobotAPI::Jog1Plus(pressed, devId)
-                           : RobotAPI::Jog1Minus(pressed, devId);
+            ret = positive ? RobotAPI::Jog1Plus(pressed, devId) : RobotAPI::Jog1Minus(pressed, devId);
             break;
         case 2:
-            ret = positive ? RobotAPI::Jog2Plus(pressed, devId)
-                           : RobotAPI::Jog2Minus(pressed, devId);
+            ret = positive ? RobotAPI::Jog2Plus(pressed, devId) : RobotAPI::Jog2Minus(pressed, devId);
             break;
         case 3:
-            ret = positive ? RobotAPI::Jog3Plus(pressed, devId)
-                           : RobotAPI::Jog3Minus(pressed, devId);
+            ret = positive ? RobotAPI::Jog3Plus(pressed, devId) : RobotAPI::Jog3Minus(pressed, devId);
             break;
         case 4:
-            ret = positive ? RobotAPI::Jog4Plus(pressed, devId)
-                           : RobotAPI::Jog4Minus(pressed, devId);
+            ret = positive ? RobotAPI::Jog4Plus(pressed, devId) : RobotAPI::Jog4Minus(pressed, devId);
             break;
         case 5:
-            ret = positive ? RobotAPI::Jog5Plus(pressed, devId)
-                           : RobotAPI::Jog5Minus(pressed, devId);
+            ret = positive ? RobotAPI::Jog5Plus(pressed, devId) : RobotAPI::Jog5Minus(pressed, devId);
             break;
         case 6:
-            ret = positive ? RobotAPI::Jog6Plus(pressed, devId)
-                           : RobotAPI::Jog6Minus(pressed, devId);
+            ret = positive ? RobotAPI::Jog6Plus(pressed, devId) : RobotAPI::Jog6Minus(pressed, devId);
             break;
         }
 
@@ -399,9 +411,7 @@ void RobotParameterDialog::handleJogButton(int axisIndex, bool positive, bool pr
             if (ret == 0) {
                 statusLabel->setText(pressed ? "状态: 运行中..." : "状态: 就绪");
             } else {
-                statusLabel->setText(QString("%1失败，错误码: %2")
-                                         .arg(pressed ? "启动" : "停止")
-                                         .arg(ret));
+                statusLabel->setText(QString("%1被拒绝，错误码: %2").arg(pressed ? "启动" : "停止").arg(ret));
             }
         }, Qt::QueuedConnection);
     });
