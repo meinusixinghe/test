@@ -9,6 +9,8 @@
 #include <QMetaObject>
 #include <QMessageBox>
 #include <cmath>
+#include <QPointer>
+#include <QDebug>
 
 TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>& paths, const UserCoordSystem& ucs, QWidget *parent)
     : QDialog(parent), m_devId(devId), m_paths(paths), m_ucs(ucs)
@@ -47,18 +49,22 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
     coordLayout->addStretch();
     tableLayout->addLayout(coordLayout);
 
-    if (m_devId != 0) {
-        std::vector<std::string> toolList, userList;
-        std::string curTool, curWobj;
-        RobotAPI::GetToolNameList(toolList, m_devId);
-        RobotAPI::GetUserNameList(userList, m_devId);
-        RobotAPI::GetCurrentToolName(curTool, m_devId);
-        RobotAPI::GetCurrentUframeName(curWobj, m_devId);
+    if (m_devId != 0 && RobotAPI::IsConnected(m_devId)) {
+        try {
+            std::vector<std::string> toolList, userList;
+            std::string curTool, curWobj;
+            RobotAPI::GetToolNameList(toolList, m_devId);
+            RobotAPI::GetUserNameList(userList, m_devId);
+            RobotAPI::GetCurrentToolName(curTool, m_devId);
+            RobotAPI::GetCurrentUframeName(curWobj, m_devId);
 
-        for (const auto& t : toolList) m_robotToolCombo->addItem(QString::fromStdString(t));
-        for (const auto& u : userList) m_robotUserCombo->addItem(QString::fromStdString(u));
-        m_robotToolCombo->setCurrentText(QString::fromStdString(curTool));
-        m_robotUserCombo->setCurrentText(QString::fromStdString(curWobj));
+            for (const auto& t : toolList) m_robotToolCombo->addItem(QString::fromStdString(t));
+            for (const auto& u : userList) m_robotUserCombo->addItem(QString::fromStdString(u));
+            m_robotToolCombo->setCurrentText(QString::fromStdString(curTool));
+            m_robotUserCombo->setCurrentText(QString::fromStdString(curWobj));
+        } catch (...) {
+            qDebug() << "获取 SDK 坐标系列表时发生内部异常，已安全拦截！";
+        }
     }
 
     m_table = new QTableWidget(0, 13, this);
@@ -121,7 +127,10 @@ void TaskProgramDialog::generateProgram()
     bool useUcs = (m_coordCombo->currentData().toInt() == 1);
 
     RobotAPI::RobotPos currentPose;
-    RobotAPI::GetBaseCoordinatePos(currentPose, m_devId);
+    memset(&currentPose, 0, sizeof(RobotAPI::RobotPos));
+    if (m_devId != 0 && RobotAPI::IsConnected(m_devId)) {
+        RobotAPI::GetBaseCoordinatePos(currentPose, m_devId);
+    }
 
     QPointF lastEndPos(-99999.0, -99999.0);
 
@@ -289,17 +298,23 @@ void TaskProgramDialog::onStartClicked() {
     m_statusLabel->setText("正在下发...");
     std::string selTool = m_robotToolCombo->currentText().toStdString();
     std::string selWobj = m_robotUserCombo->currentText().toStdString();
-    QThread* worker = QThread::create([this, mps, devId = m_devId, selTool, selWobj]() {
+
+    QPointer<TaskProgramDialog> safeThis(this);
+    QThread* worker = QThread::create([safeThis, mps, devId = m_devId, selTool, selWobj]() {
         if (!selTool.empty()) RobotAPI::SetCurrentToolByName(selTool, devId);
         if (!selWobj.empty()) RobotAPI::SetCurrentUframeByName(selWobj, devId);
 
         RobotAPI::MultiMove2Reset(devId);
         int ret = RobotAPI::MultiMove2Start(mps, devId);
-        QMetaObject::invokeMethod(this, [this, ret]() {
-            m_startBtn->setEnabled(true);
-            if (ret == 0) m_statusLabel->setText("执行中 (Running)...");
-            else m_statusLabel->setText(QString("启动失败！错误码: %1").arg(ret));
-        }, Qt::QueuedConnection);
+
+        if (safeThis) {
+            QMetaObject::invokeMethod(safeThis.data(), [safeThis, ret]() {
+                if (!safeThis) return;
+                safeThis->m_startBtn->setEnabled(true);
+                if (ret == 0) safeThis->m_statusLabel->setText("执行中 (Running)...");
+                else safeThis->m_statusLabel->setText(QString("启动失败！错误码: %1").arg(ret));
+            }, Qt::QueuedConnection);
+        }
     });
     connect(worker, &QThread::finished, worker, &QObject::deleteLater);
     worker->start();

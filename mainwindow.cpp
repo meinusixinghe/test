@@ -2013,7 +2013,7 @@ void MainWindow::toggleRobotPower()
     } else {
         showAndSaveLog(QString("正在尝试关闭机器人(Id: %1)伺服...").arg(m_currentDevId));
 
-        int ret = RobotAPI::PowerOff();
+        int ret = RobotAPI::PowerOff(m_currentDevId);
 
         if (ret == 0) {
             m_isRobotPoweredOn = false;

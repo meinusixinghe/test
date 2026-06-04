@@ -447,7 +447,6 @@ void MotionTestDialog::onExecuteMultiMove2Clicked() {
 
     for (int r = 0; r < rowCount; ++r) {
         RobotAPI::MultiMoveInfo2 mp;
-        memset(&mp, 0, sizeof(RobotAPI::MultiMoveInfo2)); // 内存清零，防止无效标志位导致机器人死机
 
         QComboBox* moveCombo = qobject_cast<QComboBox*>(m_multi2Table->cellWidget(r, 0));
         mp.moveType = moveCombo ? moveCombo->currentText().left(1).toInt() : 2;
