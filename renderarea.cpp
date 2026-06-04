@@ -222,27 +222,6 @@ void RenderArea::paintEvent(QPaintEvent *event)
         blinkPen.setWidth(m_lineWidth + 2);
         blinkPen.setCosmetic(true);
         painter.setPen(blinkPen);
-        if (m_ucsSelectMode == 2 || (m_transformState == TS_SelectShapeFeature && m_alignTargetType == PosBlockType::Line)) {
-            if (m_transformState == TS_SelectShapeFeature && m_alignTargetType == PosBlockType::Line) {
-                QPointF p1 = m_hoveredLine.p1();
-                QPointF p2 = m_hoveredLine.p2();
-                double len = std::hypot(p2.x() - p1.x(), p2.y() - p1.y());
-                if (len > 1e-6) {
-                    double nx = (p2.x() - p1.x()) / len;
-                    double ny = (p2.y() - p1.y()) / len;
-                    QPointF extP1 = p1 - QPointF(nx, ny) * 5000.0;
-                    QPointF extP2 = p2 + QPointF(nx, ny) * 5000.0;
-                    painter.drawLine(extP1, extP2);
-                }
-            } else {
-                painter.drawLine(m_hoveredLine);
-            }
-        } else {
-            double safeScale = (m_scaleFactor > 0.001) ? m_scaleFactor : 1.0;
-            double r = 10.0 / safeScale;
-            painter.setBrush(Qt::NoBrush);
-            painter.drawEllipse(m_hoveredPoint, r, r);
-        }
         painter.restore();
     }
 
@@ -250,7 +229,6 @@ void RenderArea::paintEvent(QPaintEvent *event)
         painter.save();
         QTransform transform = painter.transform();
         painter.setTransform(QTransform());
-        // 1. 临时特征提取过程中的显示
         if (!m_ucs.valid) {
             if (m_ucs.originValid) {
                 QPoint screenOrigin = transform.map(m_ucs.origin).toPoint();
@@ -798,6 +776,21 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event) {
         }
 
         m_previewTransform.reset();
+
+        QPointF targetWorldPos = dxfPos;
+        if (m_isSnappedToBlock) {
+            const auto& block = m_posBlocks[m_snappedBlockIndex];
+            if (block.type == PosBlockType::Line) {
+                QTransform blockT;
+                blockT.translate(block.x, block.y);
+                blockT.rotate(block.angle);
+                QPointF localPos = blockT.inverted().map(dxfPos);
+                double snapLx = (localPos.x() > 0) ? (block.width / 2.0) : (-block.width / 2.0);
+                targetWorldPos = blockT.map(QPointF(snapLx, localPos.y()));
+            } else {
+                targetWorldPos = QPointF(block.x, block.y);
+            }
+        }
 
         if (m_alignConstraints.size() == 1) {
             auto c1 = m_alignConstraints[0];
