@@ -2512,7 +2512,6 @@ UserCoordDialog::UserCoordDialog(RenderArea* renderArea, QWidget* parent)
         m_renderArea->setUCS(ucs);
 
         QMessageBox::information(this, "坐标系就绪", "物理坐标系 (UCS) 构建成功！\nZ 轴已根据右手螺旋定则自动生成。");
-        updateUCSDisplay();
         accept();
     });
 
