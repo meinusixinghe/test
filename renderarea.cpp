@@ -415,6 +415,56 @@ void RenderArea::paintEvent(QPaintEvent *event)
         painter.drawLine(p1, p2);
         painter.restore();
     }
+
+    if (m_ucs.valid) {
+        painter.save();
+        // 确保使用无任何缩放/平移的纯净屏幕像素坐标系
+        painter.setTransform(QTransform());
+
+        // 构造要显示的信息文本
+        QString ucsText = QString("UCS 状态: 激活\n原点坐标: ( %1 , %2 )\nX轴向量: ( %3 , %4 )\nY轴向量: ( %5 , %6 )")
+                              .arg(m_ucs.origin.x(), 0, 'f', 2).arg(m_ucs.origin.y(), 0, 'f', 2)
+                              .arg(m_ucs.xAxis.x(), 0, 'f', 2).arg(m_ucs.xAxis.y(), 0, 'f', 2)
+                              .arg(m_ucs.yAxis.x(), 0, 'f', 2).arg(m_ucs.yAxis.y(), 0, 'f', 2);
+
+        // 设置字体
+        QFont hudFont = painter.font();
+        hudFont.setPointSize(10);
+        hudFont.setBold(true);
+        hudFont.setFamily("Consolas"); // 使用等宽字体显得更工业风
+        painter.setFont(hudFont);
+
+        // 计算文字所占的宽高
+        QFontMetrics fm(hudFont);
+        int textWidth = 0;
+        int textHeight = 0;
+        QStringList lines = ucsText.split('\n');
+        for (const QString& line : lines) {
+            textWidth = std::max(textWidth, fm.horizontalAdvance(line));
+            textHeight += fm.height() + 2;
+        }
+
+        // 定义面板的边距和右下角位置
+        int padding = 12;
+        int rectW = textWidth + padding * 2;
+        int rectH = textHeight + padding * 2;
+        int x = width() - rectW - 20;  // 距离右边缘 20 像素
+        int y = height() - rectH - 20; // 距离下边缘 20 像素
+
+        QRect bgRect(x, y, rectW, rectH);
+
+        // 画一个半透明的黑色工业风背景板
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(30, 30, 30, 180)); // 180 意味着 70% 的不透明度
+        painter.drawRoundedRect(bgRect, 6, 6);
+
+        // 画出白色的文字
+        painter.setPen(Qt::white);
+        QRect textRect(x + padding, y + padding, textWidth, textHeight);
+        painter.drawText(textRect, Qt::AlignLeft | Qt::AlignTop, ucsText);
+
+        painter.restore();
+    }
 }
 
 // ----------------------------------------------------
@@ -666,12 +716,7 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event) {
                 }
             } else if (m_ucsSelectMode == 1) { // 选点
                 if (contour.type == "圆" || contour.type.contains("弧") || contour.type.contains("拟合") || contour.type.contains("样条")) {
-                    double cMinX = contour.points[0].x(), cMaxX = cMinX, cMinY = contour.points[0].y(), cMaxY = cMinY;
-                    for (const QPointF& pt : contour.points) {
-                        if (pt.x() < cMinX) cMinX = pt.x(); if (pt.x() > cMaxX) cMaxX = pt.x();
-                        if (pt.y() < cMinY) cMinY = pt.y(); if (pt.y() > cMaxY) cMaxY = pt.y();
-                    }
-                    QPointF center((cMinX + cMaxX)/2.0, (cMinY + cMaxY)/2.0);
+                    QPointF center = getShapeCenter(contour);
                     double dist = std::hypot(center.x() - dxfPos.x(), center.y() - dxfPos.y());
                     if (dist < minDist) {
                         minDist = dist; m_hasHoveredFeature = true; m_hoveredPoint = center;
@@ -731,12 +776,7 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event) {
             } else if (m_alignTargetType == PosBlockType::Point || m_alignTargetType == PosBlockType::Arc || m_alignTargetType == PosBlockType::Circle) {
                 // 点对齐/圆对齐：智能抛弃圆弧上的碎点
                 if (contour.type == "圆" || contour.type.contains("弧") || contour.type.contains("拟合") || contour.type.contains("样条")) {
-                    double cMinX = contour.points[0].x(), cMaxX = cMinX, cMinY = contour.points[0].y(), cMaxY = cMinY;
-                    for (const QPointF& pt : contour.points) {
-                        if (pt.x() < cMinX) cMinX = pt.x(); if (pt.x() > cMaxX) cMaxX = pt.x();
-                        if (pt.y() < cMinY) cMinY = pt.y(); if (pt.y() > cMaxY) cMaxY = pt.y();
-                    }
-                    QPointF center((cMinX + cMaxX)/2.0, (cMinY + cMaxY)/2.0);
+                    QPointF center = getShapeCenter(contour);
                     double dist = std::hypot(center.x() - dxfPos.x(), center.y() - dxfPos.y());
                     if (dist < minDist) {
                         minDist = dist; m_hasHoveredFeature = true; m_hoveredPoint = center;
@@ -1287,21 +1327,9 @@ void RenderArea::findSnapPoint(const QPoint &pos) {
             if (pt.y() > maxY) maxY = pt.y();
         }
 
-        if (contour.type == "圆") {
-            QPointF center((cMinX + cMaxX)/2.0, (cMinY + cMaxY)/2.0);
-            double radius = (cMaxX - cMinX)/2.0;
-            candidates << center;                                      // 圆心
-            candidates << QPointF(center.x(), center.y() + radius);    // 上象限
-            candidates << QPointF(center.x(), center.y() - radius);    // 下象限
-            candidates << QPointF(center.x() + radius, center.y());    // 右象限
-            candidates << QPointF(center.x() - radius, center.y());    // 左象限
-        }
-        else if (contour.type.contains("弧") || contour.type.contains("样条") || contour.type.contains("拟合")) {
-            candidates << contour.points.first();
-            candidates << contour.points.last();
-            candidates << QPointF((cMinX + cMaxX)/2.0, (cMinY + cMaxY)/2.0); // 几何中心
-        }
-        else {
+        if (contour.type == "圆" || contour.type.contains("弧") || contour.type.contains("拟合") || contour.type.contains("样条")) {
+            candidates << getShapeCenter(contour);
+        } else {
             for (const QPointF& pt : contour.points) {
                 candidates << pt;
             }
@@ -1410,6 +1438,11 @@ void RenderArea::contextMenuEvent(QContextMenuEvent *event) {
     QAction *actSetWidth = menu.addAction("设置线宽");
     QAction *actReorder = menu.addAction("重新按空间排序");
 
+    QAction *actMoveUCS = nullptr;
+    if (m_ucs.valid) {
+        actMoveUCS = menu.addAction(QIcon(":/img/images/shift.png"), "移动用户坐标系");
+    }
+
     // 在鼠标点击的位置弹出菜单
     QAction *res = menu.exec(event->globalPos());
 
@@ -1423,6 +1456,17 @@ void RenderArea::contextMenuEvent(QContextMenuEvent *event) {
     }
     else if (res == actReorder) {
         emit reorderPathsRequested();
+    }
+    else if (actMoveUCS && res == actMoveUCS) {
+        bool okX, okY;
+        double newX = QInputDialog::getDouble(this, "移动坐标系", "请输入新原点 X 坐标:", m_ucs.origin.x(), -10000, 10000, 2, &okX);
+        if (okX) {
+            double newY = QInputDialog::getDouble(this, "移动坐标系", "请输入新原点 Y 坐标:", m_ucs.origin.y(), -10000, 10000, 2, &okY);
+            if (okY) {
+                m_ucs.origin = QPointF(newX, newY);
+                update();
+            }
+        }
     }
 }
 
@@ -1517,3 +1561,36 @@ void RenderArea::applyAlignmentConstraint(const PositioningBlock& block)
     }
 }
 
+// =========================================================================
+// 核心：基于解析几何，利用曲线上三点推导真实的圆心位置 (解决圆弧圆心错误问题)
+// =========================================================================
+QPointF RenderArea::getShapeCenter(const Contour& contour) {
+    if (contour.points.isEmpty()) return QPointF();
+
+    // 如果是圆或圆弧，且拥有至少3个点，利用三点共圆公式求解真实的物理圆心
+    if (contour.points.size() >= 3 && (contour.type == "圆" || contour.type.contains("弧"))) {
+        int n = contour.points.size();
+        QPointF p1 = contour.points[0];
+        QPointF p2 = contour.points[n / 3];      // 取1/3处的点
+        QPointF p3 = contour.points[2 * n / 3];  // 取2/3处的点
+
+        double D = 2 * (p1.x()*(p2.y() - p3.y()) + p2.x()*(p3.y() - p1.y()) + p3.x()*(p1.y() - p2.y()));
+        if (std::abs(D) > 1e-6) {
+            double xc = ((p1.x()*p1.x() + p1.y()*p1.y())*(p2.y() - p3.y()) +
+                         (p2.x()*p2.x() + p2.y()*p2.y())*(p3.y() - p1.y()) +
+                         (p3.x()*p3.x() + p3.y()*p3.y())*(p1.y() - p2.y())) / D;
+            double yc = ((p1.x()*p1.x() + p1.y()*p1.y())*(p3.x() - p2.x()) +
+                         (p2.x()*p2.x() + p2.y()*p2.y())*(p1.x() - p3.x()) +
+                         (p3.x()*p3.x() + p3.y()*p3.y())*(p2.x() - p1.x())) / D;
+            return QPointF(xc, yc);
+        }
+    }
+
+    // 如果不是圆，或者三点共线(退化)，则采用矩形包围盒的中心作为保底方案
+    double cMinX = contour.points[0].x(), cMaxX = cMinX, cMinY = contour.points[0].y(), cMaxY = cMinY;
+    for (const QPointF& pt : contour.points) {
+        if (pt.x() < cMinX) cMinX = pt.x(); if (pt.x() > cMaxX) cMaxX = pt.x();
+        if (pt.y() < cMinY) cMinY = pt.y(); if (pt.y() > cMaxY) cMaxY = pt.y();
+    }
+    return QPointF((cMinX + cMaxX)/2.0, (cMinY + cMaxY)/2.0);
+}

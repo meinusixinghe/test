@@ -146,6 +146,8 @@ private:
 
     int m_ucsSelectMode = 0;
     UserCoordSystem m_ucs;
+
+    QPointF getShapeCenter(const Contour& contour);
 };
 
 #endif // RENDERAREA_H
