@@ -638,6 +638,10 @@ void MainWindow::setupUi()
     // 焊接工艺
     connect(m_manageProcessAction, &QAction::triggered, this, &MainWindow::onManageWeldingProcess);
     connect(m_ucsAction, &QAction::triggered, this, [this](){
+        if (m_displayPaths.isEmpty()) {
+            QMessageBox::warning(this, "禁止操作", "请先导入 DXF 图纸后再尝试建立用户坐标系！");
+            return;
+        }
         UserCoordDialog* dlg = new UserCoordDialog(renderArea, this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         dlg->setWindowFlags(Qt::Tool);
@@ -2495,6 +2499,18 @@ UserCoordDialog::UserCoordDialog(RenderArea* renderArea, QWidget* parent)
             return;
         }
 
+        UserCoordSystem ucs;
+        ucs.valid = true;
+        ucs.originValid = true;
+        ucs.origin = m_origin;
+        ucs.xValid = true;
+        ucs.xLine = m_xLine;
+        ucs.yValid = true;
+        ucs.yLine = m_yLine;
+        ucs.xAxis = m_xAxis;
+        ucs.yAxis = m_yAxis;
+        m_renderArea->setUCS(ucs);
+
         QMessageBox::information(this, "坐标系就绪", "物理坐标系 (UCS) 构建成功！\nZ 轴已根据右手螺旋定则自动生成。");
         updateUCSDisplay();
         accept();
@@ -2514,6 +2530,7 @@ void UserCoordDialog::onUCSPointSelected(QPointF pt) {
         m_lblOrigin->setText(QString("原点坐标: (%1, %2)").arg(pt.x(), 0, 'f', 2).arg(pt.y(), 0, 'f', 2));
         m_step = 0; m_renderArea->setUCSSelectionMode(0);
         m_lblStatus->setText("状态：原点提取成功。");
+        updateUCSDisplay();
     } else if (m_step == 2) {
         m_tempPt1 = pt; m_step = 3;
         m_lblStatus->setText("状态：已选起点，请点击 X 轴的【终点】...");
@@ -2522,11 +2539,12 @@ void UserCoordDialog::onUCSPointSelected(QPointF pt) {
         if (vec.length() < 1e-5) {
             QMessageBox::warning(this, "无效向量", "起点与终点重合！请重新点击。"); return;
         }
-        m_xLine = QLineF(m_tempPt1, pt);
+        m_xLine = QLineF(m_tempPt1, pt); // 记录真实位置
         m_xAxis = vec.normalized();
         m_lblX->setText(QString("X 轴向量: (%1, %2)").arg(m_xAxis.x(), 0, 'f', 2).arg(m_xAxis.y(), 0, 'f', 2));
         m_step = 0; m_renderArea->setUCSSelectionMode(0);
         m_lblStatus->setText("状态：X 轴向量提取成功。");
+        updateUCSDisplay();
     } else if (m_step == 5) {
         m_tempPt1 = pt; m_step = 6;
         m_lblStatus->setText("状态：已选起点，请点击 Y 轴的【终点】...");
@@ -2535,43 +2553,47 @@ void UserCoordDialog::onUCSPointSelected(QPointF pt) {
         if (vec.length() < 1e-5) {
             QMessageBox::warning(this, "无效向量", "起点与终点重合！请重新点击。"); return;
         }
-        m_yLine = QLineF(m_tempPt1, pt);
+        m_yLine = QLineF(m_tempPt1, pt); // 记录真实位置
         m_yAxis = vec.normalized();
         m_lblY->setText(QString("Y 轴向量: (%1, %2)").arg(m_yAxis.x(), 0, 'f', 2).arg(m_yAxis.y(), 0, 'f', 2));
         m_step = 0; m_renderArea->setUCSSelectionMode(0);
         m_lblStatus->setText("状态：Y 轴向量提取成功。");
+        updateUCSDisplay();
     }
-
-    // 如果三个要素已经完备，提前预览
-    if (m_originValid && m_xAxis.length() > 0.1 && m_yAxis.length() > 0.1) updateUCSDisplay();
 }
 
 void UserCoordDialog::onUCSLineSelected(QLineF line) {
     if (m_step == 4) {
-        m_xLine = line;
+        m_xLine = line; // 记录真实位置
         QVector2D vec(line.p2() - line.p1());
         m_xAxis = vec.normalized();
         m_lblX->setText(QString("X 轴向量: (%1, %2)").arg(m_xAxis.x(), 0, 'f', 2).arg(m_xAxis.y(), 0, 'f', 2));
         m_step = 0; m_renderArea->setUCSSelectionMode(0);
         m_lblStatus->setText("状态：X 轴向量提取成功。");
+        updateUCSDisplay();
     } else if (m_step == 7) {
-        m_yLine = line;
+        m_yLine = line; // 记录真实位置
         QVector2D vec(line.p2() - line.p1());
         m_yAxis = vec.normalized();
         m_lblY->setText(QString("Y 轴向量: (%1, %2)").arg(m_yAxis.x(), 0, 'f', 2).arg(m_yAxis.y(), 0, 'f', 2));
         m_step = 0; m_renderArea->setUCSSelectionMode(0);
         m_lblStatus->setText("状态：Y 轴向量提取成功。");
+        updateUCSDisplay();
     }
-
-    // 如果三个要素已经完备，提前预览
-    if (m_originValid && m_xAxis.length() > 0.1 && m_yAxis.length() > 0.1) updateUCSDisplay();
 }
 
 void UserCoordDialog::updateUCSDisplay() {
     UserCoordSystem ucs;
-    ucs.valid = true;
+    ucs.originValid = m_originValid;
     ucs.origin = m_origin;
+    ucs.xValid = (m_xAxis.length() > 0.1);
+    ucs.xLine = m_xLine;
+    ucs.yValid = (m_yAxis.length() > 0.1);
+    ucs.yLine = m_yLine;
+
+    // 建立过程中只发送特征显示状态，由最终确认按钮生成 Valid 状态
     ucs.xAxis = m_xAxis;
     ucs.yAxis = m_yAxis;
+    ucs.valid = false;
     m_renderArea->setUCS(ucs);
 }

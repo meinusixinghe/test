@@ -59,8 +59,13 @@ struct DrawingState {
 
 // 用户坐标系(UCS) 数据结构
 struct UserCoordSystem {
-    bool valid = false;
+    bool valid = false;       // 最终坐标系是否建立完成
+    bool originValid = false; // 原点是否被提取
+    bool xValid = false;      // X轴特征是否被提取
+    bool yValid = false;      // Y轴特征是否被提取
     QPointF origin;
+    QLineF xLine;
+    QLineF yLine;
     QVector2D xAxis;
     QVector2D yAxis;
 };

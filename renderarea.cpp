@@ -232,48 +232,99 @@ void RenderArea::paintEvent(QPaintEvent *event)
         painter.restore();
     }
 
-    if (m_ucs.valid) {
+    if (m_ucs.originValid && !m_ucs.valid) {
         painter.save();
         double safeScale = (m_scaleFactor > 0.001) ? m_scaleFactor : 1.0;
-        double axisLen = 60.0 / safeScale;
-        QPointF origin = m_ucs.origin;
-
         painter.setBrush(Qt::blue);
         painter.setPen(Qt::NoPen);
-        painter.drawEllipse(origin, 4.0/safeScale, 4.0/safeScale);
+        painter.drawEllipse(m_ucs.origin, 6.0/safeScale, 6.0/safeScale);
+        painter.restore();
+    }
+    if (m_ucs.xValid && !m_ucs.valid) {
+        painter.save();
+        double safeScale = (m_scaleFactor > 0.001) ? m_scaleFactor : 1.0;
+        QPen xPen(Qt::red, 2.0 / safeScale);
+        painter.setPen(xPen);
+        painter.drawLine(m_ucs.xLine);
+        painter.restore();
+    }
+    if (m_ucs.yValid && !m_ucs.valid) {
+        painter.save();
+        double safeScale = (m_scaleFactor > 0.001) ? m_scaleFactor : 1.0;
+        QPen yPen(Qt::green, 2.0 / safeScale);
+        painter.setPen(yPen);
+        painter.drawLine(m_ucs.yLine);
+        painter.restore();
+    }
 
-        // 画 X 轴
+    if (m_ucs.valid) {
+        painter.save();
+        // 获得当前DXF到屏幕的变换矩阵
+        QTransform transform = painter.transform();
+        // 恢复纯净的屏幕坐标系！接下来的绘制大小永远锁定屏幕像素！
+        painter.setTransform(QTransform());
+
+        QPoint screenOrigin = transform.map(m_ucs.origin).toPoint();
+        double axisLen = 60.0; // 在屏幕上永远为 60 像素的固定长度，不随缩放变大变小
+
+        // 画固定大小的原点
+        painter.setBrush(Qt::blue);
+        painter.setPen(Qt::NoPen);
+        painter.drawEllipse(screenOrigin, 6, 6);
+
+        // 画 X 轴 (红色)
         if (m_ucs.xAxis.length() > 0.1) {
-            QPointF xEnd = origin + QPointF(m_ucs.xAxis.x(), m_ucs.xAxis.y()) * axisLen;
-            QPen xPen(Qt::red, 2.0 / safeScale);
-            painter.setPen(xPen);
-            painter.drawLine(origin, xEnd);
+            // 将 DXF 世界中的单位向量方向，转换为长度为 axisLen 的屏幕物理点
+            QPointF xEndDxf = m_ucs.origin + QPointF(m_ucs.xAxis.x(), m_ucs.xAxis.y()) * (axisLen / m_scaleFactor);
+            QPoint screenXEnd = transform.map(xEndDxf).toPoint();
 
+            QPen xPen(Qt::red, 2);
+            painter.setPen(xPen);
+            painter.drawLine(screenOrigin, screenXEnd);
+
+            // 画固定大小的箭头
             painter.save();
-            painter.translate(xEnd);
-            painter.rotate(std::atan2(m_ucs.xAxis.y(), m_ucs.xAxis.x()) * 180.0 / M_PI);
+            painter.translate(screenXEnd);
+            painter.rotate(std::atan2(screenXEnd.y() - screenOrigin.y(), screenXEnd.x() - screenOrigin.x()) * 180.0 / M_PI);
             painter.setBrush(Qt::red);
-            QPolygonF arrow; arrow << QPointF(0, 0) << QPointF(-10/safeScale, 4/safeScale) << QPointF(-10/safeScale, -4/safeScale);
+            QPolygonF arrow; arrow << QPointF(0, 0) << QPointF(-12, 5) << QPointF(-12, -5);
             painter.drawPolygon(arrow);
             painter.restore();
-            painter.drawText(xEnd + QPointF(5/safeScale, 5/safeScale), "X");
+
+            // 画固定大小的粗体文字
+            QFont f = painter.font();
+            f.setPointSize(12);
+            f.setBold(true);
+            painter.setFont(f);
+            painter.setPen(Qt::red);
+            painter.drawText(screenXEnd + QPoint(5, 5), "X");
         }
 
-        // 画 Y 轴
+        // 画 Y 轴 (绿色)
         if (m_ucs.yAxis.length() > 0.1) {
-            QPointF yEnd = origin + QPointF(m_ucs.yAxis.x(), m_ucs.yAxis.y()) * axisLen;
-            QPen yPen(Qt::green, 2.0 / safeScale);
-            painter.setPen(yPen);
-            painter.drawLine(origin, yEnd);
+            QPointF yEndDxf = m_ucs.origin + QPointF(m_ucs.yAxis.x(), m_ucs.yAxis.y()) * (axisLen / m_scaleFactor);
+            QPoint screenYEnd = transform.map(yEndDxf).toPoint();
 
+            QPen yPen(Qt::green, 2);
+            painter.setPen(yPen);
+            painter.drawLine(screenOrigin, screenYEnd);
+
+            // 画固定大小的箭头
             painter.save();
-            painter.translate(yEnd);
-            painter.rotate(std::atan2(m_ucs.yAxis.y(), m_ucs.yAxis.x()) * 180.0 / M_PI);
+            painter.translate(screenYEnd);
+            painter.rotate(std::atan2(screenYEnd.y() - screenOrigin.y(), screenYEnd.x() - screenOrigin.x()) * 180.0 / M_PI);
             painter.setBrush(Qt::green);
-            QPolygonF arrow; arrow << QPointF(0, 0) << QPointF(-10/safeScale, 4/safeScale) << QPointF(-10/safeScale, -4/safeScale);
+            QPolygonF arrow; arrow << QPointF(0, 0) << QPointF(-12, 5) << QPointF(-12, -5);
             painter.drawPolygon(arrow);
             painter.restore();
-            painter.drawText(yEnd + QPointF(5/safeScale, 5/safeScale), "Y");
+
+            // 画固定大小的粗体文字
+            QFont f = painter.font();
+            f.setPointSize(12);
+            f.setBold(true);
+            painter.setFont(f);
+            painter.setPen(Qt::green);
+            painter.drawText(screenYEnd + QPoint(5, 5), "Y");
         }
         painter.restore();
     }
