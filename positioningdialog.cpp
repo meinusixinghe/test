@@ -119,12 +119,25 @@ void PreviewArea::paintEvent(QPaintEvent *event) {
         QPainterPath p = m_blocks[i].getPath();
         if (i == m_selectedBlockIdx) {
             painter.setPen(QPen(Qt::red, 2.0 / m_scaleFactor));
-            painter.setBrush(QColor(255, 0, 0, 50));
+            painter.setBrush(QColor(255, 200, 150, 220)); // 选中时浅橙色加深
         } else {
-            painter.setPen(QPen(Qt::blue, 2.0 / m_scaleFactor));
-            painter.setBrush(QColor(0, 0, 255, 20));
+            painter.setPen(QPen(QColor(255, 165, 0), 2.0 / m_scaleFactor));
+            painter.setBrush(QColor(255, 200, 150, 150)); // 浅橙色
         }
         painter.drawPath(p);
+
+        painter.save();
+        painter.translate(m_blocks[i].x, m_blocks[i].y);
+        painter.scale(1.0, -1.0);
+        QFont f = painter.font();
+        f.setPointSizeF(10.0);
+        painter.setFont(f);
+        painter.setPen(Qt::black);
+        QFontMetricsF fm(f);
+        double tw = fm.horizontalAdvance(m_blocks[i].name);
+        double th = fm.height();
+        painter.drawText(QRectF(-tw/2.0, -th/2.0, tw, th), Qt::AlignCenter, m_blocks[i].name);
+        painter.restore();
 
         // 👇 绘制特征圆点
         auto pts = getReferencePoints(m_blocks[i]);
@@ -491,6 +504,19 @@ void PositioningDialog::onAddClicked() {
         b.x = m_cirX->value(); b.y = m_cirY->value(); b.radius = m_cirR->value();
         break;
     }
+
+    QString typeName;
+    if (m_currentType == PosBlockType::Line) typeName = "直线定位块";
+    else if (m_currentType == PosBlockType::Point) typeName = "点定位块";
+    else if (m_currentType == PosBlockType::Arc) typeName = "圆弧定位块";
+    else if (m_currentType == PosBlockType::Circle) typeName = "圆定位块";
+
+    int count = 1;
+    for (const auto& block : m_previewArea->getBlocks()) {
+        if (block.type == m_currentType) count++;
+    }
+    b.name = QString("%1%2").arg(typeName).arg(count);
+
     m_previewArea->addBlock(b);
 }
 

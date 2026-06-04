@@ -16,6 +16,7 @@
 #include <QStyle>
 #include <QTimer>
 #include <QMessageBox>
+#include <QListWidget>
 
 using std::min;
 using std::max;
@@ -177,12 +178,32 @@ void RenderArea::paintEvent(QPaintEvent *event)
 
     painter.save();
     double safeScale = (m_scaleFactor > 0.001) ? m_scaleFactor : 1.0;
-    for (const auto& block : std::as_const(m_posBlocks)) {
+    for (int i = 0; i < m_posBlocks.size(); ++i) {
+        const auto& block = m_posBlocks[i];
         QPainterPath path = block.getPath();
-        painter.setPen(QPen(QColor(255, 105, 180), 2.0 / safeScale));
-        painter.setBrush(QColor(255, 182, 193, 150));
+
+        if (i == m_highlightedBlockIndex) {
+            painter.setPen(QPen(Qt::red, 4.0 / safeScale));
+            painter.setBrush(QColor(255, 200, 150, 255));
+        } else {
+            painter.setPen(QPen(QColor(255, 165, 0), 2.0 / safeScale));
+            painter.setBrush(QColor(255, 200, 150, 150));
+        }
 
         painter.drawPath(path);
+
+        painter.save();
+        painter.translate(block.x, block.y);
+        painter.scale(1.0, -1.0);
+        QFont f = painter.font();
+        f.setPointSizeF(10.0);
+        painter.setFont(f);
+        painter.setPen(Qt::black);
+        QFontMetricsF fm(f);
+        double tw = fm.horizontalAdvance(block.name);
+        double th = fm.height();
+        painter.drawText(QRectF(-tw/2.0, -th/2.0, tw, th), Qt::AlignCenter, block.name);
+        painter.restore();
     }
     painter.restore();
     painter.restore();
@@ -422,17 +443,14 @@ void RenderArea::paintEvent(QPaintEvent *event)
         painter.setTransform(QTransform());
 
         // 构造要显示的信息文本
-        QString ucsText = QString("UCS 状态: 激活\n原点坐标: ( %1 , %2 )\nX轴向量: ( %3 , %4 )\nY轴向量: ( %5 , %6 )")
-                              .arg(m_ucs.origin.x(), 0, 'f', 2).arg(m_ucs.origin.y(), 0, 'f', 2)
-                              .arg(m_ucs.xAxis.x(), 0, 'f', 2).arg(m_ucs.xAxis.y(), 0, 'f', 2)
-                              .arg(m_ucs.yAxis.x(), 0, 'f', 2).arg(m_ucs.yAxis.y(), 0, 'f', 2);
+        QString ucsText = QString("UCS 状态: 激活\n原点坐标: ( %1 , %2 )")
+                              .arg(m_ucs.origin.x(), 0, 'f', 2).arg(m_ucs.origin.y(), 0, 'f', 2);
 
         // 设置字体
         QFont hudFont = painter.font();
         hudFont.setPointSize(10);
         hudFont.setBold(true);
-        hudFont.setFamily("Consolas"); // 使用等宽字体显得更工业风
-        painter.setFont(hudFont);
+        hudFont.setFamily("Consolas");
 
         // 计算文字所占的宽高
         QFontMetrics fm(hudFont);
@@ -463,6 +481,30 @@ void RenderArea::paintEvent(QPaintEvent *event)
         QRect textRect(x + padding, y + padding, textWidth, textHeight);
         painter.drawText(textRect, Qt::AlignLeft | Qt::AlignTop, ucsText);
 
+        painter.restore();
+    }
+
+    if (m_highlightedConstraintIndex >= 0 && m_highlightedConstraintIndex < m_alignConstraints.size()) {
+        auto& c = m_alignConstraints[m_highlightedConstraintIndex];
+        painter.save();
+        QTransform t;
+        t.translate(width() / 2.0, height() / 2.0);
+        t.scale(m_scaleFactor, -m_scaleFactor);
+        t.translate(m_panOffsetDXF.x(), m_panOffsetDXF.y());
+
+        painter.setTransform(QTransform()); // 回归屏幕坐标系画定宽粗线
+        QPen hlPen(Qt::magenta, 4);
+        painter.setPen(hlPen);
+        painter.setBrush(Qt::NoBrush);
+
+        if (c.type == PosBlockType::Line) {
+            QPoint p1 = t.map(c.shapeLine.p1()).toPoint();
+            QPoint p2 = t.map(c.shapeLine.p2()).toPoint();
+            painter.drawLine(p1, p2);
+        } else {
+            QPoint p = t.map(c.shapePt).toPoint();
+            painter.drawEllipse(p, 10, 10);
+        }
         painter.restore();
     }
 }
@@ -497,6 +539,18 @@ void RenderArea::mousePressEvent(QMouseEvent *event) {
         m_isMiddlePanning = true;
         setCursor(Qt::ClosedHandCursor);
         update();
+        event->accept();
+        return;
+    }
+
+    if (m_ucsSelectMode != 0 && event->button() == Qt::LeftButton) {
+        if (m_hasHoveredFeature) {
+            if (m_ucsSelectMode == 1) {
+                emit ucsPointSelected(m_hoveredPoint);
+            } else if (m_ucsSelectMode == 2) {
+                emit ucsLineSelected(m_hoveredLine);
+            }
+        }
         event->accept();
         return;
     }
@@ -659,18 +713,6 @@ void RenderArea::mousePressEvent(QMouseEvent *event) {
         }
         event->accept();
     }
-
-    if (m_ucsSelectMode != 0 && event->button() == Qt::LeftButton) {
-        if (m_hasHoveredFeature) {
-            if (m_ucsSelectMode == 1) {
-                emit ucsPointSelected(m_hoveredPoint);
-            } else if (m_ucsSelectMode == 2) {
-                emit ucsLineSelected(m_hoveredLine);
-            }
-        }
-        event->accept();
-        return;
-    }
 }
 
 // ----------------------------------------------------
@@ -762,10 +804,9 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event) {
                     double dy = p2.y() - p1.y();
                     double len = std::hypot(dx, dy);
                     if (len < 1e-6) continue;
-                    // 计算鼠标点到无限长直线的垂直距离
-                    double dist = std::abs((dxfPos.x() - p1.x()) * dy - (dxfPos.y() - p1.y()) * dx) / len;
-                    if (dist < minDist) {
-                        minDist = dist;
+                    double distToSeg = distancePointToSegment(dxfPos, p1, p2);
+                    if (distToSeg < minDist) {
+                        minDist = distToSeg;
                         m_hasHoveredFeature = true;
                         m_hoveredLine = QLineF(p1, p2);
                         // 将抓取点严格设定为鼠标在无限长直线上的垂直投影点，实现平滑抓取！
@@ -1434,6 +1475,11 @@ void RenderArea::setPositioningBlocks(const QList<PositioningBlock> &blocks) {
 }
 
 void RenderArea::contextMenuEvent(QContextMenuEvent *event) {
+    if (m_isMoveMode || m_isRotateMode || m_isMirrorMode || m_isEraserMode) {
+        event->ignore();
+        return;
+    }
+
     QMenu menu(this);
     QAction *actSetWidth = menu.addAction("设置线宽");
     QAction *actReorder = menu.addAction("重新按空间排序");
@@ -1441,6 +1487,11 @@ void RenderArea::contextMenuEvent(QContextMenuEvent *event) {
     QAction *actMoveUCS = nullptr;
     if (m_ucs.valid) {
         actMoveUCS = menu.addAction(QIcon(":/img/images/shift.png"), "移动用户坐标系");
+    }
+
+    QAction *actShowConstraints = nullptr;
+    if (!m_alignConstraints.isEmpty()) {
+        actShowConstraints = menu.addAction("显示参考约束条件");
     }
 
     // 在鼠标点击的位置弹出菜单
@@ -1467,6 +1518,48 @@ void RenderArea::contextMenuEvent(QContextMenuEvent *event) {
                 update();
             }
         }
+    }else if (actShowConstraints && res == actShowConstraints) {
+        QDialog dlg(this);
+        dlg.setWindowTitle("查看当前的装配约束");
+        dlg.setMinimumSize(350, 250);
+        QVBoxLayout* layout = new QVBoxLayout(&dlg);
+        QLabel* info = new QLabel("点击列表中的约束条件，画布中将高亮显示：");
+        layout->addWidget(info);
+
+        QListWidget* list = new QListWidget(&dlg);
+        for (int i = 0; i < m_alignConstraints.size(); ++i) {
+            auto& c = m_alignConstraints[i];
+            QString text = QString("约束 %1: %2").arg(i + 1).arg(c.block.name.isEmpty() ? "定位块" : c.block.name);
+            list->addItem(text);
+        }
+        layout->addWidget(list);
+
+        connect(list, &QListWidget::currentRowChanged, this, [this](int row) {
+            if (row >= 0 && row < m_alignConstraints.size()) {
+                m_highlightedConstraintIndex = row;
+
+                // 查找对应的定位块索引进行高亮
+                m_highlightedBlockIndex = -1;
+                for (int i = 0; i < m_posBlocks.size(); i++) {
+                    if (std::abs(m_posBlocks[i].x - m_alignConstraints[row].block.x) < 1e-4 &&
+                        std::abs(m_posBlocks[i].y - m_alignConstraints[row].block.y) < 1e-4 &&
+                        m_posBlocks[i].type == m_alignConstraints[row].block.type) {
+                        m_highlightedBlockIndex = i;
+                        break;
+                    }
+                }
+                update(); // 触发绘图区高亮
+            }
+        });
+
+        // 窗口关闭时恢复颜色
+        connect(&dlg, &QDialog::finished, this, [this]() {
+            m_highlightedConstraintIndex = -1;
+            m_highlightedBlockIndex = -1;
+            update();
+        });
+
+        dlg.exec();
     }
 }
 

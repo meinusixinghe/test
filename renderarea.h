@@ -146,6 +146,8 @@ private:
 
     int m_ucsSelectMode = 0;
     UserCoordSystem m_ucs;
+    int m_highlightedConstraintIndex = -1;
+    int m_highlightedBlockIndex = -1;
 
     QPointF getShapeCenter(const Contour& contour);
 };

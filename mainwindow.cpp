@@ -642,6 +642,13 @@ void MainWindow::setupUi()
             QMessageBox::warning(this, "禁止操作", "请先导入 DXF 图纸后再尝试建立用户坐标系！");
             return;
         }
+
+        m_floatingToolWidget->btnRotate->setChecked(false);
+        m_floatingToolWidget->btnMirror->setChecked(false);
+        m_floatingToolWidget->btnMove->setChecked(false);
+        m_floatingToolWidget->btnEraser->setChecked(false);
+        m_floatingToolWidget->hide();
+
         UserCoordDialog* dlg = new UserCoordDialog(renderArea, this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         dlg->setWindowFlags(Qt::Tool);
@@ -1232,7 +1239,13 @@ void MainWindow::onConnectTriggered()
             m_connectAction->setEnabled(false);
             showAndSaveLog(QString("正在连接机器人 %1 ...").arg(m_lastIp));
 
-            QThread* worker = QThread::create([this, ip = m_lastIp]() {
+            unsigned int oldDevId = m_currentDevId;
+            m_currentDevId = 0;
+
+            QThread* worker = QThread::create([this, ip = m_lastIp, oldDevId]() mutable {
+                if (oldDevId != 0) {
+                    RobotAPI::DisconnectRobot(oldDevId);
+                }
                 RobotConnectResult result;
                 QDir::setCurrent(QCoreApplication::applicationDirPath());
                 result.ret = RobotAPI::ConnectRobot(ip.toStdString(), result.devId, true);

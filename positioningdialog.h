@@ -20,6 +20,7 @@ struct PositioningBlock {
     double length = 0, width = 0;
     double radius = 0;
     double angle = 0;
+    QString name;
 
     QPainterPath getPath() const;
 };
