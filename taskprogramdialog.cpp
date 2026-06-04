@@ -34,8 +34,32 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
         m_coordCombo->setItemData(1, QVariant(0), Qt::UserRole - 1); // 禁用该项
     }
     coordLayout->addWidget(m_coordCombo);
+
+    coordLayout->addSpacing(20);
+    coordLayout->addWidget(new QLabel("机器人工具(Tool):", this));
+    m_robotToolCombo = new QComboBox(this);
+    coordLayout->addWidget(m_robotToolCombo);
+    coordLayout->addSpacing(10);
+    coordLayout->addWidget(new QLabel("机器人用户(Wobj):", this));
+    m_robotUserCombo = new QComboBox(this);
+    coordLayout->addWidget(m_robotUserCombo);
+
     coordLayout->addStretch();
     tableLayout->addLayout(coordLayout);
+
+    if (m_devId != 0) {
+        std::vector<std::string> toolList, userList;
+        std::string curTool, curWobj;
+        RobotAPI::GetToolNameList(toolList, m_devId);
+        RobotAPI::GetUserNameList(userList, m_devId);
+        RobotAPI::GetCurrentToolName(curTool, m_devId);
+        RobotAPI::GetCurrentUframeName(curWobj, m_devId);
+
+        for (const auto& t : toolList) m_robotToolCombo->addItem(QString::fromStdString(t));
+        for (const auto& u : userList) m_robotUserCombo->addItem(QString::fromStdString(u));
+        m_robotToolCombo->setCurrentText(QString::fromStdString(curTool));
+        m_robotUserCombo->setCurrentText(QString::fromStdString(curWobj));
+    }
 
     m_table = new QTableWidget(0, 13, this);
     m_table->setHorizontalHeaderLabels({"插补模式", "坐标类型", "X", "Y", "Z", "RX", "RY", "RZ", "速度", "加速", "减速", "平滑度", "备注说明"});
@@ -263,7 +287,12 @@ void TaskProgramDialog::onStartClicked() {
 
     m_startBtn->setEnabled(false);
     m_statusLabel->setText("正在下发...");
-    QThread* worker = QThread::create([this, mps, devId = m_devId]() {
+    std::string selTool = m_robotToolCombo->currentText().toStdString();
+    std::string selWobj = m_robotUserCombo->currentText().toStdString();
+    QThread* worker = QThread::create([this, mps, devId = m_devId, selTool, selWobj]() {
+        if (!selTool.empty()) RobotAPI::SetCurrentToolByName(selTool, devId);
+        if (!selWobj.empty()) RobotAPI::SetCurrentUframeByName(selWobj, devId);
+
         RobotAPI::MultiMove2Reset(devId);
         int ret = RobotAPI::MultiMove2Start(mps, devId);
         QMetaObject::invokeMethod(this, [this, ret]() {

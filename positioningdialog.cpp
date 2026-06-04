@@ -128,31 +128,29 @@ void PreviewArea::paintEvent(QPaintEvent *event) {
 
         painter.save();
         painter.translate(m_blocks[i].x, m_blocks[i].y);
+        painter.rotate(m_blocks[i].angle);
         painter.scale(1.0, -1.0);
-
         double fontSize = 10.0;
         bool rotateVertical = false;
         if (m_blocks[i].type == PosBlockType::Line) {
-            fontSize = std::min(m_blocks[i].width, m_blocks[i].length) * 0.6;
+            fontSize = std::min(m_blocks[i].width, m_blocks[i].length) * 0.4;
             if (m_blocks[i].length > m_blocks[i].width) rotateVertical = true;
         } else if (m_blocks[i].type == PosBlockType::Circle || m_blocks[i].type == PosBlockType::Arc) {
-            fontSize = m_blocks[i].radius * 0.4;
+            fontSize = m_blocks[i].radius * 0.3;
         }
         if (fontSize < 2.0) fontSize = 2.0;
-
         QFont f = painter.font();
         f.setPointSizeF(fontSize);
         painter.setFont(f);
         painter.setPen(Qt::black);
         if (rotateVertical) painter.rotate(90.0);
-
         QFontMetricsF fm(f);
         double tw = fm.horizontalAdvance(m_blocks[i].name);
         double th = fm.height();
         painter.drawText(QRectF(-tw/2.0, -th/2.0, tw, th), Qt::AlignCenter, m_blocks[i].name);
         painter.restore();
 
-        // 👇 绘制特征圆点
+        // 绘制特征圆点
         auto pts = getReferencePoints(m_blocks[i]);
         for (int j = 0; j < pts.size(); ++j) {
             if (i == m_selectedBlockIdx && j == m_selectedPtIdx) {

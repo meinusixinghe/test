@@ -194,11 +194,26 @@ void RenderArea::paintEvent(QPaintEvent *event)
 
         painter.save();
         painter.translate(block.x, block.y);
+        painter.rotate(block.angle);
         painter.scale(1.0, -1.0);
+        double fontSize = 10.0;
+        bool rotateVertical = false;
+        if (block.type == PosBlockType::Line) {
+            fontSize = std::min(block.width, block.length) * 0.4;
+            if (block.length > block.width) {
+                rotateVertical = true;
+            }
+        } else if (block.type == PosBlockType::Circle || block.type == PosBlockType::Arc) {
+            fontSize = block.radius * 0.3;
+        }
+        if (fontSize < 2.0) fontSize = 2.0;
         QFont f = painter.font();
-        f.setPointSizeF(10.0);
+        f.setPointSizeF(fontSize);
         painter.setFont(f);
         painter.setPen(Qt::black);
+        if (rotateVertical) {
+            painter.rotate(90.0);
+        }
         QFontMetricsF fm(f);
         double tw = fm.horizontalAdvance(block.name);
         double th = fm.height();

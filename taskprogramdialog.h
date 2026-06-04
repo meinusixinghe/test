@@ -40,6 +40,8 @@ private:
     QPushButton* m_pauseBtn;
     QPushButton* m_resumeBtn;
     QPushButton* m_resetBtn;
+    QComboBox* m_robotToolCombo;
+    QComboBox* m_robotUserCombo;
 };
 
 #endif // TASKPROGRAMDIALOG_H

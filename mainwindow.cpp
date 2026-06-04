@@ -539,6 +539,16 @@ void MainWindow::setupUi()
     // 5. 绑定选项卡点击逻辑，动态切换下方工具栏的内容
     auto switchTab = [=](QAction* currentTab) {
         toolBar->clear(); // 切换时先清空下方工具栏
+        renderArea->setMoveMode(false);
+        renderArea->setRotateMode(false);
+        renderArea->setMirrorMode(false);
+        renderArea->setEraserMode(false);
+        m_floatingToolWidget->hide();
+        m_floatingToolWidget->btnMove->setChecked(false);
+        m_floatingToolWidget->btnRotate->setChecked(false);
+        m_floatingToolWidget->btnMirror->setChecked(false);
+        m_floatingToolWidget->btnEraser->setChecked(false);
+
         if (currentTab == tabFile) {
             toolBar->addAction(loadAction);
         } else if (currentTab == tabOperation) {
