@@ -48,6 +48,7 @@ public:
     void setPositioningBlocks(const QList<PositioningBlock> &blocks);
     void resetView();
     QList<PositioningBlock> getPositioningBlocks() const { return m_posBlocks; }
+    UserCoordSystem getUCS() const { return m_ucs; }
 public slots:
     void executeMove();
     void executeRotate();

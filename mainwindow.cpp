@@ -1286,6 +1286,8 @@ void MainWindow::onConnectTriggered()
                 showAndSaveLog(QString("正在断开机器人连接(Id: %1)...").arg(devId));
 
                 QThread* worker = QThread::create([this, devId]() mutable {
+                    RobotAPI::EnableApiControl(false, devId);
+                    RobotAPI::ReleasePermission(devId);
                     RobotAPI::DisconnectRobot(devId);
 
                     QMetaObject::invokeMethod(this, [this]() {
@@ -1324,7 +1326,8 @@ void MainWindow::onStartClicked()
         return;
     }
 
-    TaskProgramDialog* dlg = new TaskProgramDialog(m_currentDevId, m_displayPaths, this);
+    UserCoordSystem ucs = renderArea->getUCS();
+    TaskProgramDialog* dlg = new TaskProgramDialog(m_currentDevId, m_displayPaths, ucs, this);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->show();
 }
@@ -1368,6 +1371,8 @@ void MainWindow::closeEvent(QCloseEvent *event)
             RobotAPI::MOVECLEAR(devId);
             RobotAPI::TerminateProgram(devId);
             RobotAPI::PowerOff(devId);
+            RobotAPI::EnableApiControl(false, devId);
+            RobotAPI::ReleasePermission(devId);
             RobotAPI::DisconnectRobot(devId);
 
             QMetaObject::invokeMethod(this, [this]() {
