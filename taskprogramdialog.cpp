@@ -219,25 +219,12 @@ void TaskProgramDialog::onStartClicked() {
     bool useUcs = (m_coordCombo->currentData().toInt() == 1);
 
     // =================================================================
-    // 🚨 步骤 1：在循环外部，提前获取用户坐标系(wobj)的真实物理偏移矩阵
+    // 🚨 步骤 1：获取机器人当前的真实姿态，提取其多圈值参数 (cfg1, cfg4, cfg6)
     // =================================================================
-    QMatrix4x4 matWobj;
-    if (useUcs) {
-        RobotAPI::RobotWorkpiece wobjValue;
-        memset(&wobjValue, 0, sizeof(RobotAPI::RobotWorkpiece));
-
-        int ret = RobotAPI::GetUserCoordinate(selWobj, wobjValue, m_devId);
-        if (ret == 0) {
-            // 构建 Wobj (用户坐标系) 的齐次变换矩阵
-            matWobj.translate(wobjValue.x, wobjValue.y, wobjValue.z);
-            // 工业标准欧拉角旋转 (Z - Y - X)
-            matWobj.rotate(wobjValue.c, 0, 0, 1); // RZ
-            matWobj.rotate(wobjValue.b, 0, 1, 0); // RY
-            matWobj.rotate(wobjValue.a, 1, 0, 0); // RX
-        } else {
-            QMessageBox::critical(this, "读取失败", QString("无法读取用户坐标系 [%1]！错误码: %2").arg(QString::fromStdString(selWobj)).arg(ret));
-            return;
-        }
+    RobotAPI::RobotPos currentPos;
+    memset(&currentPos, 0, sizeof(currentPos));
+    if (m_devId != 0 && RobotAPI::IsConnected(m_devId)) {
+        RobotAPI::GetBaseCoordinatePos(currentPos, m_devId);
     }
 
     std::vector<RobotAPI::MultiMoveInfo2> mps;
@@ -255,50 +242,68 @@ void TaskProgramDialog::onStartClicked() {
         for (int i = 0; i < 6; ++i) p[i] = m_table->item(r, i + 2)->text().toDouble();
 
         // =================================================================
-        // 🚨 步骤 2：纯数学空间坐标系映射 (位置 X/Y/Z + 姿态 A/B/C)
+        // 🚨 步骤 2：利用官方 IK/FK 引擎，并注入 cfgx 轴配置参数解决奇异点
         // =================================================================
         if (mp.posType == 2 && useUcs) {
 
-            // 1. 构建 Local (图纸/局部相对坐标) 的齐次变换矩阵
-            QMatrix4x4 matLocal;
-            matLocal.translate(p[0], p[1], p[2]);
-            matLocal.rotate(p[5], 0, 0, 1); // 局部 C
-            matLocal.rotate(p[4], 0, 1, 0); // 局部 B
-            matLocal.rotate(p[3], 1, 0, 0); // 局部 A
+            RobotAPI::RobotPos localPos;
+            memset(&localPos, 0, sizeof(localPos));
+            localPos.x = p[0]; localPos.y = p[1]; localPos.z = p[2];
+            localPos.a = p[3]; localPos.b = p[4]; localPos.c = p[5];
 
-            // 2. 核心数学运算：Base矩阵 = Wobj矩阵 × Local矩阵
-            QMatrix4x4 matBase = matWobj * matLocal;
+            // 💡 核心修复：填入轴配置！
+            // cfgx = 0 表示“中立配置”，强制机器人沿用当前姿态，绝不乱翻转！
+            localPos.cfgx = 0;
+            localPos.cfg1 = currentPos.cfg1;
+            localPos.cfg4 = currentPos.cfg4;
+            localPos.cfg6 = currentPos.cfg6;
 
-            // 3. 提取基座绝对位置 (X, Y, Z)
-            p[0] = matBase.column(3).x();
-            p[1] = matBase.column(3).y();
-            p[2] = matBase.column(3).z();
+            RobotAPI::RobotJoint targetJoints;
+            memset(&targetJoints, 0, sizeof(targetJoints));
 
-            // 4. 提取基座绝对姿态 (欧拉角 A, B, C 反解)
-            float r11 = matBase(0,0), r21 = matBase(1,0), r31 = matBase(2,0);
-            float r32 = matBase(2,1), r33 = matBase(2,2);
+            // 【逆解】根据用户坐标系(wobj)和姿态约束，算出最佳关节角度
+            int ikRet = RobotAPI::IkSolver(localPos, targetJoints, selTool, selWobj, m_devId);
 
-            // 限制反三角函数范围，防止浮点精度越界导致 NaN
-            float val = -r31;
-            if (val > 1.0f) val = 1.0f;
-            if (val < -1.0f) val = -1.0f;
+            if (ikRet == 0) {
+                RobotAPI::RobotPos basePos;
+                memset(&basePos, 0, sizeof(basePos));
 
-            double b_rad = asin(val);
-            double a_rad = atan2(r32, r33);
-            double c_rad = atan2(r21, r11);
+                // 【正解】将算出的关节，映射回基座(Base)坐标
+                int fkRet = RobotAPI::FkSolver(targetJoints, basePos, "tool0", "wobj0", m_devId);
 
-            // 弧度转角度，覆盖回 p 数组
-            p[3] = a_rad * 180.0 / M_PI;
-            p[4] = b_rad * 180.0 / M_PI;
-            p[5] = c_rad * 180.0 / M_PI;
-        }
+                if (fkRet == 0) {
+                    // 完美！不仅获取了准确的位置，更获取了底层的灵魂：cfgx
+                    mp.cp[0].x = basePos.x;
+                    mp.cp[0].y = basePos.y;
+                    mp.cp[0].z = basePos.z;
+                    mp.cp[0].a = basePos.a;
+                    mp.cp[0].b = basePos.b;
+                    mp.cp[0].c = basePos.c;
 
-        // 把算好的绝对数据塞进结构体
-        if (mp.posType == 1) {
-            for(int i=0; i<6; i++) mp.ap[0].j[i] = p[i];
-        } else {
+                    // 🚨 必须把机器人算出的最佳配置信息传给底层轨迹引擎！
+                    mp.cp[0].cfgx = basePos.cfgx;
+                    mp.cp[0].cfg1 = basePos.cfg1;
+                    mp.cp[0].cfg4 = basePos.cfg4;
+                    mp.cp[0].cfg6 = basePos.cfg6;
+                } else {
+                    QMessageBox::critical(this, "FK正解失败", QString("点位换算正解失败，错误码：%1").arg(fkRet));
+                    return;
+                }
+            } else {
+                QMessageBox::warning(this, "点位不可达警报",
+                                     QString("图纸上的第 %1 个点位，机器人在当前姿态下存在奇异点或不可达！\n错误码: %2").arg(r + 1).arg(ikRet));
+                return;
+            }
+        } else if (mp.posType == 2 && !useUcs) {
+            // 如果不使用 UCS（走原生基座坐标），也建议补全配置防止报错
             mp.cp[0].x = p[0]; mp.cp[0].y = p[1]; mp.cp[0].z = p[2];
             mp.cp[0].a = p[3]; mp.cp[0].b = p[4]; mp.cp[0].c = p[5];
+            mp.cp[0].cfgx = 0;
+            mp.cp[0].cfg1 = currentPos.cfg1;
+            mp.cp[0].cfg4 = currentPos.cfg4;
+            mp.cp[0].cfg6 = currentPos.cfg6;
+        } else if (mp.posType == 1) {
+            for(int i=0; i<6; i++) mp.ap[0].j[i] = p[i];
         }
 
         mp.speed = m_table->item(r, 8)->text().toDouble();
@@ -312,7 +317,6 @@ void TaskProgramDialog::onStartClicked() {
     m_startBtn->setEnabled(false);
     m_statusLabel->setText("正在下发...");
 
-    // 下发给机器人的队列
     QThread* worker = QThread::create([this, mps, devId = m_devId, selTool, selWobj]() mutable {
         RobotAPI::MultiMove2Reset(devId);
         QThread::msleep(20);
