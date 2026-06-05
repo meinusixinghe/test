@@ -207,6 +207,16 @@ void TaskProgramDialog::onSyncPosClicked() {
 }
 
 // ======================== 控制执行逻辑 ========================
+struct PathPointData {
+    int moveType;
+    int posType;
+    double p[6];
+    double speed;
+    double acc;
+    double dec;
+    double overlapping;
+};
+
 void TaskProgramDialog::onStartClicked() {
     int rowCount = m_table->rowCount();
     if (m_devId == 0 || rowCount == 0) return;
@@ -214,116 +224,132 @@ void TaskProgramDialog::onStartClicked() {
     // 获取下拉框选中的 Tool 和 Wobj
     std::string selTool = m_robotToolCombo->currentText().toStdString();
     std::string selWobj = m_robotUserCombo->currentText().toStdString();
-
-    // 判断界面上是否选择了用户坐标系(UCS)
     bool useUcs = (m_coordCombo->currentData().toInt() == 1);
 
-    // =================================================================
-    // 🚨 步骤 1：获取机器人当前的真实姿态，提取其多圈值参数 (cfg1, cfg4, cfg6)
-    // =================================================================
-    RobotAPI::RobotPos currentPos;
-    memset(&currentPos, 0, sizeof(currentPos));
-    if (m_devId != 0 && RobotAPI::IsConnected(m_devId)) {
-        RobotAPI::GetBaseCoordinatePos(currentPos, m_devId);
-    }
-
-    std::vector<RobotAPI::MultiMoveInfo2> mps;
-
+    // 1. 在主线程读取所有表格数据
+    std::vector<PathPointData> pathData;
     for (int r = 0; r < rowCount; ++r) {
-        RobotAPI::MultiMoveInfo2 mp;
-
+        PathPointData data;
         QComboBox* moveCombo = qobject_cast<QComboBox*>(m_table->cellWidget(r, 0));
-        mp.moveType = moveCombo ? moveCombo->currentText().left(1).toInt() : 2;
+        data.moveType = moveCombo ? moveCombo->currentText().left(1).toInt() : 2;
 
         QComboBox* posCombo = qobject_cast<QComboBox*>(m_table->cellWidget(r, 1));
-        mp.posType = posCombo ? posCombo->currentText().left(1).toInt() : 2;
+        data.posType = posCombo ? posCombo->currentText().left(1).toInt() : 2;
 
-        double p[6];
-        for (int i = 0; i < 6; ++i) p[i] = m_table->item(r, i + 2)->text().toDouble();
+        for (int i = 0; i < 6; ++i) data.p[i] = m_table->item(r, i + 2)->text().toDouble();
+        data.speed = m_table->item(r, 8)->text().toDouble();
+        data.acc = m_table->item(r, 9)->text().toDouble();
+        data.dec = m_table->item(r, 10)->text().toDouble();
+        data.overlapping = m_table->item(r, 11)->text().toDouble();
 
-        // =================================================================
-        // 🚨 步骤 2：利用官方 IK/FK 引擎，并注入 cfgx 轴配置参数解决奇异点
-        // =================================================================
-        if (mp.posType == 2 && useUcs) {
-
-            RobotAPI::RobotPos localPos;
-            memset(&localPos, 0, sizeof(localPos));
-            localPos.x = p[0]; localPos.y = p[1]; localPos.z = p[2];
-            localPos.a = p[3]; localPos.b = p[4]; localPos.c = p[5];
-
-            // 💡 核心修复：填入轴配置！
-            // cfgx = 0 表示“中立配置”，强制机器人沿用当前姿态，绝不乱翻转！
-            localPos.cfgx = 0;
-            localPos.cfg1 = currentPos.cfg1;
-            localPos.cfg4 = currentPos.cfg4;
-            localPos.cfg6 = currentPos.cfg6;
-
-            RobotAPI::RobotJoint targetJoints;
-            memset(&targetJoints, 0, sizeof(targetJoints));
-
-            // 【逆解】根据用户坐标系(wobj)和姿态约束，算出最佳关节角度
-            int ikRet = RobotAPI::IkSolver(localPos, targetJoints, selTool, selWobj, m_devId);
-
-            if (ikRet == 0) {
-                RobotAPI::RobotPos basePos;
-                memset(&basePos, 0, sizeof(basePos));
-
-                // 【正解】将算出的关节，映射回基座(Base)坐标
-                int fkRet = RobotAPI::FkSolver(targetJoints, basePos, "tool0", "wobj0", m_devId);
-
-                if (fkRet == 0) {
-                    // 完美！不仅获取了准确的位置，更获取了底层的灵魂：cfgx
-                    mp.cp[0].x = basePos.x;
-                    mp.cp[0].y = basePos.y;
-                    mp.cp[0].z = basePos.z;
-                    mp.cp[0].a = basePos.a;
-                    mp.cp[0].b = basePos.b;
-                    mp.cp[0].c = basePos.c;
-
-                    // 🚨 必须把机器人算出的最佳配置信息传给底层轨迹引擎！
-                    mp.cp[0].cfgx = basePos.cfgx;
-                    mp.cp[0].cfg1 = basePos.cfg1;
-                    mp.cp[0].cfg4 = basePos.cfg4;
-                    mp.cp[0].cfg6 = basePos.cfg6;
-                } else {
-                    QMessageBox::critical(this, "FK正解失败", QString("点位换算正解失败，错误码：%1").arg(fkRet));
-                    return;
-                }
-            } else {
-                QMessageBox::warning(this, "点位不可达警报",
-                                     QString("图纸上的第 %1 个点位，机器人在当前姿态下存在奇异点或不可达！\n错误码: %2").arg(r + 1).arg(ikRet));
-                return;
-            }
-        } else if (mp.posType == 2 && !useUcs) {
-            // 如果不使用 UCS（走原生基座坐标），也建议补全配置防止报错
-            mp.cp[0].x = p[0]; mp.cp[0].y = p[1]; mp.cp[0].z = p[2];
-            mp.cp[0].a = p[3]; mp.cp[0].b = p[4]; mp.cp[0].c = p[5];
-            mp.cp[0].cfgx = 0;
-            mp.cp[0].cfg1 = currentPos.cfg1;
-            mp.cp[0].cfg4 = currentPos.cfg4;
-            mp.cp[0].cfg6 = currentPos.cfg6;
-        } else if (mp.posType == 1) {
-            for(int i=0; i<6; i++) mp.ap[0].j[i] = p[i];
-        }
-
-        mp.speed = m_table->item(r, 8)->text().toDouble();
-        mp.acc = m_table->item(r, 9)->text().toDouble();
-        mp.dec = m_table->item(r, 10)->text().toDouble();
-        mp.overlapping = m_table->item(r, 11)->text().toDouble();
-
-        mps.push_back(mp);
+        pathData.push_back(data);
     }
 
     m_startBtn->setEnabled(false);
-    m_statusLabel->setText("正在下发...");
+    m_statusLabel->setText("正在底层换算坐标与轴配置...");
 
-    QThread* worker = QThread::create([this, mps, devId = m_devId, selTool, selWobj]() mutable {
-        RobotAPI::MultiMove2Reset(devId);
-        QThread::msleep(20);
+    // 2. 开启子线程，执行复杂的环境切换和 IK/FK 矩阵解算
+    QThread* worker = QThread::create([this, pathData, useUcs, devId = m_devId, selTool, selWobj]() mutable {
 
+        // 🚨 步骤 A：让底层切换到所选坐标系，才能读取到正确的相对姿态！
         if (!selTool.empty()) RobotAPI::SetCurrentToolByName(selTool, devId);
         if (!selWobj.empty()) RobotAPI::SetCurrentUframeByName(selWobj, devId);
-        QThread::msleep(50);
+        QThread::msleep(100); // 必须给控制器一点时间生效
+
+        // 🚨 步骤 B：使用你发现的最新 API！获取带有 CFG 的真实姿态数据
+        RobotAPI::RobotPos currRealPos;
+        memset(&currRealPos, 0, sizeof(currRealPos));
+
+        if (useUcs) {
+            RobotAPI::GetUserCoordinatePos2(currRealPos, devId); // 获取真实的 User ABC 和 CFG
+        } else {
+            RobotAPI::GetBaseCoordinatePos2(currRealPos, devId); // 获取真实的 Base ABC 和 CFG
+        }
+
+        std::vector<RobotAPI::MultiMoveInfo2> mps;
+
+        // 🚨 步骤 C：遍历所有点，进行终极数据缝合
+        for (size_t r = 0; r < pathData.size(); ++r) {
+            RobotAPI::MultiMoveInfo2 mp;
+            mp.moveType = pathData[r].moveType;
+            mp.posType = pathData[r].posType;
+
+            if (mp.posType == 2 && useUcs) {
+                // 1. 继承当前真实的 ABC 和 CFG，丢弃表格里的错误 Base 角度！
+                RobotAPI::RobotPos targetLocalPos = currRealPos;
+
+                // 2. 注入图纸坐标 XYZ
+                targetLocalPos.x = pathData[r].p[0];
+                targetLocalPos.y = pathData[r].p[1];
+                targetLocalPos.z = pathData[r].p[2];
+
+                RobotAPI::RobotJoint targetJoints;
+                memset(&targetJoints, 0, sizeof(targetJoints));
+
+                // 3. 【逆解】在 User 坐标下求解安全关节
+                int ikRet = RobotAPI::IkSolver(targetLocalPos, targetJoints, selTool, selWobj, devId);
+                if (ikRet == 0) {
+                    RobotAPI::RobotPos basePos;
+                    memset(&basePos, 0, sizeof(basePos));
+
+                    // 4. 【正解】映射回基座绝对坐标
+                    int fkRet = RobotAPI::FkSolver(targetJoints, basePos, selTool, "wobj0", devId);
+
+                    if (fkRet == 0) {
+                        mp.cp[0].x = basePos.x;
+                        mp.cp[0].y = basePos.y;
+                        mp.cp[0].z = basePos.z;
+                        mp.cp[0].a = basePos.a;
+                        mp.cp[0].b = basePos.b;
+                        mp.cp[0].c = basePos.c;
+                        // 注入计算出的终极防翻转参数！
+                        mp.cp[0].cfgx = basePos.cfgx;
+                        mp.cp[0].cfg1 = basePos.cfg1;
+                        mp.cp[0].cfg4 = basePos.cfg4;
+                        mp.cp[0].cfg6 = basePos.cfg6;
+                    } else {
+                        QMetaObject::invokeMethod(this, [this, fkRet]() {
+                            QMessageBox::critical(this, "严重错误", QString("正解转换失败，错误码：%1").arg(fkRet));
+                            m_startBtn->setEnabled(true);
+                            m_statusLabel->setText("执行中止");
+                        });
+                        return; // 中断线程
+                    }
+                } else {
+                    QMetaObject::invokeMethod(this, [this, r, ikRet]() {
+                        QMessageBox::warning(this, "不可达警报", QString("第 %1 个点位不可达或存在奇异点！\n已拦截发送，错误码: %2").arg(r+1).arg(ikRet));
+                        m_startBtn->setEnabled(true);
+                        m_statusLabel->setText("执行中止");
+                    });
+                    return; // 中断线程
+                }
+            } else if (mp.posType == 2 && !useUcs) {
+                // 如果使用基座坐标系，也要补全 CFG 防止报错
+                mp.cp[0].x = pathData[r].p[0];
+                mp.cp[0].y = pathData[r].p[1];
+                mp.cp[0].z = pathData[r].p[2];
+                mp.cp[0].a = currRealPos.a;
+                mp.cp[0].b = currRealPos.b;
+                mp.cp[0].c = currRealPos.c;
+                mp.cp[0].cfgx = currRealPos.cfgx;
+                mp.cp[0].cfg1 = currRealPos.cfg1;
+                mp.cp[0].cfg4 = currRealPos.cfg4;
+                mp.cp[0].cfg6 = currRealPos.cfg6;
+            } else {
+                for(int i=0; i<6; i++) mp.ap[0].j[i] = pathData[r].p[i];
+            }
+
+            mp.speed = pathData[r].speed;
+            mp.acc = pathData[r].acc;
+            mp.dec = pathData[r].dec;
+            mp.overlapping = pathData[r].overlapping;
+
+            mps.push_back(mp);
+        }
+
+        // 🚨 步骤 D：正式清空队列并下发绝对安全的坐标指令
+        RobotAPI::MultiMove2Reset(devId);
+        QThread::msleep(20);
 
         int ret = RobotAPI::MultiMove2Start(mps, devId);
 
@@ -333,6 +359,7 @@ void TaskProgramDialog::onStartClicked() {
             else m_statusLabel->setText(QString("启动失败！错误码: %1").arg(ret));
         }, Qt::QueuedConnection);
     });
+
     connect(worker, &QThread::finished, worker, &QObject::deleteLater);
     worker->start();
 }
