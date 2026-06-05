@@ -54,11 +54,44 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
 
     // 安全获取机器人当前的 Tool 和 Wobj
     if (m_devId != 0 && RobotAPI::IsConnected(m_devId)) {
+        // 1. 转换 Tool 列表
+        try {
+            std::vector<std::string> toolNames;
+            if (RobotAPI::GetToolNameList(toolNames, m_devId) == 0) {
+                for (const std::string& name : toolNames) {
+                    m_robotToolCombo->addItem(QString::fromStdString(name)); // C++ string 转换为 Qt String
+                }
+            }
+        } catch (...) {} // 防止底层跨库崩溃
+
+        // 2. 转换 Wobj 列表
+        try {
+            std::vector<std::string> wobjNames;
+            if (RobotAPI::GetUserNameList(wobjNames, m_devId) == 0) {
+                for (const std::string& name : wobjNames) {
+                    m_robotUserCombo->addItem(QString::fromStdString(name));
+                }
+            }
+        } catch (...) {}
+
+        // 3. 获取并设置当前选中的坐标系
         try {
             std::string curTool, curWobj;
-            if (RobotAPI::GetCurrentToolName(curTool, m_devId) == 0) m_robotToolCombo->setCurrentText(QString::fromStdString(curTool));
-            if (RobotAPI::GetCurrentUframeName(curWobj, m_devId) == 0) m_robotUserCombo->setCurrentText(QString::fromStdString(curWobj));
-        } catch(...) {}
+            if (RobotAPI::GetCurrentToolName(curTool, m_devId) == 0) {
+                m_robotToolCombo->setCurrentText(QString::fromStdString(curTool));
+            }
+            if (RobotAPI::GetCurrentUframeName(curWobj, m_devId) == 0) {
+                m_robotUserCombo->setCurrentText(QString::fromStdString(curWobj));
+            }
+        } catch (...) {}
+    }
+
+    // 智能兜底：如果列表还是空的（比如获取失败），自动生成 32 个默认编号！
+    if (m_robotToolCombo->count() == 0) {
+        for(int i=0; i<=31; i++) m_robotToolCombo->addItem(QString("tool%1").arg(i));
+    }
+    if (m_robotUserCombo->count() == 0) {
+        for(int i=0; i<=31; i++) m_robotUserCombo->addItem(QString("wobj%1").arg(i));
     }
 
     // 增加第 13 列 -> 备注
@@ -166,9 +199,13 @@ void TaskProgramDialog::onStartClicked() {
     int rowCount = m_table->rowCount();
     if (m_devId == 0 || rowCount == 0) return;
 
+    // 获取下拉框选中的 Tool 和 Wobj
+    std::string selTool = m_robotToolCombo->currentText().toStdString();
+    std::string selWobj = m_robotUserCombo->currentText().toStdString();
+
     std::vector<RobotAPI::MultiMoveInfo2> mps;
     for (int r = 0; r < rowCount; ++r) {
-        RobotAPI::MultiMoveInfo2 mp;
+        RobotAPI::MultiMoveInfo2 mp; // 安全初始化
 
         QComboBox* moveCombo = qobject_cast<QComboBox*>(m_table->cellWidget(r, 0));
         mp.moveType = moveCombo ? moveCombo->currentText().left(1).toInt() : 2;
@@ -179,12 +216,17 @@ void TaskProgramDialog::onStartClicked() {
         double p[6];
         for (int i = 0; i < 6; ++i) p[i] = m_table->item(r, i + 2)->text().toDouble();
 
+        // 🚨【核心更正：彻底删除之前的矩阵补偿代码！】
+        // 我们需要原封不动地把表格里的“相对坐标(如 X=10, Y=20)”保留下来，
+        // 直接发给机器人，让机器人用自己肚子里存的 wobj 去解析它。
+
         if (mp.posType == 1) {
             for(int i=0; i<6; i++) mp.ap[0].j[i] = p[i];
         } else {
             mp.cp[0].x = p[0]; mp.cp[0].y = p[1]; mp.cp[0].z = p[2];
             mp.cp[0].a = p[3]; mp.cp[0].b = p[4]; mp.cp[0].c = p[5];
         }
+
         mp.speed = m_table->item(r, 8)->text().toDouble();
         mp.acc = m_table->item(r, 9)->text().toDouble();
         mp.dec = m_table->item(r, 10)->text().toDouble();
@@ -196,15 +238,26 @@ void TaskProgramDialog::onStartClicked() {
     m_startBtn->setEnabled(false);
     m_statusLabel->setText("正在下发...");
 
-    std::string selTool = m_robotToolCombo->currentText().toStdString();
-    std::string selWobj = m_robotUserCombo->currentText().toStdString();
-
     QThread* worker = QThread::create([this, mps, devId = m_devId, selTool, selWobj]() mutable {
 
+        // ==========================================================
+        // 🚨【解决失效的杀手锏：严格调整底层指令顺序与延时】
+        // ==========================================================
+
+        // 1. 第一步：先发送 Reset！把上一次的残余队列和上下文彻底清空
+        RobotAPI::MultiMove2Reset(devId);
+
+        // 2. 极其关键的延时：等待机器人 CPU 完成重置
+        QThread::msleep(20);
+
+        // 3. 第二步：在环境干干净净的情况下，再发送坐标系切换指令！
         if (!selTool.empty()) RobotAPI::SetCurrentToolByName(selTool, devId);
         if (!selWobj.empty()) RobotAPI::SetCurrentUframeByName(selWobj, devId);
 
-        RobotAPI::MultiMove2Reset(devId);
+        // 4. 再次延时：给机器人底层系统切换坐标系的时间，防止立刻灌入点位导致坐标错乱
+        QThread::msleep(50);
+
+        // 5. 第三步：此时环境已经锁定在了你选的 wobj，正式下发纯净的相对坐标点位！
         int ret = RobotAPI::MultiMove2Start(mps, devId);
 
         QMetaObject::invokeMethod(this, [this, ret]() {
@@ -341,7 +394,6 @@ void TaskProgramDialog::generateProgram()
             bool isConnectedWithPrev = (std::hypot(pt.x() - lastEndPos.x(), pt.y() - lastEndPos.y()) < 0.001);
             if (i == 0 && isConnectedWithPrev) continue;
 
-            // 🚨 【核心算法：用户坐标系 (UCS) 矩阵变换】
             // 如果启用了 UCS，需要把 DXF 图纸的绝对坐标，投影到自定义坐标系的新坐标轴上
             if (useUcs && m_ucs.valid) {
                 QPointF v = pt - m_ucs.origin; // 计算点相对于 UCS 原点的向量

@@ -539,45 +539,55 @@ void RobotParameterDialog::updateCoordinateSystems()
     if (m_devId == 0 || !m_toolCombo || !m_userCombo) return;
 
     runAsyncCommand([this]() {
-        std::vector<std::string> toolList;
-        std::vector<std::string> userList;
-        std::string currentTool;
-        std::string currentUser;
+        QStringList tools, users;
+        QString curToolStr = "tool0", curUserStr = "wobj0";
 
-        // SDK 调用：获取列表
-        RobotAPI::GetToolNameList(toolList, m_devId);
-        RobotAPI::GetUserNameList(userList, m_devId);
+        try {
+            std::vector<std::string> toolList;
+            if (RobotAPI::GetToolNameList(toolList, m_devId) == 0) {
+                for (const auto& t : toolList) {
+                    tools << QString::fromStdString(t);
+                }
+            }
 
-        // SDK 调用：获取当前被选中的名称
-        RobotAPI::GetCurrentToolName(currentTool, m_devId);
-        RobotAPI::GetCurrentUframeName(currentUser, m_devId);
+            std::vector<std::string> userList;
+            if (RobotAPI::GetUserNameList(userList, m_devId) == 0) {
+                for (const auto& u : userList) {
+                    users << QString::fromStdString(u);
+                }
+            }
 
-        // 获取完毕后，切回主 UI 线程进行渲染
-        QMetaObject::invokeMethod(this, [this, toolList, userList, currentTool, currentUser]() {
-            // 👇【加锁】：屏蔽 comboBox 的 onChange 信号触发，防止数据刚填入就被当成用户点击下发给机器人
+            std::string currentTool;
+            if (RobotAPI::GetCurrentToolName(currentTool, m_devId) == 0) {
+                curToolStr = QString::fromStdString(currentTool);
+            }
+
+            std::string currentUser;
+            if (RobotAPI::GetCurrentUframeName(currentUser, m_devId) == 0) {
+                curUserStr = QString::fromStdString(currentUser);
+            }
+        } catch(...) {} // 防止底层跨库崩溃
+
+        // 刷新到界面
+        QMetaObject::invokeMethod(this, [this, tools, users, curToolStr, curUserStr]() {
             m_isUpdatingCoords = true;
 
-            // 1. 刷新 Tool 下拉框
             m_toolCombo->clear();
-            for (const auto& name : toolList) {
-                m_toolCombo->addItem(QString::fromStdString(name));
+            if (tools.isEmpty()) {
+                for(int i=0; i<=31; i++) m_toolCombo->addItem(QString("tool%1").arg(i));
+            } else {
+                m_toolCombo->addItems(tools);
             }
-            int toolIdx = m_toolCombo->findText(QString::fromStdString(currentTool));
-            if (toolIdx >= 0) {
-                m_toolCombo->setCurrentIndex(toolIdx);
-            }
+            m_toolCombo->setCurrentText(curToolStr);
 
-            // 2. 刷新 User 下拉框
             m_userCombo->clear();
-            for (const auto& name : userList) {
-                m_userCombo->addItem(QString::fromStdString(name));
+            if (users.isEmpty()) {
+                for(int i=0; i<=31; i++) m_userCombo->addItem(QString("wobj%1").arg(i));
+            } else {
+                m_userCombo->addItems(users);
             }
-            int userIdx = m_userCombo->findText(QString::fromStdString(currentUser));
-            if (userIdx >= 0) {
-                m_userCombo->setCurrentIndex(userIdx);
-            }
+            m_userCombo->setCurrentText(curUserStr);
 
-            // 👇【解锁】：渲染完毕，重新接受用户手动点击
             m_isUpdatingCoords = false;
         }, Qt::QueuedConnection);
     });
