@@ -1324,7 +1324,8 @@ void MainWindow::onStartClicked()
         return;
     }
 
-    TaskProgramDialog* dlg = new TaskProgramDialog(m_currentDevId, m_displayPaths, this);
+    UserCoordSystem ucs = renderArea->getUCS();
+    TaskProgramDialog* dlg = new TaskProgramDialog(m_currentDevId, m_displayPaths, ucs, this);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->show();
 }
