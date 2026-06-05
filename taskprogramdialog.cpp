@@ -40,14 +40,14 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
     coordLayout->addWidget(new QLabel("机器人 Tool:", this));
     m_robotToolCombo = new QComboBox(this);
     m_robotToolCombo->setEditable(true);
-    for(int i=0; i<=15; i++) m_robotToolCombo->addItem(QString("tool%1").arg(i));
+    for(int i=0; i<=31; i++) m_robotToolCombo->addItem(QString("tool%1").arg(i));
     coordLayout->addWidget(m_robotToolCombo);
 
     coordLayout->addSpacing(10);
     coordLayout->addWidget(new QLabel("机器人 Wobj:", this));
     m_robotUserCombo = new QComboBox(this);
     m_robotUserCombo->setEditable(true);
-    for(int i=0; i<=15; i++) m_robotUserCombo->addItem(QString("wobj%1").arg(i));
+    for(int i=0; i<=31; i++) m_robotUserCombo->addItem(QString("wobj%1").arg(i));
     coordLayout->addWidget(m_robotUserCombo);
     coordLayout->addStretch();
     tableLayout->addLayout(coordLayout);
