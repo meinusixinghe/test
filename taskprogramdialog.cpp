@@ -8,6 +8,8 @@
 #include <QThread>
 #include <QMetaObject>
 #include <QMessageBox>
+#include <QMatrix4x4>
+#include <QVector3D>
 
 // ====================================================================
 // 构造函数：解析线条序列并生成运动程序表格
@@ -199,13 +201,52 @@ void TaskProgramDialog::onStartClicked() {
     int rowCount = m_table->rowCount();
     if (m_devId == 0 || rowCount == 0) return;
 
-    // 获取下拉框选中的 Tool 和 Wobj
-    std::string selTool = m_robotToolCombo->currentText().toStdString();
-    std::string selWobj = m_robotUserCombo->currentText().toStdString();
+    // 1. 获取名字并严格去除首尾空格，防止 API 匹配不到真实名称
+    QString selWobjStr = m_robotUserCombo->currentText().trimmed();
+    std::string selTool = m_robotToolCombo->currentText().trimmed().toStdString();
+    std::string selWobj = selWobjStr.toStdString();
+
+    // 2. 检查界面是否真的启用了 UCS
+    bool useUcs = (m_coordCombo->currentData().toInt() == 1);
+
+    QMatrix4x4 transformMatrix;
+
+    if (useUcs) {
+        RobotAPI::RobotWorkpiece wobjValue;
+        memset(&wobjValue, 0, sizeof(RobotAPI::RobotWorkpiece)); // 安全初始化
+
+        int ret = RobotAPI::GetUserCoordinate(selWobj, wobjValue, m_devId);
+        if (ret == 0) {
+            // ==============================================================
+            // 🚨 【诊断神器】：弹窗显示机器人肚子里真实的物理坐标系数据！
+            // ==============================================================
+            QString debugMsg = QString("【发车前矩阵诊断】\n\n已成功读取到机器人 [%1] 的真实物理参数：\nX: %2\nY: %3\nZ: %4\nA(RX): %5\nB(RY): %6\nC(RZ): %7\n\n👉 请核对：这与示教器上的数据一致吗？\n如果全是 0，说明底层根本没拿到坐标系，机器人必然走基座坐标！\n点击 Yes 将应用此矩阵并下发，点击 No 停止。")
+                                   .arg(selWobjStr)
+                                   .arg(wobjValue.x).arg(wobjValue.y).arg(wobjValue.z)
+                                   .arg(wobjValue.a).arg(wobjValue.b).arg(wobjValue.c);
+
+            int choice = QMessageBox::question(this, "底层数据校验", debugMsg);
+            if (choice == QMessageBox::No) return;
+
+            // 构建 3D 空间矩阵
+            transformMatrix.translate(wobjValue.x, wobjValue.y, wobjValue.z);
+            transformMatrix.rotate(wobjValue.c, 0, 0, 1);
+            transformMatrix.rotate(wobjValue.b, 0, 1, 0);
+            transformMatrix.rotate(wobjValue.a, 1, 0, 0);
+        } else {
+            QMessageBox::critical(this, "读取失败", QString("读取 %1 失败！错误码: %2").arg(selWobjStr).arg(ret));
+            return;
+        }
+    } else {
+        // 如果用户没选 UCS，弹窗提醒一下，防止误操作
+        if (QMessageBox::question(this, "状态警告", "当前使用的是【默认基座坐标系】，没有启用 UCS 矩阵换算！\n确定要发送原始数据吗？") == QMessageBox::No) {
+            return;
+        }
+    }
 
     std::vector<RobotAPI::MultiMoveInfo2> mps;
     for (int r = 0; r < rowCount; ++r) {
-        RobotAPI::MultiMoveInfo2 mp; // 安全初始化
+        RobotAPI::MultiMoveInfo2 mp;
 
         QComboBox* moveCombo = qobject_cast<QComboBox*>(m_table->cellWidget(r, 0));
         mp.moveType = moveCombo ? moveCombo->currentText().left(1).toInt() : 2;
@@ -216,9 +257,14 @@ void TaskProgramDialog::onStartClicked() {
         double p[6];
         for (int i = 0; i < 6; ++i) p[i] = m_table->item(r, i + 2)->text().toDouble();
 
-        // 🚨【核心更正：彻底删除之前的矩阵补偿代码！】
-        // 我们需要原封不动地把表格里的“相对坐标(如 X=10, Y=20)”保留下来，
-        // 直接发给机器人，让机器人用自己肚子里存的 wobj 去解析它。
+        // 🚨 步骤 2：空间映射！将图纸相对坐标，转换为基座绝对坐标
+        if (mp.posType == 2 && useUcs) {
+            QVector3D localPt(p[0], p[1], p[2]);
+            QVector3D basePt = transformMatrix.map(localPt);
+            p[0] = basePt.x();
+            p[1] = basePt.y();
+            p[2] = basePt.z();
+        }
 
         if (mp.posType == 1) {
             for(int i=0; i<6; i++) mp.ap[0].j[i] = p[i];
@@ -239,25 +285,13 @@ void TaskProgramDialog::onStartClicked() {
     m_statusLabel->setText("正在下发...");
 
     QThread* worker = QThread::create([this, mps, devId = m_devId, selTool, selWobj]() mutable {
-
-        // ==========================================================
-        // 🚨【解决失效的杀手锏：严格调整底层指令顺序与延时】
-        // ==========================================================
-
-        // 1. 第一步：先发送 Reset！把上一次的残余队列和上下文彻底清空
         RobotAPI::MultiMove2Reset(devId);
-
-        // 2. 极其关键的延时：等待机器人 CPU 完成重置
         QThread::msleep(20);
 
-        // 3. 第二步：在环境干干净净的情况下，再发送坐标系切换指令！
         if (!selTool.empty()) RobotAPI::SetCurrentToolByName(selTool, devId);
         if (!selWobj.empty()) RobotAPI::SetCurrentUframeByName(selWobj, devId);
-
-        // 4. 再次延时：给机器人底层系统切换坐标系的时间，防止立刻灌入点位导致坐标错乱
         QThread::msleep(50);
 
-        // 5. 第三步：此时环境已经锁定在了你选的 wobj，正式下发纯净的相对坐标点位！
         int ret = RobotAPI::MultiMove2Start(mps, devId);
 
         QMetaObject::invokeMethod(this, [this, ret]() {
