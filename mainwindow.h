@@ -188,6 +188,8 @@ private slots:
     void onPermissionBtnClicked();
     void onRoboxModeChanged(int index);
     void reorderPathsGeo();
+    void checkRobotAlarm();
+    void clearRobotAlarm();
 
 private:
     void loadDrawingData(const QString &filePath);
@@ -271,6 +273,9 @@ private:
     QAction* m_robotParamAction;
 
     MotionTestDialog* m_motionTestDialog = nullptr;
+
+    QTimer* m_alarmTimer;
+    QPushButton* m_clearAlarmBtn;
 
 };
 

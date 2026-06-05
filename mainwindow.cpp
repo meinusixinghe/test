@@ -2630,3 +2630,24 @@ void UserCoordDialog::updateUCSDisplay() {
     ucs.valid = false;
     m_renderArea->setUCS(ucs);
 }
+
+void MainWindow::checkRobotAlarm() {
+    if (!m_isConnected || m_devId == 0) {
+        m_clearAlarmBtn->setVisible(false);
+        return;
+    }
+    bool isAlarm = false;
+    // 如果获取成功，且 isAlarm 为 true，则显示按钮；否则隐藏
+    if (RobotAPI::GetCurrentAlarmStatus(isAlarm, m_devId) == 0) {
+        m_clearAlarmBtn->setVisible(isAlarm);
+    }
+}
+
+void MainWindow::clearRobotAlarm() {
+    if (m_devId != 0) {
+        int ret = RobotAPI::ClearAlarm(m_devId);
+        if (ret == 0) {
+            m_clearAlarmBtn->setVisible(false); // 清除成功后隐藏
+        }
+    }
+}
