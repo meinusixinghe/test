@@ -201,50 +201,35 @@ void TaskProgramDialog::onStartClicked() {
     int rowCount = m_table->rowCount();
     if (m_devId == 0 || rowCount == 0) return;
 
-    // 1. 获取名字并严格去除首尾空格，防止 API 匹配不到真实名称
-    QString selWobjStr = m_robotUserCombo->currentText().trimmed();
-    std::string selTool = m_robotToolCombo->currentText().trimmed().toStdString();
-    std::string selWobj = selWobjStr.toStdString();
+    // 获取下拉框选中的 Tool 和 Wobj 名字
+    std::string selTool = m_robotToolCombo->currentText().toStdString();
+    std::string selWobj = m_robotUserCombo->currentText().toStdString();
 
-    // 2. 检查界面是否真的启用了 UCS
+    // 判断界面上是否选择了用户坐标系(UCS)
     bool useUcs = (m_coordCombo->currentData().toInt() == 1);
 
     QMatrix4x4 transformMatrix;
 
     if (useUcs) {
         RobotAPI::RobotWorkpiece wobjValue;
-        memset(&wobjValue, 0, sizeof(RobotAPI::RobotWorkpiece)); // 安全初始化
+        memset(&wobjValue, 0, sizeof(RobotAPI::RobotWorkpiece));
 
         int ret = RobotAPI::GetUserCoordinate(selWobj, wobjValue, m_devId);
         if (ret == 0) {
-            // ==============================================================
-            // 🚨 【诊断神器】：弹窗显示机器人肚子里真实的物理坐标系数据！
-            // ==============================================================
-            QString debugMsg = QString("【发车前矩阵诊断】\n\n已成功读取到机器人 [%1] 的真实物理参数：\nX: %2\nY: %3\nZ: %4\nA(RX): %5\nB(RY): %6\nC(RZ): %7\n\n👉 请核对：这与示教器上的数据一致吗？\n如果全是 0，说明底层根本没拿到坐标系，机器人必然走基座坐标！\n点击 Yes 将应用此矩阵并下发，点击 No 停止。")
-                                   .arg(selWobjStr)
-                                   .arg(wobjValue.x).arg(wobjValue.y).arg(wobjValue.z)
-                                   .arg(wobjValue.a).arg(wobjValue.b).arg(wobjValue.c);
-
-            int choice = QMessageBox::question(this, "底层数据校验", debugMsg);
-            if (choice == QMessageBox::No) return;
-
-            // 构建 3D 空间矩阵
             transformMatrix.translate(wobjValue.x, wobjValue.y, wobjValue.z);
             transformMatrix.rotate(wobjValue.c, 0, 0, 1);
             transformMatrix.rotate(wobjValue.b, 0, 1, 0);
             transformMatrix.rotate(wobjValue.a, 1, 0, 0);
         } else {
-            QMessageBox::critical(this, "读取失败", QString("读取 %1 失败！错误码: %2").arg(selWobjStr).arg(ret));
-            return;
-        }
-    } else {
-        // 如果用户没选 UCS，弹窗提醒一下，防止误操作
-        if (QMessageBox::question(this, "状态警告", "当前使用的是【默认基座坐标系】，没有启用 UCS 矩阵换算！\n确定要发送原始数据吗？") == QMessageBox::No) {
+            QMessageBox::critical(this, "坐标系读取失败",
+                                  QString("无法从机器人读取用户坐标系 [%1] 的物理参数！\n错误码: %2").arg(QString::fromStdString(selWobj)).arg(ret));
             return;
         }
     }
 
     std::vector<RobotAPI::MultiMoveInfo2> mps;
+    QString diagnosticMsg; // 👇 记录转换报告，用于弹窗展示
+
     for (int r = 0; r < rowCount; ++r) {
         RobotAPI::MultiMoveInfo2 mp;
 
@@ -257,13 +242,24 @@ void TaskProgramDialog::onStartClicked() {
         double p[6];
         for (int i = 0; i < 6; ++i) p[i] = m_table->item(r, i + 2)->text().toDouble();
 
-        // 🚨 步骤 2：空间映射！将图纸相对坐标，转换为基座绝对坐标
+        // 🚨 空间映射：将图纸相对坐标，转换为基座绝对坐标
         if (mp.posType == 2 && useUcs) {
+            double origX = p[0], origY = p[1], origZ = p[2];
+
             QVector3D localPt(p[0], p[1], p[2]);
             QVector3D basePt = transformMatrix.map(localPt);
+
             p[0] = basePt.x();
             p[1] = basePt.y();
             p[2] = basePt.z();
+
+            // 👇 提取第一个点的转换前后数据，生成安抚操作员的报告
+            if (r == 0) {
+                diagnosticMsg = QString("【底层空间映射报告】\n\n系统检测到使用了 %1，已将图纸坐标自动转换为机器人的绝对物理坐标！\n\n图纸首个点（工件相对坐标）：\nX=%.3f, Y=%.3f, Z=%.3f\n\n发给机器人的指令（基座绝对坐标）：\nX=%.4f, Y=%.4f, Z=%.4f\n\n（这正是你在示教器默认基座模式下看到的数值，物理落点分毫不差，请放心执行！）\n\n是否确认下发轨迹？")
+                                    .arg(QString::fromStdString(selWobj))
+                                    .arg(origX).arg(origY).arg(origZ)
+                                    .arg(p[0]).arg(p[1]).arg(p[2]);
+            }
         }
 
         if (mp.posType == 1) {
@@ -279,6 +275,13 @@ void TaskProgramDialog::onStartClicked() {
         mp.overlapping = m_table->item(r, 11)->text().toDouble();
 
         mps.push_back(mp);
+    }
+
+    // 👇 弹出诊断报告，让操作员确认
+    if (useUcs && !diagnosticMsg.isEmpty()) {
+        if (QMessageBox::question(this, "坐标换算校验", diagnosticMsg) == QMessageBox::No) {
+            return;
+        }
     }
 
     m_startBtn->setEnabled(false);
