@@ -27,6 +27,10 @@
 #include <QVector3D>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QRadioButton>
+#include <QVector2D>
+#include <QComboBox>
+#include <QGroupBox>
 
 class QCalendarWidget;
 class RenderArea;
@@ -51,6 +55,70 @@ struct DrawingState {
     QVector<Hole> weldHoles;
     Hole mainPlateHole;
     QPolygonF mainPlateContour;
+};
+
+// 用户坐标系(UCS) 数据结构
+struct UserCoordSystem {
+    bool valid = false;       // 最终坐标系是否建立完成
+    bool originValid = false; // 原点是否被提取
+    bool xValid = false;      // X轴特征是否被提取
+    bool yValid = false;      // Y轴特征是否被提取
+    QPointF origin;
+    QLineF xLine;
+    QLineF yLine;
+    QVector2D xAxis;
+    QVector2D yAxis;
+};
+
+class RenderArea;
+
+// 建立用户坐标系的向导对话框
+class UserCoordDialog : public QDialog {
+    Q_OBJECT
+public:
+    explicit UserCoordDialog(RenderArea* renderArea, QWidget *parent = nullptr);
+    ~UserCoordDialog();
+
+private slots:
+    void onUCSPointSelected(QPointF pt);
+    void onUCSLineSelected(QLineF line);
+
+private:
+    RenderArea* m_renderArea;
+    int m_step = 0;
+
+    QPointF m_origin;
+    bool m_originValid = false;
+    QVector2D m_xAxis;
+    QVector2D m_yAxis;
+
+    QLineF m_xLine;
+    QLineF m_yLine;
+
+    QPointF m_tempPt1;
+
+    QLabel* m_lblStatus;
+    QRadioButton* m_rbKnowOrigin;
+    QRadioButton* m_rbUnknownOrigin;
+    QWidget* m_knowOriginWidget;
+
+    QComboBox* m_cbOriginMethod;
+    QPushButton* m_btnSelectOrigin;
+    QLabel* m_lblOrigin;
+
+    QComboBox* m_cbXMethod;
+    QPushButton* m_btnSelectX;
+    QPushButton* m_btnRevX;
+    QLabel* m_lblX;
+
+    QComboBox* m_cbYMethod;
+    QPushButton* m_btnSelectY;
+    QPushButton* m_btnRevY;
+    QLabel* m_lblY;
+
+    QPushButton* m_btnFinish;
+
+    void updateUCSDisplay();
 };
 
 #include "robotparameterdialog.h"
@@ -146,6 +214,7 @@ private:
     QToolBar* toolBar;
 
     QAction* rotateAction;
+    QAction* m_ucsAction;
     QMatrix4x4 rotationMatrix;
 
     QLabel* m_statusLabel;

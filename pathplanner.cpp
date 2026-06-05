@@ -39,11 +39,6 @@ QVector<Hole> PathPlanner::planPath(const QVector<Hole>& inputHoles, const Hole&
     case Spiral:            result = planSpiral(tempHoles, mainPlate.center); break;
     }
 
-    // 重新编号
-    for (int i = 0; i < result.size(); ++i) {
-        result[i].id = i + 1;
-    }
-
     return result;
 }
 

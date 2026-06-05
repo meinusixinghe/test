@@ -16,6 +16,7 @@
 #include <QStyle>
 #include <QTimer>
 #include <QMessageBox>
+#include <QListWidget>
 
 using std::min;
 using std::max;
@@ -110,6 +111,22 @@ RenderArea::RenderArea(QWidget *parent): QWidget(parent),
     setFocusPolicy(Qt::StrongFocus);
 }
 
+void RenderArea::setUCSSelectionMode(int mode) {
+    m_ucsSelectMode = mode;
+    if (mode != 0) {
+        setCursor(Qt::CrossCursor);
+    } else {
+        setCursor(Qt::OpenHandCursor);
+        m_hasHoveredFeature = false;
+    }
+    update();
+}
+
+void RenderArea::setUCS(const UserCoordSystem& ucs) {
+    m_ucs = ucs;
+    update();
+}
+
 // ----------------------------------------------------
 // 功能：数据管理，负责接收外部数据并触发重绘
 // 讲解：setData，加载孔洞和轮廓数据
@@ -161,12 +178,48 @@ void RenderArea::paintEvent(QPaintEvent *event)
 
     painter.save();
     double safeScale = (m_scaleFactor > 0.001) ? m_scaleFactor : 1.0;
-    for (const auto& block : std::as_const(m_posBlocks)) {
+    for (int i = 0; i < m_posBlocks.size(); ++i) {
+        const auto& block = m_posBlocks[i];
         QPainterPath path = block.getPath();
-        painter.setPen(QPen(QColor(255, 105, 180), 2.0 / safeScale));
-        painter.setBrush(QColor(255, 182, 193, 150));
+
+        if (i == m_highlightedBlockIndex) {
+            painter.setPen(QPen(Qt::red, 4.0 / safeScale));
+            painter.setBrush(QColor(255, 200, 150, 255));
+        } else {
+            painter.setPen(QPen(QColor(255, 165, 0), 2.0 / safeScale));
+            painter.setBrush(QColor(255, 200, 150, 150));
+        }
 
         painter.drawPath(path);
+
+        painter.save();
+        painter.translate(block.x, block.y);
+        painter.rotate(block.angle);
+        painter.scale(1.0, -1.0);
+        double fontSize = 10.0;
+        bool rotateVertical = false;
+        if (block.type == PosBlockType::Line) {
+            fontSize = std::min(block.width, block.length) * 0.3;
+            if (block.length > block.width) {
+                rotateVertical = true;
+            }
+        } else if (block.type == PosBlockType::Circle || block.type == PosBlockType::Arc) {
+            fontSize = block.radius * 0.25;
+        }
+        if (fontSize < 1.0) fontSize = 1.0;
+        if (fontSize > 50.0) fontSize = 50.0;
+        QFont f = painter.font();
+        f.setPointSizeF(fontSize);
+        painter.setFont(f);
+        painter.setPen(Qt::black);
+        if (rotateVertical) {
+            painter.rotate(90.0);
+        }
+        QFontMetricsF fm(f);
+        double tw = fm.horizontalAdvance(block.name);
+        double th = fm.height();
+        painter.drawText(QRectF(-tw/2.0, -th/2.0, tw, th), Qt::AlignCenter, block.name);
+        painter.restore();
     }
     painter.restore();
     painter.restore();
@@ -199,18 +252,153 @@ void RenderArea::paintEvent(QPaintEvent *event)
             }
         }
     }
-    if (m_transformState == TS_SelectShapeFeature && m_hasHoveredFeature) {
+
+    if ((m_transformState == TS_SelectShapeFeature || m_ucsSelectMode != 0) && m_hasHoveredFeature) {
         painter.save();
-        QPen blinkPen((QTime::currentTime().msec() % 500 < 250) ? Qt::cyan : Qt::red, 0);
+        QPen blinkPen((QTime::currentTime().msec() % 500 < 250) ? Qt::cyan : Qt::blue, 0);
         blinkPen.setWidth(m_lineWidth + 2);
         blinkPen.setCosmetic(true);
         painter.setPen(blinkPen);
-        if (m_alignTargetType == PosBlockType::Line) {
+        if (m_ucsSelectMode == 2 || (m_transformState == TS_SelectShapeFeature && m_alignTargetType == PosBlockType::Line)) {
             painter.drawLine(m_hoveredLine);
         } else {
+            double safeScale = (m_scaleFactor > 0.001) ? m_scaleFactor : 1.0;
             double r = 10.0 / safeScale;
             painter.setBrush(Qt::NoBrush);
             painter.drawEllipse(m_hoveredPoint, r, r);
+        }
+        painter.restore();
+    }
+
+    if (m_transformState == TS_DraggingToBlock && m_alignTargetType == PosBlockType::Line) {
+        QPointF p1 = m_previewTransform.map(m_alignShapeLine.p1());
+        QPointF p2 = m_previewTransform.map(m_alignShapeLine.p2());
+        double len = std::hypot(p2.x() - p1.x(), p2.y() - p1.y());
+        if (len > 1e-6) {
+            double nx = (p2.x() - p1.x()) / len;
+            double ny = (p2.y() - p1.y()) / len;
+            // 沿线段两端各延长 5000 毫米作为虚拟辅助线
+            QPointF extP1 = p1 - QPointF(nx, ny) * 5000.0;
+            QPointF extP2 = p2 + QPointF(nx, ny) * 5000.0;
+
+            painter.save();
+            QPen extPen(Qt::magenta, 2, Qt::DashLine); // 品红色虚线
+            extPen.setCosmetic(true);
+            painter.setPen(extPen);
+            painter.drawLine(extP1, extP2);
+
+            // 将用户实际选中的那条边用加粗的品红色高亮！
+            QPen solidPen(Qt::magenta, 4);
+            solidPen.setCosmetic(true);
+            painter.setPen(solidPen);
+            painter.drawLine(p1, p2);
+            painter.restore();
+        }
+    }
+
+    if (m_ucsSelectMode != 0 || m_ucs.valid || m_ucs.originValid || m_ucs.xValid || m_ucs.yValid) {
+        painter.save();
+        QTransform transform = painter.transform();
+        painter.setTransform(QTransform());
+        if (!m_ucs.valid) {
+            if (m_ucs.originValid) {
+                QPoint screenOrigin = transform.map(m_ucs.origin).toPoint();
+                painter.setBrush(Qt::blue);
+                painter.setPen(Qt::NoPen);
+                painter.drawEllipse(screenOrigin, 6, 6);
+            }
+            if (m_ucs.xValid) {
+                QPoint p1 = transform.map(m_ucs.xLine.p1()).toPoint();
+                QPoint p2 = transform.map(m_ucs.xLine.p2()).toPoint();
+                QPen xPen(Qt::red, 2);
+                painter.setPen(xPen);
+                painter.drawLine(p1, p2);
+
+                // 在所选线段的中心画方向箭头
+                QPoint center = (p1 + p2) / 2;
+                painter.save();
+                painter.translate(center);
+                // 屏幕坐标系的 Y 轴是向下的，所以需要对数学坐标的 Y 取反
+                painter.rotate(std::atan2(-m_ucs.xAxis.y(), m_ucs.xAxis.x()) * 180.0 / M_PI);
+                painter.setBrush(Qt::red);
+                QPolygonF arrow; arrow << QPointF(0, 0) << QPointF(-12, 5) << QPointF(-12, -5);
+                painter.drawPolygon(arrow);
+                painter.restore();
+            }
+            if (m_ucs.yValid) {
+                QPoint p1 = transform.map(m_ucs.yLine.p1()).toPoint();
+                QPoint p2 = transform.map(m_ucs.yLine.p2()).toPoint();
+                QPen yPen(Qt::green, 2);
+                painter.setPen(yPen);
+                painter.drawLine(p1, p2);
+
+                // 在所选线段的中心画方向箭头
+                QPoint center = (p1 + p2) / 2;
+                painter.save();
+                painter.translate(center);
+                painter.rotate(std::atan2(-m_ucs.yAxis.y(), m_ucs.yAxis.x()) * 180.0 / M_PI);
+                painter.setBrush(Qt::green);
+                QPolygonF arrow; arrow << QPointF(0, 0) << QPointF(-12, 5) << QPointF(-12, -5);
+                painter.drawPolygon(arrow);
+                painter.restore();
+            }
+        }
+        // 2. 最终坐标系建立完毕的显示
+        else {
+            QPoint screenOrigin = transform.map(m_ucs.origin).toPoint();
+            double axisLen = 60.0; // 屏幕物理像素长度 (不随鼠标滚轮变化)
+
+            // 画固定大小的原点
+            painter.setBrush(Qt::blue);
+            painter.setPen(Qt::NoPen);
+            painter.drawEllipse(screenOrigin, 6, 6);
+
+            QFont f = painter.font();
+            f.setPointSize(12);
+            f.setBold(true);
+            painter.setFont(f);
+
+            // 画 X 轴 (红色)
+            if (m_ucs.xAxis.length() > 0.1) {
+                QPointF xEndDxf = m_ucs.origin + QPointF(m_ucs.xAxis.x(), m_ucs.xAxis.y()) * (axisLen / m_scaleFactor);
+                QPoint screenXEnd = transform.map(xEndDxf).toPoint();
+
+                QPen xPen(Qt::red, 2);
+                painter.setPen(xPen);
+                painter.drawLine(screenOrigin, screenXEnd);
+
+                painter.save();
+                painter.translate(screenXEnd);
+                painter.rotate(std::atan2(screenXEnd.y() - screenOrigin.y(), screenXEnd.x() - screenOrigin.x()) * 180.0 / M_PI);
+                painter.setBrush(Qt::red);
+                QPolygonF arrow; arrow << QPointF(0, 0) << QPointF(-12, 5) << QPointF(-12, -5);
+                painter.drawPolygon(arrow);
+                painter.restore();
+
+                painter.setPen(Qt::red);
+                painter.drawText(screenXEnd + QPoint(5, 5), "X");
+            }
+
+            // 画 Y 轴 (绿色)
+            if (m_ucs.yAxis.length() > 0.1) {
+                QPointF yEndDxf = m_ucs.origin + QPointF(m_ucs.yAxis.x(), m_ucs.yAxis.y()) * (axisLen / m_scaleFactor);
+                QPoint screenYEnd = transform.map(yEndDxf).toPoint();
+
+                QPen yPen(Qt::green, 2);
+                painter.setPen(yPen);
+                painter.drawLine(screenOrigin, screenYEnd);
+
+                painter.save();
+                painter.translate(screenYEnd);
+                painter.rotate(std::atan2(screenYEnd.y() - screenOrigin.y(), screenYEnd.x() - screenOrigin.x()) * 180.0 / M_PI);
+                painter.setBrush(Qt::green);
+                QPolygonF arrow; arrow << QPointF(0, 0) << QPointF(-12, 5) << QPointF(-12, -5);
+                painter.drawPolygon(arrow);
+                painter.restore();
+
+                painter.setPen(Qt::green);
+                painter.drawText(screenYEnd + QPoint(5, 5), "Y");
+            }
         }
         painter.restore();
     }
@@ -264,6 +452,77 @@ void RenderArea::paintEvent(QPaintEvent *event)
         painter.drawLine(p1, p2);
         painter.restore();
     }
+
+    if (m_ucs.valid) {
+        painter.save();
+        // 确保使用无任何缩放/平移的纯净屏幕像素坐标系
+        painter.setTransform(QTransform());
+
+        // 构造要显示的信息文本
+        QString ucsText = QString("UCS 状态: 激活\n原点坐标: ( %1 , %2 )")
+                              .arg(m_ucs.origin.x(), 0, 'f', 2).arg(m_ucs.origin.y(), 0, 'f', 2);
+
+        // 设置字体
+        QFont hudFont = painter.font();
+        hudFont.setPointSize(10);
+        hudFont.setBold(true);
+        hudFont.setFamily("Consolas");
+
+        // 计算文字所占的宽高
+        QFontMetrics fm(hudFont);
+        int textWidth = 0;
+        int textHeight = 0;
+        QStringList lines = ucsText.split('\n');
+        for (const QString& line : lines) {
+            textWidth = std::max(textWidth, fm.horizontalAdvance(line));
+            textHeight += fm.height() + 2;
+        }
+
+        // 定义面板的边距和右下角位置
+        int padding = 12;
+        int rectW = textWidth + padding * 2;
+        int rectH = textHeight + padding * 2;
+        int x = width() - rectW - 20;  // 距离右边缘 20 像素
+        int y = height() - rectH - 20; // 距离下边缘 20 像素
+
+        QRect bgRect(x, y, rectW, rectH);
+
+        // 画一个半透明的黑色工业风背景板
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(30, 30, 30, 180)); // 180 意味着 70% 的不透明度
+        painter.drawRoundedRect(bgRect, 6, 6);
+
+        // 画出白色的文字
+        painter.setPen(Qt::white);
+        QRect textRect(x + padding, y + padding, textWidth, textHeight);
+        painter.drawText(textRect, Qt::AlignLeft | Qt::AlignTop, ucsText);
+
+        painter.restore();
+    }
+
+    if (m_highlightedConstraintIndex >= 0 && m_highlightedConstraintIndex < m_alignConstraints.size()) {
+        auto& c = m_alignConstraints[m_highlightedConstraintIndex];
+        painter.save();
+        QTransform t;
+        t.translate(width() / 2.0, height() / 2.0);
+        t.scale(m_scaleFactor, -m_scaleFactor);
+        t.translate(m_panOffsetDXF.x(), m_panOffsetDXF.y());
+
+        painter.setTransform(QTransform()); // 回归屏幕坐标系画定宽粗线
+        QPen hlPen(Qt::magenta, 4);
+        painter.setPen(hlPen);
+        painter.setBrush(Qt::NoBrush);
+
+        if (c.type == PosBlockType::Line) {
+            QPoint p1 = t.map(c.shapeLine.p1()).toPoint();
+            QPoint p2 = t.map(c.shapeLine.p2()).toPoint();
+            painter.drawLine(p1, p2);
+        } else {
+            QPoint p = t.map(c.shapePt).toPoint();
+            painter.drawEllipse(p, 10, 10);
+        }
+        painter.restore();
+    }
 }
 
 // ----------------------------------------------------
@@ -296,6 +555,18 @@ void RenderArea::mousePressEvent(QMouseEvent *event) {
         m_isMiddlePanning = true;
         setCursor(Qt::ClosedHandCursor);
         update();
+        event->accept();
+        return;
+    }
+
+    if (m_ucsSelectMode != 0 && event->button() == Qt::LeftButton) {
+        if (m_hasHoveredFeature) {
+            if (m_ucsSelectMode == 1) {
+                emit ucsPointSelected(m_hoveredPoint);
+            } else if (m_ucsSelectMode == 2) {
+                emit ucsLineSelected(m_hoveredLine);
+            }
+        }
         event->accept();
         return;
     }
@@ -362,7 +633,6 @@ void RenderArea::mousePressEvent(QMouseEvent *event) {
             return;
 
         } else if (m_transformState == TS_SecondPoint && m_isMirrorMode) {
-            // 👇【核心修复点】：把它移到了最外层 if 的内部！
             // 镜像模式的第二点点击！
             if (!m_isSnapped) {
                 QTransform transform;
@@ -412,7 +682,6 @@ void RenderArea::mousePressEvent(QMouseEvent *event) {
             event->accept();
             return;
         }else if (m_transformState == TS_SelectShapeFeature) {
-            // 点击也能确认选中特征，和回车效果一样
             if (m_hasHoveredFeature) {
                 m_alignShapeLine = m_hoveredLine;
                 m_alignShapePoint = m_hoveredPoint;
@@ -423,7 +692,6 @@ void RenderArea::mousePressEvent(QMouseEvent *event) {
             event->accept();
             return;
         } else if (m_transformState == TS_DraggingToBlock) {
-            // 拖拽过程中点击左键，确认放置
             if (m_isSnappedToBlock && m_snappedBlockIndex >= 0) {
                 applyAlignmentConstraint(m_posBlocks[m_snappedBlockIndex]);
             } else {
@@ -476,6 +744,268 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event) {
         event->accept();
         return;
     }
+
+    if (m_ucsSelectMode != 0) {
+        m_hasHoveredFeature = false;
+        QTransform transform;
+        transform.translate(width() / 2.0, height() / 2.0);
+        transform.scale(m_scaleFactor, -m_scaleFactor);
+        transform.translate(m_panOffsetDXF.x(), m_panOffsetDXF.y());
+        QPointF dxfPos = transform.inverted().map(QPointF(event->pos()));
+
+        double minDist = 15.0 / m_scaleFactor;
+
+        for (int idx = 0; idx < m_displayPaths.size(); ++idx) {
+            const auto& contour = m_displayPaths[idx];
+
+            if (m_ucsSelectMode == 2) { // 选线
+                if (contour.type == "直线" || contour.type.contains("多段线") || contour.type.contains("矩形")) {
+                    for (int i = 0; i < contour.points.size() - 1; ++i) {
+                        QPointF p1 = contour.points[i];
+                        QPointF p2 = contour.points[i+1];
+                        double dist = distancePointToSegment(dxfPos, p1, p2);
+                        if (dist < minDist) {
+                            minDist = dist;
+                            m_hasHoveredFeature = true;
+                            m_hoveredLine = QLineF(p1, p2);
+                            m_hoveredPoint = (p1 + p2) / 2.0;
+                        }
+                    }
+                }
+            } else if (m_ucsSelectMode == 1) { // 选点
+                if (contour.type == "圆" || contour.type.contains("弧") || contour.type.contains("拟合") || contour.type.contains("样条")) {
+                    QPointF center = getShapeCenter(contour);
+                    double dist = std::hypot(center.x() - dxfPos.x(), center.y() - dxfPos.y());
+                    if (dist < minDist) {
+                        minDist = dist; m_hasHoveredFeature = true; m_hoveredPoint = center;
+                    }
+                } else {
+                    for (const QPointF& pt : contour.points) {
+                        double dist = std::hypot(pt.x() - dxfPos.x(), pt.y() - dxfPos.y());
+                        if (dist < minDist) {
+                            minDist = dist; m_hasHoveredFeature = true; m_hoveredPoint = pt;
+                        }
+                    }
+                }
+            }
+        }
+        update();
+        event->accept();
+        return;
+    }
+
+    if (m_isMoveMode && m_transformState == TS_SelectShapeFeature) {
+        m_hasHoveredFeature = false;
+        QTransform transform;
+        transform.translate(width() / 2.0, height() / 2.0);
+        transform.scale(m_scaleFactor, -m_scaleFactor);
+        transform.translate(m_panOffsetDXF.x(), m_panOffsetDXF.y());
+        QPointF dxfPos = transform.inverted().map(QPointF(event->pos()));
+
+        double minDist = 15.0 / m_scaleFactor;
+
+        for (int idx : std::as_const(m_selectedPathIndices)) {
+            if (idx < 0 || idx >= m_displayPaths.size()) continue;
+            const auto& contour = m_displayPaths[idx];
+
+            if (m_alignTargetType == PosBlockType::Line) {
+                if (contour.type == "圆" || contour.type.contains("弧") || contour.type.contains("拟合") || contour.type.contains("样条")) {
+                    continue;
+                }
+                // 直线对齐：只吸附图元里的直线段
+                for (int i = 0; i < contour.points.size() - 1; ++i) {
+                    QPointF p1 = contour.points[i];
+                    QPointF p2 = contour.points[i+1];
+                    double dx = p2.x() - p1.x();
+                    double dy = p2.y() - p1.y();
+                    double len = std::hypot(dx, dy);
+                    if (len < 1e-6) continue;
+                    double distToSeg = distancePointToSegment(dxfPos, p1, p2);
+                    if (distToSeg < minDist) {
+                        minDist = distToSeg;
+                        m_hasHoveredFeature = true;
+                        m_hoveredLine = QLineF(p1, p2);
+                        // 将抓取点严格设定为鼠标在无限长直线上的垂直投影点，实现平滑抓取！
+                        double t = ((dxfPos.x() - p1.x()) * dx + (dxfPos.y() - p1.y()) * dy) / (len * len);
+                        m_hoveredPoint = QPointF(p1.x() + t * dx, p1.y() + t * dy);
+                    }
+                }
+            } else if (m_alignTargetType == PosBlockType::Point || m_alignTargetType == PosBlockType::Arc || m_alignTargetType == PosBlockType::Circle) {
+                // 点对齐/圆对齐：智能抛弃圆弧上的碎点
+                if (contour.type == "圆" || contour.type.contains("弧") || contour.type.contains("拟合") || contour.type.contains("样条")) {
+                    QPointF center = getShapeCenter(contour);
+                    double dist = std::hypot(center.x() - dxfPos.x(), center.y() - dxfPos.y());
+                    if (dist < minDist) {
+                        minDist = dist; m_hasHoveredFeature = true; m_hoveredPoint = center;
+                    }
+                } else if (m_alignTargetType == PosBlockType::Point) {
+                    // 折线只吸附端点
+                    for (const QPointF& pt : contour.points) {
+                        double dist = std::hypot(pt.x() - dxfPos.x(), pt.y() - dxfPos.y());
+                        if (dist < minDist) {
+                            minDist = dist; m_hasHoveredFeature = true; m_hoveredPoint = pt;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 允许额外吸附：所有选中零件构成的物理包围盒中心
+        if (m_alignTargetType == PosBlockType::Point) {
+            double selMinX = std::numeric_limits<double>::max(); double selMaxX = std::numeric_limits<double>::lowest();
+            double selMinY = std::numeric_limits<double>::max(); double selMaxY = std::numeric_limits<double>::lowest();
+            bool hasSel = false;
+            for (int idx : std::as_const(m_selectedPathIndices)) {
+                if (idx < 0 || idx >= m_displayPaths.size()) continue;
+                for (const QPointF& pt : m_displayPaths[idx].points) {
+                    if (pt.x() < selMinX) selMinX = pt.x(); if (pt.x() > selMaxX) selMaxX = pt.x();
+                    if (pt.y() < selMinY) selMinY = pt.y(); if (pt.y() > selMaxY) selMaxY = pt.y();
+                }
+                hasSel = true;
+            }
+            if (hasSel) {
+                QPointF center((selMinX + selMaxX)/2.0, (selMinY + selMaxY)/2.0);
+                double dist = std::hypot(center.x() - dxfPos.x(), center.y() - dxfPos.y());
+                if (dist < minDist) {
+                    minDist = dist; m_hasHoveredFeature = true; m_hoveredPoint = center;
+                }
+            }
+        }
+        update();
+        event->accept();
+        return;
+    }
+
+    else if (m_isMoveMode && m_transformState == TS_DraggingToBlock) {
+        QTransform transform;
+        transform.translate(width() / 2.0, height() / 2.0);
+        transform.scale(m_scaleFactor, -m_scaleFactor);
+        transform.translate(m_panOffsetDXF.x(), m_panOffsetDXF.y());
+        QPointF dxfPos = transform.inverted().map(QPointF(event->pos()));
+
+        m_isSnappedToBlock = false;
+        m_snappedBlockIndex = -1;
+        double minBlockDist = 30.0 / m_scaleFactor;
+
+        for (int i = 0; i < m_posBlocks.size(); ++i) {
+            const auto& block = m_posBlocks[i];
+            if (block.type == m_alignTargetType) {
+                double dist = 0.0;
+                if (block.type == PosBlockType::Line) {
+                    QTransform blockT;
+                    blockT.translate(block.x, block.y);
+                    blockT.rotate(block.angle);
+                    QPointF localPos = blockT.inverted().map(dxfPos);
+                    dist = std::min(std::abs(localPos.x() - block.width / 2.0), std::abs(localPos.x() + block.width / 2.0));
+                } else {
+                    dist = std::hypot(block.x - dxfPos.x(), block.y - dxfPos.y());
+                }
+
+                if (dist < minBlockDist) {
+                    minBlockDist = dist;
+                    m_isSnappedToBlock = true;
+                    m_snappedBlockIndex = i;
+                }
+            }
+        }
+
+        m_previewTransform.reset();
+
+        QPointF targetWorldPos = dxfPos;
+        if (m_isSnappedToBlock) {
+            const auto& block = m_posBlocks[m_snappedBlockIndex];
+            if (block.type == PosBlockType::Line) {
+                QTransform blockT;
+                blockT.translate(block.x, block.y);
+                blockT.rotate(block.angle);
+                QPointF localPos = blockT.inverted().map(dxfPos);
+                double snapLx = (localPos.x() > 0) ? (block.width / 2.0) : (-block.width / 2.0);
+                targetWorldPos = blockT.map(QPointF(snapLx, localPos.y()));
+            } else {
+                targetWorldPos = QPointF(block.x, block.y);
+            }
+        }
+
+        if (m_alignConstraints.size() == 1) {
+            auto c1 = m_alignConstraints[0];
+            if (c1.type == PosBlockType::Line) {
+                double rad = c1.block.angle * M_PI / 180.0;
+                QPointF D(-std::sin(rad), std::cos(rad)); // 沿着第一条挡板滑动的方向向量
+
+                if (m_isSnappedToBlock && m_posBlocks[m_snappedBlockIndex].type == PosBlockType::Line) {
+                    const auto& block2 = m_posBlocks[m_snappedBlockIndex];
+                    double rad2 = block2.angle * M_PI / 180.0;
+                    QPointF N2(std::cos(rad2), std::sin(rad2)); // 目标挡板的法向量
+
+                    QTransform blockT;
+                    blockT.translate(block2.x, block2.y);
+                    blockT.rotate(block2.angle);
+                    QPointF localPos = blockT.inverted().map(dxfPos);
+                    double snapLx = (localPos.x() > 0) ? (block2.width / 2.0) : (-block2.width / 2.0);
+                    QPointF P2 = blockT.map(QPointF(snapLx, 0)); // 目标挡板边缘上的一点
+
+                    // 计算两条直线的几何交界点，并滑动过去
+                    double denom = D.x() * N2.x() + D.y() * N2.y();
+                    if (std::abs(denom) > 1e-4) {
+                        double t = ((P2.x() - m_alignShapePoint.x()) * N2.x() + (P2.y() - m_alignShapePoint.y()) * N2.y()) / denom;
+                        m_previewTransform.translate(t * D.x(), t * D.y());
+                    } else {
+                        // 平行退化处理
+                        QPointF T(targetWorldPos.x() - m_alignShapePoint.x(), targetWorldPos.y() - m_alignShapePoint.y());
+                        double proj = T.x() * D.x() + T.y() * D.y();
+                        m_previewTransform.translate(proj * D.x(), proj * D.y());
+                    }
+                } else {
+                    QPointF T(targetWorldPos.x() - m_alignShapePoint.x(), targetWorldPos.y() - m_alignShapePoint.y());
+                    double proj = T.x() * D.x() + T.y() * D.y();
+                    m_previewTransform.translate(proj * D.x(), proj * D.y());
+                }
+            } else {
+                double angleShape = std::atan2(m_alignShapePoint.y() - c1.block.y, m_alignShapePoint.x() - c1.block.x);
+                double angleMouse = std::atan2(targetWorldPos.y() - c1.block.y, targetWorldPos.x() - c1.block.x);
+                double angleDiff = (angleMouse - angleShape) * 180.0 / M_PI;
+                m_previewTransform.translate(c1.block.x, c1.block.y);
+                m_previewTransform.rotate(angleDiff);
+                m_previewTransform.translate(-c1.block.x, -c1.block.y);
+            }
+        } else {
+            // 没有约束时：自由平移和寻点
+            if (m_isSnappedToBlock) {
+                const auto& block = m_posBlocks[m_snappedBlockIndex];
+                if (block.type == PosBlockType::Line) {
+                    QTransform blockT;
+                    blockT.translate(block.x, block.y);
+                    blockT.rotate(block.angle);
+                    QPointF localPos = blockT.inverted().map(dxfPos); // 将鼠标转入挡块内部坐标系
+
+                    // 找到靠得最近的那条长边 (左边缘或右边缘)
+                    double snapLx = (localPos.x() > 0) ? (block.width / 2.0) : (-block.width / 2.0);
+                    double ly = localPos.y(); // 允许纵向滑动
+                    QPointF targetWorldPos = blockT.map(QPointF(snapLx, ly));
+
+                    // 处理角度贴合
+                    double shapeAngle = std::atan2(m_alignShapeLine.dy(), m_alignShapeLine.dx()) * 180.0 / M_PI;
+                    double targetAngle = block.angle + 90.0;
+                    double angleDiff = targetAngle - shapeAngle;
+                    while (angleDiff > 90.0) angleDiff -= 180.0;
+                    while (angleDiff <= -90.0) angleDiff += 180.0;
+
+                    m_previewTransform.translate(targetWorldPos.x(), targetWorldPos.y());
+                    m_previewTransform.rotate(angleDiff);
+                    m_previewTransform.translate(-m_alignShapePoint.x(), -m_alignShapePoint.y());
+                } else {
+                    // 圆/点定位：同心直接贴合
+                    m_previewTransform.translate(block.x - m_alignShapePoint.x(), block.y - m_alignShapePoint.y());
+                }
+            } else {
+                m_previewTransform.translate(dxfPos.x() - m_alignShapePoint.x(), dxfPos.y() - m_alignShapePoint.y());
+            }
+        }
+        update();
+        event->accept();
+        return;
+    }
+
     if (m_isMoveMode || m_isRotateMode || m_isMirrorMode) {
         if (m_transformState == TS_Select && m_isLassoDragging) {
             m_lassoCurrentPos = event->pos();
@@ -483,7 +1013,7 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event) {
             update();
             event->accept();
             return;
-        } else if (m_transformState == TS_BasePoint || m_transformState == TS_SecondPoint) { // 👈 加入 TS_SecondPoint
+        } else if (m_transformState == TS_BasePoint || m_transformState == TS_SecondPoint) {
             findSnapPoint(event->pos());
             update();
             event->accept();
@@ -503,108 +1033,6 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event) {
         m_lastMousePos = event->pos();
         update();
         event->accept();
-    }
-    if (m_isMoveMode && m_transformState == TS_SelectShapeFeature) {
-        m_hasHoveredFeature = false;
-        QTransform transform;
-        transform.translate(width() / 2.0, height() / 2.0);
-        transform.scale(m_scaleFactor, -m_scaleFactor);
-        transform.translate(m_panOffsetDXF.x(), m_panOffsetDXF.y());
-        QPointF dxfPos = transform.inverted().map(QPointF(event->pos()));
-
-        double minDist = 15.0 / m_scaleFactor;
-
-        for (int idx : std::as_const(m_selectedPathIndices)) {
-            if (idx < 0 || idx >= m_displayPaths.size()) continue;
-            const auto& contour = m_displayPaths[idx];
-
-            if (m_alignTargetType == PosBlockType::Line) {
-                for (int i = 0; i < contour.points.size() - 1; ++i) {
-                    QPointF p1 = contour.points[i];
-                    QPointF p2 = contour.points[i+1];
-                    double dist = distancePointToSegment(dxfPos, p1, p2);
-                    if (dist < minDist) {
-                        minDist = dist;
-                        m_hasHoveredFeature = true;
-                        m_hoveredLine = QLineF(p1, p2);
-                        m_hoveredPoint = (p1 + p2) / 2.0; // 线段中点作为旋转中心
-                    }
-                }
-            } else if (m_alignTargetType == PosBlockType::Point) {
-                for (const QPointF& pt : contour.points) {
-                    double dist = std::hypot(pt.x() - dxfPos.x(), pt.y() - dxfPos.y());
-                    if (dist < minDist) {
-                        minDist = dist;
-                        m_hasHoveredFeature = true;
-                        m_hoveredPoint = pt;
-                    }
-                }
-            } else if (m_alignTargetType == PosBlockType::Arc || m_alignTargetType == PosBlockType::Circle) {
-                if (contour.type == "圆" || contour.type.contains("弧") || contour.type.contains("拟合") || contour.type.contains("样条")) {
-                    double cMinX = contour.points[0].x(), cMaxX = cMinX, cMinY = contour.points[0].y(), cMaxY = cMinY;
-                    for (const QPointF& pt : contour.points) {
-                        if (pt.x() < cMinX) cMinX = pt.x();
-                        if (pt.x() > cMaxX) cMaxX = pt.x();
-                        if (pt.y() < cMinY) cMinY = pt.y();
-                        if (pt.y() > cMaxY) cMaxY = pt.y();
-                    }
-                    QPointF center((cMinX + cMaxX)/2.0, (cMinY + cMaxY)/2.0);
-                    double dist = std::hypot(center.x() - dxfPos.x(), center.y() - dxfPos.y());
-                    if (dist < minDist) {
-                        minDist = dist;
-                        m_hasHoveredFeature = true;
-                        m_hoveredPoint = center;
-                    }
-                }
-            }
-        }
-        update();
-        event->accept();
-        return;
-    }
-    else if (m_isMoveMode && m_transformState == TS_DraggingToBlock) {
-        QTransform transform;
-        transform.translate(width() / 2.0, height() / 2.0);
-        transform.scale(m_scaleFactor, -m_scaleFactor);
-        transform.translate(m_panOffsetDXF.x(), m_panOffsetDXF.y());
-        QPointF dxfPos = transform.inverted().map(QPointF(event->pos()));
-
-        m_isSnappedToBlock = false;
-        m_snappedBlockIndex = -1;
-        double minBlockDist = 30.0 / m_scaleFactor; // 吸附范围大一点
-
-        for (int i = 0; i < m_posBlocks.size(); ++i) {
-            const auto& block = m_posBlocks[i];
-            if (block.type == m_alignTargetType) {
-                double dist = std::hypot(block.x - dxfPos.x(), block.y - dxfPos.y());
-                if (dist < minBlockDist) {
-                    minBlockDist = dist;
-                    m_isSnappedToBlock = true;
-                    m_snappedBlockIndex = i;
-                }
-            }
-        }
-
-        m_previewTransform.reset();
-        if (m_isSnappedToBlock) {
-            const auto& block = m_posBlocks[m_snappedBlockIndex];
-            if (block.type == PosBlockType::Line) {
-                double shapeAngle = std::atan2(m_alignShapeLine.dy(), m_alignShapeLine.dx()) * 180.0 / M_PI;
-                double angleDiff = block.angle - shapeAngle;
-                m_previewTransform.translate(block.x, block.y);
-                m_previewTransform.rotate(angleDiff);
-                m_previewTransform.translate(-m_alignShapePoint.x(), -m_alignShapePoint.y());
-            } else {
-                m_previewTransform.translate(block.x - m_alignShapePoint.x(), block.y - m_alignShapePoint.y());
-            }
-        } else {
-            // 没有吸附时，自由跟着鼠标走
-            m_previewTransform.translate(dxfPos.x() - m_alignShapePoint.x(), dxfPos.y() - m_alignShapePoint.y());
-        }
-
-        update();
-        event->accept();
-        return;
     }
 }
 
@@ -759,7 +1187,10 @@ void RenderArea::keyPressEvent(QKeyEvent *event) {
         }
     }
     else if (event->key() == Qt::Key_Escape) {
-        if (m_isMoveMode || m_isRotateMode || m_isMirrorMode) {
+        if (m_ucsSelectMode != 0) {
+            setUCSSelectionMode(0);
+            update();
+        } else if (m_isMoveMode || m_isRotateMode || m_isMirrorMode) {
             if (m_transformState == TS_Input || m_transformState == TS_SecondPoint) {
                 if (m_isMoveMode) m_moveInputWidget->hide();
                 if (m_isRotateMode) m_rotateInputWidget->hide();
@@ -789,7 +1220,6 @@ void RenderArea::keyPressEvent(QKeyEvent *event) {
             if (m_isSnappedToBlock && m_snappedBlockIndex >= 0) {
                 applyAlignmentConstraint(m_posBlocks[m_snappedBlockIndex]);
             } else {
-                // 自由移动：把预览矩阵直接固化到数据中
                 for (int idx : std::as_const(m_selectedPathIndices)) {
                     for (int i = 0; i < m_displayPaths[idx].points.size(); ++i) {
                         m_displayPaths[idx].points[i] = m_previewTransform.map(m_displayPaths[idx].points[i]);
@@ -802,7 +1232,6 @@ void RenderArea::keyPressEvent(QKeyEvent *event) {
                 update();
             }
         }
-        // 原本的弹出二级菜单逻辑
         else if (m_isMoveMode && m_transformState == TS_Select && !m_selectedPathIndices.isEmpty()) {
             QMenu moveMenu(this);
             QAction* actFree = moveMenu.addAction("1. 自由移动 (输入坐标偏移)");
@@ -955,21 +1384,9 @@ void RenderArea::findSnapPoint(const QPoint &pos) {
             if (pt.y() > maxY) maxY = pt.y();
         }
 
-        if (contour.type == "圆") {
-            QPointF center((cMinX + cMaxX)/2.0, (cMinY + cMaxY)/2.0);
-            double radius = (cMaxX - cMinX)/2.0;
-            candidates << center;                                      // 圆心
-            candidates << QPointF(center.x(), center.y() + radius);    // 上象限
-            candidates << QPointF(center.x(), center.y() - radius);    // 下象限
-            candidates << QPointF(center.x() + radius, center.y());    // 右象限
-            candidates << QPointF(center.x() - radius, center.y());    // 左象限
-        }
-        else if (contour.type.contains("弧") || contour.type.contains("样条") || contour.type.contains("拟合")) {
-            candidates << contour.points.first();
-            candidates << contour.points.last();
-            candidates << QPointF((cMinX + cMaxX)/2.0, (cMinY + cMaxY)/2.0); // 几何中心
-        }
-        else {
+        if (contour.type == "圆" || contour.type.contains("弧") || contour.type.contains("拟合") || contour.type.contains("样条")) {
+            candidates << getShapeCenter(contour);
+        } else {
             for (const QPointF& pt : contour.points) {
                 candidates << pt;
             }
@@ -1074,9 +1491,24 @@ void RenderArea::setPositioningBlocks(const QList<PositioningBlock> &blocks) {
 }
 
 void RenderArea::contextMenuEvent(QContextMenuEvent *event) {
+    if (m_isMoveMode || m_isRotateMode || m_isMirrorMode || m_isEraserMode) {
+        event->ignore();
+        return;
+    }
+
     QMenu menu(this);
     QAction *actSetWidth = menu.addAction("设置线宽");
     QAction *actReorder = menu.addAction("重新按空间排序");
+
+    QAction *actMoveUCS = nullptr;
+    if (m_ucs.valid) {
+        actMoveUCS = menu.addAction(QIcon(":/img/images/shift.png"), "移动用户坐标系");
+    }
+
+    QAction *actShowConstraints = nullptr;
+    if (!m_alignConstraints.isEmpty()) {
+        actShowConstraints = menu.addAction("显示参考约束条件");
+    }
 
     // 在鼠标点击的位置弹出菜单
     QAction *res = menu.exec(event->globalPos());
@@ -1092,6 +1524,59 @@ void RenderArea::contextMenuEvent(QContextMenuEvent *event) {
     else if (res == actReorder) {
         emit reorderPathsRequested();
     }
+    else if (actMoveUCS && res == actMoveUCS) {
+        bool okX, okY;
+        double newX = QInputDialog::getDouble(this, "移动坐标系", "请输入新原点 X 坐标:", m_ucs.origin.x(), -10000, 10000, 2, &okX);
+        if (okX) {
+            double newY = QInputDialog::getDouble(this, "移动坐标系", "请输入新原点 Y 坐标:", m_ucs.origin.y(), -10000, 10000, 2, &okY);
+            if (okY) {
+                m_ucs.origin = QPointF(newX, newY);
+                update();
+            }
+        }
+    }else if (actShowConstraints && res == actShowConstraints) {
+        QDialog dlg(this);
+        dlg.setWindowTitle("查看当前的装配约束");
+        dlg.setMinimumSize(350, 250);
+        QVBoxLayout* layout = new QVBoxLayout(&dlg);
+        QLabel* info = new QLabel("点击列表中的约束条件，画布中将高亮显示：");
+        layout->addWidget(info);
+
+        QListWidget* list = new QListWidget(&dlg);
+        for (int i = 0; i < m_alignConstraints.size(); ++i) {
+            auto& c = m_alignConstraints[i];
+            QString text = QString("约束 %1: %2").arg(i + 1).arg(c.block.name.isEmpty() ? "定位块" : c.block.name);
+            list->addItem(text);
+        }
+        layout->addWidget(list);
+
+        connect(list, &QListWidget::currentRowChanged, this, [this](int row) {
+            if (row >= 0 && row < m_alignConstraints.size()) {
+                m_highlightedConstraintIndex = row;
+
+                // 查找对应的定位块索引进行高亮
+                m_highlightedBlockIndex = -1;
+                for (int i = 0; i < m_posBlocks.size(); i++) {
+                    if (std::abs(m_posBlocks[i].x - m_alignConstraints[row].block.x) < 1e-4 &&
+                        std::abs(m_posBlocks[i].y - m_alignConstraints[row].block.y) < 1e-4 &&
+                        m_posBlocks[i].type == m_alignConstraints[row].block.type) {
+                        m_highlightedBlockIndex = i;
+                        break;
+                    }
+                }
+                update(); // 触发绘图区高亮
+            }
+        });
+
+        // 窗口关闭时恢复颜色
+        connect(&dlg, &QDialog::finished, this, [this]() {
+            m_highlightedConstraintIndex = -1;
+            m_highlightedBlockIndex = -1;
+            update();
+        });
+
+        dlg.exec();
+    }
 }
 
 // =========================================================================
@@ -1099,98 +1584,122 @@ void RenderArea::contextMenuEvent(QContextMenuEvent *event) {
 // =========================================================================
 void RenderArea::applyAlignmentConstraint(const PositioningBlock& block)
 {
-    // 如果零件已经被两个几何体固定，再次添加直接弹出过约束！
     if (m_alignConstraints.size() >= 2) {
-        QMessageBox::warning(this, "过约束 (Over-Constrained)", "该零件已被多个定位块完全固定！\n继续添加定位将导致自由度冲突，出现过约束！");
-        m_transformState = TS_Select;
-        update();
-        return;
-    }
-
-    // 情况 1：已有 1 个约束，现在试图附加第 2 个约束
-    if (m_alignConstraints.size() == 1) {
-        auto c1 = m_alignConstraints[0];
-
-        // 当两次都是【点 / 圆心 / 圆弧心】定位时：触发距离锁死检测
-        if (c1.type != PosBlockType::Line && block.type != PosBlockType::Line) {
-            // 算出图形上两点特征的距离，和两个定位块的距离
-            double d_shape = std::hypot(m_alignShapePoint.x() - c1.block.x, m_alignShapePoint.y() - c1.block.y);
-            double d_block = std::hypot(block.x - c1.block.x, block.y - c1.block.y);
-
-            // 1.0mm 的制造容差
-            if (std::abs(d_shape - d_block) > 1.0) {
-                QMessageBox::warning(this, "过约束拦截",
-                                     QString("无法吸附！\n零件上的特征间距为 %1 mm\n两个定位块的间距为 %2 mm\n物理尺寸不匹配，发生过约束！")
-                                         .arg(d_shape, 0, 'f', 2).arg(d_block, 0, 'f', 2));
-                m_transformState = TS_Select; update(); return;
-            }
-
-            // 尺寸一致：执行刚体旋转，绕第一个约束点旋转，让第二个点合拢
-            double angleShape = std::atan2(m_alignShapePoint.y() - c1.block.y, m_alignShapePoint.x() - c1.block.x);
-            double angleBlock = std::atan2(block.y - c1.block.y, block.x - c1.block.x);
-            double angleDiff = angleBlock - angleShape;
-
-            double cosA = std::cos(angleDiff);
-            double sinA = std::sin(angleDiff);
-            for (int idx : std::as_const(m_selectedPathIndices)) {
-                for (int i = 0; i < m_displayPaths[idx].points.size(); ++i) {
-                    double x = m_displayPaths[idx].points[i].x() - c1.block.x;
-                    double y = m_displayPaths[idx].points[i].y() - c1.block.y;
-                    m_displayPaths[idx].points[i].setX(x * cosA - y * sinA + c1.block.x);
-                    m_displayPaths[idx].points[i].setY(x * sinA + y * cosA + c1.block.y);
-                }
-            }
-            m_alignConstraints.append({block.type, m_alignShapePoint, QLineF(), block});
-            emit pathsMoved(m_displayPaths);
-            m_transformState = TS_Select; update();
-            QMessageBox::information(this, "定位成功", "两点定位完成，该零件目前处于全固定状态。");
-            return;
-        }
-
-        // 当涉及 直线约束 + 其他约束时，判定逻辑极其复杂，直接保护性拦截
-        QMessageBox::warning(this, "过约束警告", "当前零件已被直线或其他复杂几何体约束！\n叠加此定位块将导致运动自由度打架 (过约束)，已自动拦截！");
+        QMessageBox::warning(this, "过约束 (Over-Constrained)", "该零件已被两个定位块完全固定 (0自由度)！\n继续添加定位将产生过约束冲突！");
         m_transformState = TS_Select; update(); return;
     }
 
-    // 情况 2：这是第 1 个约束 (自由度拉满，可以随意平移旋转)
-    if (m_alignConstraints.isEmpty()) {
-        if (block.type == PosBlockType::Line) {
-            // 【直线对齐】：将选中直线的中心点平移到块的中心，并旋转到块的角度
-            QPointF shapeCenter = (m_alignShapeLine.p1() + m_alignShapeLine.p2()) / 2.0;
-            double shapeAngle = std::atan2(m_alignShapeLine.p2().y() - m_alignShapeLine.p1().y(), m_alignShapeLine.p2().x() - m_alignShapeLine.p1().x()) * 180.0 / M_PI;
-            double angleDiff = block.angle - shapeAngle;
+    if (m_alignConstraints.size() == 1) {
+        auto c1 = m_alignConstraints[0];
 
-            double angleRad = angleDiff * M_PI / 180.0;
-            double cosA = std::cos(angleRad);
-            double sinA = std::sin(angleRad);
+        if (c1.type != PosBlockType::Line && block.type != PosBlockType::Line) {
+            double d_shape = std::hypot(m_alignShapePoint.x() - c1.block.x, m_alignShapePoint.y() - c1.block.y);
+            double d_block = std::hypot(block.x - c1.block.x, block.y - c1.block.y);
 
-            for (int idx : std::as_const(m_selectedPathIndices)) {
-                for (int i = 0; i < m_displayPaths[idx].points.size(); ++i) {
-                    double x = m_displayPaths[idx].points[i].x() - shapeCenter.x();
-                    double y = m_displayPaths[idx].points[i].y() - shapeCenter.y();
-                    double nx = x * cosA - y * sinA;
-                    double ny = x * sinA + y * cosA;
-                    m_displayPaths[idx].points[i].setX(nx + block.x);
-                    m_displayPaths[idx].points[i].setY(ny + block.y);
-                }
+            if (std::abs(d_shape - d_block) > 1.0) { // 1.0mm 容差
+                QMessageBox::warning(this, "过约束拦截",
+                                     QString("无法吸附！\n零件上的特征间距为 %1 mm\n两个定位块的间距为 %2 mm\n物理尺寸不匹配，发生撕裂过约束！")
+                                         .arg(d_shape, 0, 'f', 2).arg(d_block, 0, 'f', 2));
+                m_transformState = TS_Select; update(); return;
             }
-            m_alignConstraints.append({block.type, shapeCenter, m_alignShapeLine, block});
+        }else if (c1.type == PosBlockType::Line && block.type == PosBlockType::Line) {
+            double rad = c1.block.angle * M_PI / 180.0;
+            QPointF D(-std::sin(rad), std::cos(rad));
+            double rad2 = block.angle * M_PI / 180.0;
+            QPointF N2(std::cos(rad2), std::sin(rad2));
+
+            // 检查两条挡板是不是平行的
+            double denom = D.x() * N2.x() + D.y() * N2.y();
+            if (std::abs(denom) < 1e-4) {
+                QMessageBox::warning(this, "过约束拦截", "两条定位边平行，无法完成二维完全固定！");
+                m_transformState = TS_Select; update(); return;
+            }
+
+            // 校验角度强行扭曲是否超过 1 度
+            double shapeAngle = std::atan2(m_alignShapeLine.dy(), m_alignShapeLine.dx()) * 180.0 / M_PI;
+            double targetAngle = block.angle + 90.0;
+            double angleDiff = targetAngle - shapeAngle;
+            while (angleDiff > 90.0) angleDiff -= 180.0;
+            while (angleDiff <= -90.0) angleDiff += 180.0;
+
+            if (std::abs(angleDiff) > 1.0) {
+                QMessageBox::warning(this, "过约束拦截",
+                                     QString("无法吸附！\n将第二条边贴合需要强行扭转 %1 度\n这会破坏原有的第一条边贴合，引发过约束！")
+                                         .arg(angleDiff, 0, 'f', 2));
+                m_transformState = TS_Select; update(); return;
+            }
+        }else if (c1.type == PosBlockType::Line && block.type != PosBlockType::Line) {
+            double rad = c1.block.angle * M_PI / 180.0;
+            QPointF N(std::cos(rad), std::sin(rad));
+            QPointF T(block.x - m_alignShapePoint.x(), block.y - m_alignShapePoint.y());
+
+            double error = std::abs(T.x() * N.x() + T.y() * N.y());
+            if (error > 1.0) {
+                QMessageBox::warning(this, "过约束拦截",
+                                     QString("无法吸附！\n将对齐点吸附需要垂直于第一条轨道强行拉扯 %1 mm\n这会破坏原有的直线贴合，引发过约束！")
+                                         .arg(error, 0, 'f', 2));
+                m_transformState = TS_Select; update(); return;
+            }
         } else {
-            // 【点/圆心/弧心对齐】：只平移，不旋转
-            double dx = block.x - m_alignShapePoint.x();
-            double dy = block.y - m_alignShapePoint.y();
-            for (int idx : std::as_const(m_selectedPathIndices)) {
-                for (int i = 0; i < m_displayPaths[idx].points.size(); ++i) {
-                    m_displayPaths[idx].points[i].setX(m_displayPaths[idx].points[i].x() + dx);
-                    m_displayPaths[idx].points[i].setY(m_displayPaths[idx].points[i].y() + dy);
-                }
-            }
-            m_alignConstraints.append({block.type, m_alignShapePoint, QLineF(), block});
+            QMessageBox::warning(this, "过约束警告", "该组合受限自由度过于复杂！\n叠加此定位块将导致内部发生过约束，已被拦截！");
+            m_transformState = TS_Select; update(); return;
         }
+    }
 
-        emit pathsMoved(m_displayPaths);
-        // 保留选中状态，支持用户继续点其他块产生二次约束
+    for (int idx : std::as_const(m_selectedPathIndices)) {
+        for (int i = 0; i < m_displayPaths[idx].points.size(); ++i) {
+            m_displayPaths[idx].points[i] = m_previewTransform.map(m_displayPaths[idx].points[i]);
+        }
+    }
+
+    QPointF newShapePt = m_previewTransform.map(m_alignShapePoint);
+    QLineF newShapeLine = QLineF(m_previewTransform.map(m_alignShapeLine.p1()), m_previewTransform.map(m_alignShapeLine.p2()));
+    m_alignConstraints.append({block.type, newShapePt, newShapeLine, block});
+
+    emit pathsMoved(m_displayPaths);
+
+    if (m_alignConstraints.size() == 2) {
+        m_transformState = TS_Select;
+        m_selectedPathIndices.clear();
+        m_baseSelectedIndices.clear();
+        update();
+        QMessageBox::information(this, "装配完成", "多点复合定位完成，该零件目前已被全固定装配 (0自由度)。");
+    } else {
         m_transformState = TS_Select;
         update();
     }
+}
+
+// =========================================================================
+// 核心：基于解析几何，利用曲线上三点推导真实的圆心位置 (解决圆弧圆心错误问题)
+// =========================================================================
+QPointF RenderArea::getShapeCenter(const Contour& contour) {
+    if (contour.points.isEmpty()) return QPointF();
+
+    // 如果是圆或圆弧，且拥有至少3个点，利用三点共圆公式求解真实的物理圆心
+    if (contour.points.size() >= 3 && (contour.type == "圆" || contour.type.contains("弧"))) {
+        int n = contour.points.size();
+        QPointF p1 = contour.points[0];
+        QPointF p2 = contour.points[n / 3];      // 取1/3处的点
+        QPointF p3 = contour.points[2 * n / 3];  // 取2/3处的点
+
+        double D = 2 * (p1.x()*(p2.y() - p3.y()) + p2.x()*(p3.y() - p1.y()) + p3.x()*(p1.y() - p2.y()));
+        if (std::abs(D) > 1e-6) {
+            double xc = ((p1.x()*p1.x() + p1.y()*p1.y())*(p2.y() - p3.y()) +
+                         (p2.x()*p2.x() + p2.y()*p2.y())*(p3.y() - p1.y()) +
+                         (p3.x()*p3.x() + p3.y()*p3.y())*(p1.y() - p2.y())) / D;
+            double yc = ((p1.x()*p1.x() + p1.y()*p1.y())*(p3.x() - p2.x()) +
+                         (p2.x()*p2.x() + p2.y()*p2.y())*(p1.x() - p3.x()) +
+                         (p3.x()*p3.x() + p3.y()*p3.y())*(p2.x() - p1.x())) / D;
+            return QPointF(xc, yc);
+        }
+    }
+
+    // 如果不是圆，或者三点共线(退化)，则采用矩形包围盒的中心作为保底方案
+    double cMinX = contour.points[0].x(), cMaxX = cMinX, cMinY = contour.points[0].y(), cMaxY = cMinY;
+    for (const QPointF& pt : contour.points) {
+        if (pt.x() < cMinX) cMinX = pt.x(); if (pt.x() > cMaxX) cMaxX = pt.x();
+        if (pt.y() < cMinY) cMinY = pt.y(); if (pt.y() > cMaxY) cMaxY = pt.y();
+    }
+    return QPointF((cMinX + cMaxX)/2.0, (cMinY + cMaxY)/2.0);
 }

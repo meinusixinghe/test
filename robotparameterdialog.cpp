@@ -244,12 +244,23 @@ QWidget* RobotParameterDialog::createMotionPage()
     layout->addWidget(powerGroup);
 
     connect(m_manualPowerBtn, &QPushButton::clicked, this, [this]() {
-        if (m_devId == 0) return;
+        if (m_devId == 0 || !RobotAPI::IsConnected(m_devId)) return;
         m_manualPowerBtn->setEnabled(false);
         m_manualPowerBtn->setText("动作中...");
         m_manualPowerBtn->setStyleSheet("QPushButton { padding: 6px 12px; font-weight: bold; background-color: #9E9E9E; color: white; border-radius: 4px; }");
 
         runAsyncCommand([this]() {
+            if (!RobotAPI::IsApiControl(m_devId)) {
+                if (RobotAPI::EnableApiControl(true, m_devId) != 0) {
+                    QMetaObject::invokeMethod(this, [this]() {
+                        m_manualPowerBtn->setEnabled(true);
+                        m_manualPowerBtn->setText("恢复状态");
+                        QMessageBox::critical(this, "API权限拒绝", "访问拒绝 (ERROR_ACCESS_REJECTED)！\n控制柜处于安全锁定模式，不允许远程上电！");
+                    }, Qt::QueuedConnection);
+                    return;
+                }
+            }
+
             bool isEnabled = false;
             RobotAPI::GetCurrentServoStatus(isEnabled, m_devId);
 
@@ -357,12 +368,19 @@ void RobotParameterDialog::handleJogButton(int axisIndex, bool positive, bool pr
 
     unsigned int devId = m_devId;
 
-    // ==========================================
-    // 👇 核心修复：必须把网络发送放到子线程中，绝对不阻塞 UI
-    // ==========================================
     runAsyncCommand([this, axisIndex, positive, pressed, statusLabel, devId]() {
 
-        // 1. 每次按下或松开前，必须强制确认获取一次操作令牌！(极其关键)
+        if (!RobotAPI::IsConnected(devId)) return;
+
+        if (pressed && !RobotAPI::IsApiControl(devId)) {
+            if (RobotAPI::EnableApiControl(true, devId) != 0) {
+                QMetaObject::invokeMethod(this, [statusLabel]() {
+                    statusLabel->setText("状态: API访问被拒绝(检查钥匙开关)");
+                }, Qt::QueuedConnection);
+                return;
+            }
+        }
+
         RobotAPI::GetPermission(devId);
 
         int ret = 0;
@@ -370,28 +388,22 @@ void RobotParameterDialog::handleJogButton(int axisIndex, bool positive, bool pr
         // 2. 发送 Jog 指令
         switch (axisIndex) {
         case 1:
-            ret = positive ? RobotAPI::Jog1Plus(pressed, devId)
-                           : RobotAPI::Jog1Minus(pressed, devId);
+            ret = positive ? RobotAPI::Jog1Plus(pressed, devId) : RobotAPI::Jog1Minus(pressed, devId);
             break;
         case 2:
-            ret = positive ? RobotAPI::Jog2Plus(pressed, devId)
-                           : RobotAPI::Jog2Minus(pressed, devId);
+            ret = positive ? RobotAPI::Jog2Plus(pressed, devId) : RobotAPI::Jog2Minus(pressed, devId);
             break;
         case 3:
-            ret = positive ? RobotAPI::Jog3Plus(pressed, devId)
-                           : RobotAPI::Jog3Minus(pressed, devId);
+            ret = positive ? RobotAPI::Jog3Plus(pressed, devId) : RobotAPI::Jog3Minus(pressed, devId);
             break;
         case 4:
-            ret = positive ? RobotAPI::Jog4Plus(pressed, devId)
-                           : RobotAPI::Jog4Minus(pressed, devId);
+            ret = positive ? RobotAPI::Jog4Plus(pressed, devId) : RobotAPI::Jog4Minus(pressed, devId);
             break;
         case 5:
-            ret = positive ? RobotAPI::Jog5Plus(pressed, devId)
-                           : RobotAPI::Jog5Minus(pressed, devId);
+            ret = positive ? RobotAPI::Jog5Plus(pressed, devId) : RobotAPI::Jog5Minus(pressed, devId);
             break;
         case 6:
-            ret = positive ? RobotAPI::Jog6Plus(pressed, devId)
-                           : RobotAPI::Jog6Minus(pressed, devId);
+            ret = positive ? RobotAPI::Jog6Plus(pressed, devId) : RobotAPI::Jog6Minus(pressed, devId);
             break;
         }
 
@@ -399,9 +411,7 @@ void RobotParameterDialog::handleJogButton(int axisIndex, bool positive, bool pr
             if (ret == 0) {
                 statusLabel->setText(pressed ? "状态: 运行中..." : "状态: 就绪");
             } else {
-                statusLabel->setText(QString("%1失败，错误码: %2")
-                                         .arg(pressed ? "启动" : "停止")
-                                         .arg(ret));
+                statusLabel->setText(QString("%1被拒绝，错误码: %2").arg(pressed ? "启动" : "停止").arg(ret));
             }
         }, Qt::QueuedConnection);
     });
@@ -529,45 +539,55 @@ void RobotParameterDialog::updateCoordinateSystems()
     if (m_devId == 0 || !m_toolCombo || !m_userCombo) return;
 
     runAsyncCommand([this]() {
-        std::vector<std::string> toolList;
-        std::vector<std::string> userList;
-        std::string currentTool;
-        std::string currentUser;
+        QStringList tools, users;
+        QString curToolStr = "tool0", curUserStr = "wobj0";
 
-        // SDK 调用：获取列表
-        RobotAPI::GetToolNameList(toolList, m_devId);
-        RobotAPI::GetUserNameList(userList, m_devId);
+        try {
+            std::vector<std::string> toolList;
+            if (RobotAPI::GetToolNameList(toolList, m_devId) == 0) {
+                for (const auto& t : toolList) {
+                    tools << QString::fromStdString(t);
+                }
+            }
 
-        // SDK 调用：获取当前被选中的名称
-        RobotAPI::GetCurrentToolName(currentTool, m_devId);
-        RobotAPI::GetCurrentUframeName(currentUser, m_devId);
+            std::vector<std::string> userList;
+            if (RobotAPI::GetUserNameList(userList, m_devId) == 0) {
+                for (const auto& u : userList) {
+                    users << QString::fromStdString(u);
+                }
+            }
 
-        // 获取完毕后，切回主 UI 线程进行渲染
-        QMetaObject::invokeMethod(this, [this, toolList, userList, currentTool, currentUser]() {
-            // 👇【加锁】：屏蔽 comboBox 的 onChange 信号触发，防止数据刚填入就被当成用户点击下发给机器人
+            std::string currentTool;
+            if (RobotAPI::GetCurrentToolName(currentTool, m_devId) == 0) {
+                curToolStr = QString::fromStdString(currentTool);
+            }
+
+            std::string currentUser;
+            if (RobotAPI::GetCurrentUframeName(currentUser, m_devId) == 0) {
+                curUserStr = QString::fromStdString(currentUser);
+            }
+        } catch(...) {} // 防止底层跨库崩溃
+
+        // 刷新到界面
+        QMetaObject::invokeMethod(this, [this, tools, users, curToolStr, curUserStr]() {
             m_isUpdatingCoords = true;
 
-            // 1. 刷新 Tool 下拉框
             m_toolCombo->clear();
-            for (const auto& name : toolList) {
-                m_toolCombo->addItem(QString::fromStdString(name));
+            if (tools.isEmpty()) {
+                for(int i=0; i<=31; i++) m_toolCombo->addItem(QString("tool%1").arg(i));
+            } else {
+                m_toolCombo->addItems(tools);
             }
-            int toolIdx = m_toolCombo->findText(QString::fromStdString(currentTool));
-            if (toolIdx >= 0) {
-                m_toolCombo->setCurrentIndex(toolIdx);
-            }
+            m_toolCombo->setCurrentText(curToolStr);
 
-            // 2. 刷新 User 下拉框
             m_userCombo->clear();
-            for (const auto& name : userList) {
-                m_userCombo->addItem(QString::fromStdString(name));
+            if (users.isEmpty()) {
+                for(int i=0; i<=31; i++) m_userCombo->addItem(QString("wobj%1").arg(i));
+            } else {
+                m_userCombo->addItems(users);
             }
-            int userIdx = m_userCombo->findText(QString::fromStdString(currentUser));
-            if (userIdx >= 0) {
-                m_userCombo->setCurrentIndex(userIdx);
-            }
+            m_userCombo->setCurrentText(curUserStr);
 
-            // 👇【解锁】：渲染完毕，重新接受用户手动点击
             m_isUpdatingCoords = false;
         }, Qt::QueuedConnection);
     });
