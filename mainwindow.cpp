@@ -539,16 +539,6 @@ void MainWindow::setupUi()
     // 5. 绑定选项卡点击逻辑，动态切换下方工具栏的内容
     auto switchTab = [=](QAction* currentTab) {
         toolBar->clear(); // 切换时先清空下方工具栏
-        renderArea->setMoveMode(false);
-        renderArea->setRotateMode(false);
-        renderArea->setMirrorMode(false);
-        renderArea->setEraserMode(false);
-        m_floatingToolWidget->hide();
-        m_floatingToolWidget->btnMove->setChecked(false);
-        m_floatingToolWidget->btnRotate->setChecked(false);
-        m_floatingToolWidget->btnMirror->setChecked(false);
-        m_floatingToolWidget->btnEraser->setChecked(false);
-
         if (currentTab == tabFile) {
             toolBar->addAction(loadAction);
         } else if (currentTab == tabOperation) {
@@ -1296,8 +1286,6 @@ void MainWindow::onConnectTriggered()
                 showAndSaveLog(QString("正在断开机器人连接(Id: %1)...").arg(devId));
 
                 QThread* worker = QThread::create([this, devId]() mutable {
-                    RobotAPI::EnableApiControl(false, devId);
-                    RobotAPI::ReleasePermission(devId);
                     RobotAPI::DisconnectRobot(devId);
 
                     QMetaObject::invokeMethod(this, [this]() {
@@ -1336,8 +1324,7 @@ void MainWindow::onStartClicked()
         return;
     }
 
-    UserCoordSystem ucs = renderArea->getUCS();
-    TaskProgramDialog* dlg = new TaskProgramDialog(m_currentDevId, m_displayPaths, ucs, this);
+    TaskProgramDialog* dlg = new TaskProgramDialog(m_currentDevId, m_displayPaths, this);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->show();
 }
@@ -1381,8 +1368,6 @@ void MainWindow::closeEvent(QCloseEvent *event)
             RobotAPI::MOVECLEAR(devId);
             RobotAPI::TerminateProgram(devId);
             RobotAPI::PowerOff(devId);
-            RobotAPI::EnableApiControl(false, devId);
-            RobotAPI::ReleasePermission(devId);
             RobotAPI::DisconnectRobot(devId);
 
             QMetaObject::invokeMethod(this, [this]() {
@@ -2013,7 +1998,7 @@ void MainWindow::toggleRobotPower()
     } else {
         showAndSaveLog(QString("正在尝试关闭机器人(Id: %1)伺服...").arg(m_currentDevId));
 
-        int ret = RobotAPI::PowerOff(m_currentDevId);
+        int ret = RobotAPI::PowerOff();
 
         if (ret == 0) {
             m_isRobotPoweredOn = false;

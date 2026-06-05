@@ -199,14 +199,15 @@ void RenderArea::paintEvent(QPaintEvent *event)
         double fontSize = 10.0;
         bool rotateVertical = false;
         if (block.type == PosBlockType::Line) {
-            fontSize = std::min(block.width, block.length) * 0.4;
+            fontSize = std::min(block.width, block.length) * 0.3;
             if (block.length > block.width) {
                 rotateVertical = true;
             }
         } else if (block.type == PosBlockType::Circle || block.type == PosBlockType::Arc) {
-            fontSize = block.radius * 0.3;
+            fontSize = block.radius * 0.25;
         }
-        if (fontSize < 2.0) fontSize = 2.0;
+        if (fontSize < 1.0) fontSize = 1.0;
+        if (fontSize > 50.0) fontSize = 50.0;
         QFont f = painter.font();
         f.setPointSizeF(fontSize);
         painter.setFont(f);

@@ -8,65 +8,24 @@
 #include <QThread>
 #include <QMetaObject>
 #include <QMessageBox>
-#include <cmath>
-#include <QPointer>
-#include <QDebug>
 
-TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>& paths, const UserCoordSystem& ucs, QWidget *parent)
-    : QDialog(parent), m_devId(devId), m_paths(paths), m_ucs(ucs)
+// ====================================================================
+// 构造函数：解析线条序列并生成运动程序表格
+// ====================================================================
+TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>& paths, QWidget *parent)
+    : QDialog(parent), m_devId(devId)
 {
     setWindowTitle("任务程序运行控制台 (MultiMove2)");
-    setMinimumSize(1100, 500);
+    setMinimumSize(1100, 500); // 稍微加宽以容纳备注列
     setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
 
+    // 1. 运动点位编辑区
     QGroupBox* tableGroup = new QGroupBox("运行轨迹程序 (双击可手动修改坐标及速度参数)", this);
     QVBoxLayout* tableLayout = new QVBoxLayout(tableGroup);
 
-    QHBoxLayout* coordLayout = new QHBoxLayout();
-    coordLayout->addWidget(new QLabel("使用坐标系:", this));
-    m_coordCombo = new QComboBox(this);
-    m_coordCombo->addItem("默认基座坐标系 (图纸绝对坐标)", 0);
-    if (m_ucs.valid) {
-        m_coordCombo->addItem("用户自定义坐标系 (UCS相对坐标)", 1);
-        m_coordCombo->setCurrentIndex(1); // 默认优先选 UCS
-    } else {
-        m_coordCombo->addItem("用户自定义坐标系 (未建立)", 1);
-        m_coordCombo->setItemData(1, QVariant(0), Qt::UserRole - 1); // 禁用该项
-    }
-    coordLayout->addWidget(m_coordCombo);
-
-    coordLayout->addSpacing(20);
-    coordLayout->addWidget(new QLabel("机器人工具(Tool):", this));
-    m_robotToolCombo = new QComboBox(this);
-    coordLayout->addWidget(m_robotToolCombo);
-    coordLayout->addSpacing(10);
-    coordLayout->addWidget(new QLabel("机器人用户(Wobj):", this));
-    m_robotUserCombo = new QComboBox(this);
-    coordLayout->addWidget(m_robotUserCombo);
-
-    coordLayout->addStretch();
-    tableLayout->addLayout(coordLayout);
-
-    if (m_devId != 0 && RobotAPI::IsConnected(m_devId)) {
-        try {
-            std::vector<std::string> toolList, userList;
-            std::string curTool, curWobj;
-            RobotAPI::GetToolNameList(toolList, m_devId);
-            RobotAPI::GetUserNameList(userList, m_devId);
-            RobotAPI::GetCurrentToolName(curTool, m_devId);
-            RobotAPI::GetCurrentUframeName(curWobj, m_devId);
-
-            for (const auto& t : toolList) m_robotToolCombo->addItem(QString::fromStdString(t));
-            for (const auto& u : userList) m_robotUserCombo->addItem(QString::fromStdString(u));
-            m_robotToolCombo->setCurrentText(QString::fromStdString(curTool));
-            m_robotUserCombo->setCurrentText(QString::fromStdString(curWobj));
-        } catch (...) {
-            qDebug() << "获取 SDK 坐标系列表时发生内部异常，已安全拦截！";
-        }
-    }
-
+    // 👇【修改】：增加第 13 列 -> 备注
     m_table = new QTableWidget(0, 13, this);
     m_table->setHorizontalHeaderLabels({"插补模式", "坐标类型", "X", "Y", "Z", "RX", "RY", "RZ", "速度", "加速", "减速", "平滑度", "备注说明"});
     m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
@@ -85,8 +44,9 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
     tableLayout->addLayout(editLayout);
     mainLayout->addWidget(tableGroup);
 
+    // 2. 状态与控制区 (保持不变)
     QHBoxLayout* bottomLayout = new QHBoxLayout();
-    m_statusLabel = new QLabel("状态: 准备就绪...", this);
+    m_statusLabel = new QLabel("状态: 程序已生成，准备就绪...", this);
     m_statusLabel->setStyleSheet("font-weight: bold; color: #1976D2; font-size: 14px;");
     bottomLayout->addWidget(m_statusLabel);
     bottomLayout->addStretch();
@@ -109,33 +69,23 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
     connect(addBtn, &QPushButton::clicked, this, &TaskProgramDialog::onAddRowClicked);
     connect(removeBtn, &QPushButton::clicked, this, &TaskProgramDialog::onRemoveRowClicked);
     connect(syncBtn, &QPushButton::clicked, this, &TaskProgramDialog::onSyncPosClicked);
+
     connect(m_startBtn, &QPushButton::clicked, this, &TaskProgramDialog::onStartClicked);
     connect(m_pauseBtn, &QPushButton::clicked, this, &TaskProgramDialog::onPauseClicked);
     connect(m_resumeBtn, &QPushButton::clicked, this, &TaskProgramDialog::onResumeClicked);
     connect(m_resetBtn, &QPushButton::clicked, this, &TaskProgramDialog::onResetClicked);
 
-    // 下拉框改变时重新生成数据
-    connect(m_coordCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &TaskProgramDialog::generateProgram);
-
-    // 初始化生成
-    generateProgram();
-}
-
-void TaskProgramDialog::generateProgram()
-{
-    m_table->setRowCount(0);
-    bool useUcs = (m_coordCombo->currentData().toInt() == 1);
-
+    // 3. 提取当先机器人姿态 (ABC值)，以防旋转错位
     RobotAPI::RobotPos currentPose;
-    memset(&currentPose, 0, sizeof(RobotAPI::RobotPos));
-    if (m_devId != 0 && RobotAPI::IsConnected(m_devId)) {
-        RobotAPI::GetBaseCoordinatePos(currentPose, m_devId);
-    }
+    RobotAPI::GetBaseCoordinatePos(currentPose, m_devId);
 
-    QPointF lastEndPos(-99999.0, -99999.0);
+    // ====================================================================
+    // 4. 👇【核心逻辑】：将导入的线条转化为智能程序列表
+    // ====================================================================
+    QPointF lastEndPos(-99999.0, -99999.0); // 记录上一个到达的真实物理位置
 
-    for (int idx = 0; idx < m_paths.size(); ++idx) {
-        const Contour& c = m_paths[idx];
+    for (int idx = 0; idx < paths.size(); ++idx) {
+        const Contour& c = paths[idx];
         if (c.points.isEmpty()) continue;
 
         QString typeStr = c.type;
@@ -151,6 +101,7 @@ void TaskProgramDialog::generateProgram()
         bool isArc = typeStr.contains("弧") || typeStr.contains("Arc", Qt::CaseInsensitive);
 
         if (isCircle && n >= 4) {
+            // 【整圆处理】：拆分为两段完美的圆弧 (共5个特征点)
             targetPoints << c.points[0];         targetMoveTypes << 2; targetRemarks << "-起点(圆弧1开始)";
             targetPoints << c.points[n / 4];     targetMoveTypes << 3; targetRemarks << "-圆弧1途经点";
             targetPoints << c.points[n / 2];     targetMoveTypes << 3; targetRemarks << "-圆弧1终点(圆弧2开始)";
@@ -158,19 +109,38 @@ void TaskProgramDialog::generateProgram()
             targetPoints << c.points[n - 1];     targetMoveTypes << 3; targetRemarks << "-圆弧2终点";
         }
         else if (isFittedData && n >= 3) {
-            targetPoints << c.points[0]; targetMoveTypes << 2; targetRemarks << "-样条起点";
+            // 【读取 Python 的拟合数据】：格式为 [起点, 途经点, 终点, 途经点, 终点...]
+            targetPoints << c.points[0];
+            targetMoveTypes << 2; // 起点必定用直线(2)空飞过去
+            targetRemarks << "-样条起点";
+
             for (int i = 1; i < n - 1; i += 2) {
                 int segIdx = (i + 1) / 2;
-                QPointF p1 = c.points[i-1], p2 = c.points[i], p3 = c.points[i+1];
+                QPointF p1 = c.points[i-1];
+                QPointF p2 = c.points[i];
+                QPointF p3 = c.points[i+1];
+
+                // 防呆：防止三点共线导致机器人圆弧指令报警
                 double D = 2 * (p1.x()*(p2.y() - p3.y()) + p2.x()*(p3.y() - p1.y()) + p3.x()*(p1.y() - p2.y()));
                 if (std::abs(D) < 1e-6) {
-                    targetPoints << p3; targetMoveTypes << 2; targetRemarks << QString("-段%1[直线] 终点").arg(segIdx);
+                    targetPoints << p3;
+                    targetMoveTypes << 2; // 降级为直线插补
+                    targetRemarks << QString("-段%1[直线] 终点").arg(segIdx);
                 } else {
-                    targetPoints << p2; targetMoveTypes << 3; targetRemarks << QString("-段%1[圆弧] 途经点").arg(segIdx);
-                    targetPoints << p3; targetMoveTypes << 3; targetRemarks << QString("-段%1[圆弧] 终点").arg(segIdx);
+                    targetPoints << p2;
+                    targetMoveTypes << 3; // 圆弧途经点
+                    targetRemarks << QString("-段%1[圆弧] 途经点").arg(segIdx);
+                    targetPoints << p3;
+                    targetMoveTypes << 3; // 圆弧终点
+                    targetRemarks << QString("-段%1[圆弧] 终点").arg(segIdx);
                 }
             }
-            if (n % 2 == 0) { targetPoints << c.points[n - 1]; targetMoveTypes << 2; targetRemarks << "-尾部收尾"; }
+            // 容错：尾部多余点用直线收尾
+            if (n % 2 == 0) {
+                targetPoints << c.points[n - 1];
+                targetMoveTypes << 2;
+                targetRemarks << "-尾部收尾";
+            }
         }
         else if (isArc && n >= 3) {
             targetPoints << c.points[0];         targetMoveTypes << 2; targetRemarks << "-圆弧起点";
@@ -179,51 +149,71 @@ void TaskProgramDialog::generateProgram()
         }
         else {
             for (int i = 0; i < n; ++i) {
-                targetPoints << c.points[i]; targetMoveTypes << 2;
+                targetPoints << c.points[i];
+                targetMoveTypes << 2;
                 if (i == 0) targetRemarks << "-起点";
                 else if (i == n - 1) targetRemarks << "-终点";
                 else targetRemarks << QString("-途经点%1").arg(i);
             }
         }
 
+        // --- 缝合计算：前瞻下一个图元的起点 ---
         bool isConnectedWithNext = false;
-        if (idx + 1 < m_paths.size() && !m_paths[idx + 1].points.isEmpty()) {
-            QPointF nextStart = m_paths[idx + 1].points.first();
+        if (idx + 1 < paths.size() && !paths[idx + 1].points.isEmpty()) {
+            QPointF nextStart = paths[idx + 1].points.first();
             QPointF myEnd = targetPoints.last();
-            if (std::hypot(myEnd.x() - nextStart.x(), myEnd.y() - nextStart.y()) < 0.001) isConnectedWithNext = true;
+            double nx = myEnd.x() - nextStart.x();
+            double ny = myEnd.y() - nextStart.y();
+            if (std::sqrt(nx*nx + ny*ny) < 0.001) {
+                isConnectedWithNext = true;
+            }
         }
 
+        // --- 开始下发点位表 ---
         for (int i = 0; i < targetPoints.size(); ++i) {
             QPointF pt = targetPoints[i];
             int moveType = targetMoveTypes[i];
             QString baseRemark = shapeName + targetRemarks[i];
 
-            bool isConnectedWithPrev = (std::hypot(pt.x() - lastEndPos.x(), pt.y() - lastEndPos.y()) < 0.001);
-            if (i == 0 && isConnectedWithPrev) continue;
+            double dx = pt.x() - lastEndPos.x();
+            double dy = pt.y() - lastEndPos.y();
+            bool isConnectedWithPrev = (std::sqrt(dx*dx + dy*dy) < 0.001);
 
-            // 👇【核心映射】：如果是用户坐标系，执行空间平移矩阵转换
-            if (useUcs && m_ucs.valid) {
-                QPointF v = pt - m_ucs.origin;
-                double local_x = v.x() * m_ucs.xAxis.x() + v.y() * m_ucs.xAxis.y();
-                double local_y = v.x() * m_ucs.yAxis.x() + v.y() * m_ucs.yAxis.y();
-                pt = QPointF(local_x, local_y);
+            // 拦截：如果起点和上一个图形终点无缝重合，直接丢弃该重合点
+            if (i == 0 && isConnectedWithPrev) {
+                continue;
             }
 
             double p[6] = { pt.x(), pt.y(), 0.0, currentPose.a, currentPose.b, currentPose.c };
 
-            double overlap = 0.0; double speed = 50.0;
-            if (i == 0) { speed = 100.0; overlap = 0.0; baseRemark += "(空走跳转)"; }
-            else if (i == targetPoints.size() - 1) {
-                if (isConnectedWithNext) { overlap = 2.0; baseRemark += "(无缝衔接)"; }
-                else { overlap = 0.0; baseRemark += "(加工结束抬刀)"; }
-            } else { overlap = 2.0; }
+            double overlap = 0.0;
+            double speed = 50.0;
+
+            if (i == 0) {
+                speed = 100.0;
+                overlap = 0.0;
+                baseRemark += "(空走跳转)";
+            } else if (i == targetPoints.size() - 1) {
+                if (isConnectedWithNext) {
+                    overlap = 2.0;
+                    baseRemark += "(无缝衔接下个)";
+                } else {
+                    overlap = 0.0;
+                    baseRemark += "(加工结束抬刀)";
+                }
+            } else {
+                overlap = 2.0;
+            }
 
             addRow(moveType, 2, p, speed, 50, 50, overlap, baseRemark);
-            lastEndPos = targetPoints[i]; // 真实 DXF 位置留存
+            lastEndPos = pt;
         }
     }
 }
 
+// ----------------------------------------------------
+// 辅助添加行 (带备注)
+// ----------------------------------------------------
 void TaskProgramDialog::addRow(int moveType, int posType, double* pos, double speed, double acc, double dec, double overlap, const QString& remark) {
     int row = m_table->rowCount();
     m_table->insertRow(row);
@@ -247,22 +237,27 @@ void TaskProgramDialog::addRow(int moveType, int posType, double* pos, double sp
     m_table->setItem(row, 10, new QTableWidgetItem(QString::number(dec, 'f', 1)));
     m_table->setItem(row, 11, new QTableWidgetItem(QString::number(overlap, 'f', 1)));
 
+    // 添加并灰度化备注列
     QTableWidgetItem* remarkItem = new QTableWidgetItem(remark);
     remarkItem->setForeground(QBrush(QColor("#757575")));
     m_table->setItem(row, 12, remarkItem);
 }
 
 void TaskProgramDialog::onAddRowClicked() { addRow(2, 2, nullptr, 100, 50, 50, 0); }
-void TaskProgramDialog::onRemoveRowClicked() { if (m_table->currentRow() >= 0) m_table->removeRow(m_table->currentRow()); }
+void TaskProgramDialog::onRemoveRowClicked() {
+    if (m_table->currentRow() >= 0) m_table->removeRow(m_table->currentRow());
+}
 void TaskProgramDialog::onSyncPosClicked() {
     if (m_devId == 0) return;
     RobotAPI::PosData pd;
     if (RobotAPI::GetPositionData(pd, m_devId) == 0) {
         double p[6]; for(int i=0; i<6; i++) p[i] = pd.kcsPos[i];
         addRow(2, 2, p, 100, 50, 50, 0);
+        m_statusLabel->setText("当前位置已抓取为新动作！");
     }
 }
 
+// ======================== 控制执行逻辑 ========================
 void TaskProgramDialog::onStartClicked() {
     int rowCount = m_table->rowCount();
     if (m_devId == 0 || rowCount == 0) return;
@@ -287,6 +282,7 @@ void TaskProgramDialog::onStartClicked() {
             mp.cp[0].x = p[0]; mp.cp[0].y = p[1]; mp.cp[0].z = p[2];
             mp.cp[0].a = p[3]; mp.cp[0].b = p[4]; mp.cp[0].c = p[5];
         }
+
         mp.speed = m_table->item(r, 8)->text().toDouble();
         mp.acc = m_table->item(r, 9)->text().toDouble();
         mp.dec = m_table->item(r, 10)->text().toDouble();
@@ -295,30 +291,34 @@ void TaskProgramDialog::onStartClicked() {
     }
 
     m_startBtn->setEnabled(false);
-    m_statusLabel->setText("正在下发...");
-    std::string selTool = m_robotToolCombo->currentText().toStdString();
-    std::string selWobj = m_robotUserCombo->currentText().toStdString();
+    m_statusLabel->setText("正在下发组合运动程序...");
 
-    QPointer<TaskProgramDialog> safeThis(this);
-    QThread* worker = QThread::create([safeThis, mps, devId = m_devId, selTool, selWobj]() {
-        if (!selTool.empty()) RobotAPI::SetCurrentToolByName(selTool, devId);
-        if (!selWobj.empty()) RobotAPI::SetCurrentUframeByName(selWobj, devId);
+    QThread* worker = QThread::create([this, mps, devId = m_devId]() {
+        RobotAPI::MultiMove2Reset(devId); // 先重置
+        int ret = RobotAPI::MultiMove2Start(mps, devId); // 启动
 
-        RobotAPI::MultiMove2Reset(devId);
-        int ret = RobotAPI::MultiMove2Start(mps, devId);
-
-        if (safeThis) {
-            QMetaObject::invokeMethod(safeThis.data(), [safeThis, ret]() {
-                if (!safeThis) return;
-                safeThis->m_startBtn->setEnabled(true);
-                if (ret == 0) safeThis->m_statusLabel->setText("执行中 (Running)...");
-                else safeThis->m_statusLabel->setText(QString("启动失败！错误码: %1").arg(ret));
-            }, Qt::QueuedConnection);
-        }
+        QMetaObject::invokeMethod(this, [this, ret]() {
+            m_startBtn->setEnabled(true);
+            if (ret == 0) m_statusLabel->setText("程序正在连续执行中 (Running)...");
+            else m_statusLabel->setText(QString("启动失败！错误码: %1").arg(ret));
+        }, Qt::QueuedConnection);
     });
     connect(worker, &QThread::finished, worker, &QObject::deleteLater);
     worker->start();
 }
-void TaskProgramDialog::onPauseClicked() { RobotAPI::MultiMove2Hold(m_devId); }
-void TaskProgramDialog::onResumeClicked() { RobotAPI::MultiMove2Resume(m_devId); }
-void TaskProgramDialog::onResetClicked() { RobotAPI::MultiMove2Reset(m_devId); RobotAPI::MOVECLEAR(m_devId); }
+
+void TaskProgramDialog::onPauseClicked() {
+    int ret = RobotAPI::MultiMove2Hold(m_devId);
+    if (ret == 0) m_statusLabel->setText("程序已暂停 (Hold).");
+}
+
+void TaskProgramDialog::onResumeClicked() {
+    int ret = RobotAPI::MultiMove2Resume(m_devId);
+    if (ret == 0) m_statusLabel->setText("程序已恢复执行 (Resume).");
+}
+
+void TaskProgramDialog::onResetClicked() {
+    RobotAPI::MultiMove2Reset(m_devId);
+    RobotAPI::MOVECLEAR(m_devId); // 清空队列
+    m_statusLabel->setText("程序已重置/停止 (Reset).");
+}

@@ -133,12 +133,12 @@ void PreviewArea::paintEvent(QPaintEvent *event) {
         double fontSize = 10.0;
         bool rotateVertical = false;
         if (m_blocks[i].type == PosBlockType::Line) {
-            fontSize = std::min(m_blocks[i].width, m_blocks[i].length) * 0.4;
+            fontSize = std::min(m_blocks[i].width, m_blocks[i].length) * 0.3;
             if (m_blocks[i].length > m_blocks[i].width) rotateVertical = true;
         } else if (m_blocks[i].type == PosBlockType::Circle || m_blocks[i].type == PosBlockType::Arc) {
-            fontSize = m_blocks[i].radius * 0.3;
+            fontSize = m_blocks[i].radius * 0.25;
         }
-        if (fontSize < 2.0) fontSize = 2.0;
+        if (fontSize < 1.0) fontSize = 1.0;
         QFont f = painter.font();
         f.setPointSizeF(fontSize);
         painter.setFont(f);
