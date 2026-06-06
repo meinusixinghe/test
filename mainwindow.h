@@ -276,6 +276,7 @@ private:
 
     QTimer* m_alarmTimer;
     QPushButton* m_clearAlarmBtn;
+    unsigned int m_devId = 0;
 
 };
 

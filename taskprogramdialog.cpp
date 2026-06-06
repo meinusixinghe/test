@@ -10,7 +10,7 @@
 #include <QMessageBox>
 #include <QMatrix4x4>
 #include <QVector3D>
-#include <QtConcurrent>
+#include <QtConcurrentRun>
 
 // ====================================================================
 // 构造函数：解析线条序列并生成运动程序表格
@@ -346,7 +346,8 @@ void TaskProgramDialog::onStartClicked() {
 
 void TaskProgramDialog::onPauseClicked() {
     if (m_devId == 0) return;
-    QtConcurrent::run([this]() {
+    // 👇 前面加上 (void) 强转，消除警告
+    (void)QtConcurrent::run([this]() {
         RobotAPI::MultiMove2Hold(m_devId);
         QMetaObject::invokeMethod(this, [this](){ m_statusLabel->setText("程序已暂停 (Hold)."); });
     });
@@ -354,7 +355,7 @@ void TaskProgramDialog::onPauseClicked() {
 
 void TaskProgramDialog::onResumeClicked() {
     if (m_devId == 0) return;
-    QtConcurrent::run([this]() {
+    (void)QtConcurrent::run([this]() {
         RobotAPI::MultiMove2Resume(m_devId);
         QMetaObject::invokeMethod(this, [this](){ m_statusLabel->setText("程序已恢复执行 (Resume)."); });
     });
@@ -362,7 +363,7 @@ void TaskProgramDialog::onResumeClicked() {
 
 void TaskProgramDialog::onResetClicked() {
     if (m_devId == 0) return;
-    QtConcurrent::run([this]() {
+    (void)QtConcurrent::run([this]() {
         RobotAPI::MultiMove2Reset(m_devId);
         QMetaObject::invokeMethod(this, [this](){ m_statusLabel->setText("程序已重置/停止 (Reset)."); });
     });
