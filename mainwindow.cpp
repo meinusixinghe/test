@@ -283,6 +283,7 @@ void MainWindow::setupUi()
     m_powerBtn = new QPushButton("机器人上电", renderArea);
     m_powerBtn->setStyleSheet(btnStyle);
     m_powerBtn->setCursor(Qt::PointingHandCursor);
+    m_powerBtn->setVisible(false);
 
     bottomBtnLayout->addWidget(m_startBtn);
     bottomBtnLayout->addWidget(m_powerBtn);
@@ -2024,6 +2025,7 @@ void MainWindow::onStatusTimer()
         m_statusIconLabel->setStyleSheet("background-color: #F44336; border-radius: 8px;");
         m_statusTextLabel->setText("未连接");
         m_startBtn->setVisible(false);
+        m_powerBtn->setVisible(false);
         return;
     }
 
@@ -2031,6 +2033,7 @@ void MainWindow::onStatusTimer()
     m_statusIconLabel->setStyleSheet("background-color: #4CAF50; border-radius: 8px;");
     m_statusTextLabel->setText("已连接");
     m_startBtn->setVisible(true);
+    m_powerBtn->setVisible(true);
 
     // 1. 获取伺服状态
     bool servoStatus = false;

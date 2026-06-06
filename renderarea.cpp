@@ -17,6 +17,10 @@
 #include <QTimer>
 #include <QMessageBox>
 #include <QListWidget>
+#include <QDialog>
+#include <QFormLayout>
+#include <QDoubleSpinBox>
+#include <QDialogButtonBox>
 
 using std::min;
 using std::max;
@@ -1525,14 +1529,27 @@ void RenderArea::contextMenuEvent(QContextMenuEvent *event) {
         emit reorderPathsRequested();
     }
     else if (actMoveUCS && res == actMoveUCS) {
-        bool okX, okY;
-        double newX = QInputDialog::getDouble(this, "移动坐标系", "请输入新原点 X 坐标:", m_ucs.origin.x(), -10000, 10000, 2, &okX);
-        if (okX) {
-            double newY = QInputDialog::getDouble(this, "移动坐标系", "请输入新原点 Y 坐标:", m_ucs.origin.y(), -10000, 10000, 2, &okY);
-            if (okY) {
-                m_ucs.origin = QPointF(newX, newY);
-                update();
-            }
+        QDialog dlg(this);
+        dlg.setWindowTitle("移动坐标系");
+        dlg.setWindowModality(Qt::NonModal);
+
+        QFormLayout layout(&dlg);
+        QDoubleSpinBox sbX(&dlg);
+        sbX.setRange(-10000, 10000); sbX.setDecimals(2); sbX.setValue(m_ucs.origin.x());
+        QDoubleSpinBox sbY(&dlg);
+        sbY.setRange(-10000, 10000); sbY.setDecimals(2); sbY.setValue(m_ucs.origin.y());
+
+        layout.addRow("新原点 X 坐标:", &sbX);
+        layout.addRow("新原点 Y 坐标:", &sbY);
+
+        QDialogButtonBox btnBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+        layout.addWidget(&btnBox);
+        connect(&btnBox, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+        connect(&btnBox, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+
+        if (dlg.exec() == QDialog::Accepted) {
+            m_ucs.origin = QPointF(sbX.value(), sbY.value());
+            update();
         }
     }else if (actShowConstraints && res == actShowConstraints) {
         QDialog dlg(this);

@@ -18,8 +18,8 @@ ConnectionDialog::ConnectionDialog(QWidget *parent) : QDialog(parent)
     layout->addRow("Robot IP:", m_ipEdit);
 
     QHBoxLayout* btnLayout = new QHBoxLayout();
-    QPushButton* btnConnect = new QPushButton("Connect", this);
-    QPushButton* btnDisconnect = new QPushButton("Disconnect", this);
+    QPushButton* btnConnect = new QPushButton("连接", this);
+    QPushButton* btnDisconnect = new QPushButton("断开", this);
 
     btnConnect->setStyleSheet("background-color: #2196F3; color: white; padding: 5px 15px; border-radius: 4px;");
     btnDisconnect->setStyleSheet("background-color: #F44336; color: white; padding: 5px 15px; border-radius: 4px;");
