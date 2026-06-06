@@ -17,6 +17,10 @@
 #include <QTimer>
 #include <QMessageBox>
 #include <QListWidget>
+#include <QDialog>
+#include <QFormLayout>
+#include <QDoubleSpinBox>
+#include <QDialogButtonBox>
 
 using std::min;
 using std::max;
@@ -221,7 +225,6 @@ void RenderArea::paintEvent(QPaintEvent *event)
         painter.drawText(QRectF(-tw/2.0, -th/2.0, tw, th), Qt::AlignCenter, block.name);
         painter.restore();
     }
-    painter.restore();
     painter.restore();
 
     for (int i = 0; i < m_displayPaths.size(); ++i) {
@@ -1525,15 +1528,30 @@ void RenderArea::contextMenuEvent(QContextMenuEvent *event) {
         emit reorderPathsRequested();
     }
     else if (actMoveUCS && res == actMoveUCS) {
-        bool okX, okY;
-        double newX = QInputDialog::getDouble(this, "移动坐标系", "请输入新原点 X 坐标:", m_ucs.origin.x(), -10000, 10000, 2, &okX);
-        if (okX) {
-            double newY = QInputDialog::getDouble(this, "移动坐标系", "请输入新原点 Y 坐标:", m_ucs.origin.y(), -10000, 10000, 2, &okY);
-            if (okY) {
-                m_ucs.origin = QPointF(newX, newY);
-                update();
-            }
-        }
+        QDialog* dlg = new QDialog(this);
+        dlg->setWindowTitle("移动坐标系");
+        dlg->setWindowModality(Qt::NonModal);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+
+        QFormLayout* layout = new QFormLayout(dlg);
+        QDoubleSpinBox* sbX = new QDoubleSpinBox(dlg);
+        sbX->setRange(-10000, 10000); sbX->setDecimals(2); sbX->setValue(m_ucs.origin.x());
+        QDoubleSpinBox* sbY = new QDoubleSpinBox(dlg);
+        sbY->setRange(-10000, 10000); sbY->setDecimals(2); sbY->setValue(m_ucs.origin.y());
+
+        layout->addRow("新原点 X 坐标:", sbX);
+        layout->addRow("新原点 Y 坐标:", sbY);
+
+        QDialogButtonBox* btnBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dlg);
+        layout->addWidget(btnBox);
+
+        connect(btnBox, &QDialogButtonBox::rejected, dlg, &QDialog::reject);
+        connect(btnBox, &QDialogButtonBox::accepted, dlg, [this, dlg, sbX, sbY]() {
+            m_ucs.origin = QPointF(sbX->value(), sbY->value());
+            update();
+            dlg->accept();
+        });
+        dlg->show();
     }else if (actShowConstraints && res == actShowConstraints) {
         QDialog dlg(this);
         dlg.setWindowTitle("查看当前的装配约束");

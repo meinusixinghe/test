@@ -1,4 +1,5 @@
 QT       += core gui
+QT       += core gui concurrent
 
 QT += network
 

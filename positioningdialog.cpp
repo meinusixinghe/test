@@ -13,6 +13,8 @@
 #include <QButtonGroup>
 #include <QLabel>
 #include <QMessageBox>
+#include <QDialogButtonBox>
+#include <QDoubleSpinBox>
 
 // ========================================================
 // 1. 数据模型与轮廓生成 (保持不变)
@@ -245,33 +247,69 @@ void PreviewArea::contextMenuEvent(QContextMenuEvent *event) {
         m_selectedBlockIdx = -1; m_selectedPtIdx = -1;
         emit backgroundClicked();
     } else if (res == actMove) {
-        bool ok;
-        double newX = QInputDialog::getDouble(this, "移动", "输入参考点欲到达的新 X 坐标:", m_selectedPos.x(), -10000, 10000, 2, &ok);
-        if (ok) {
-            double newY = QInputDialog::getDouble(this, "移动", "输入参考点欲到达的新 Y 坐标:", m_selectedPos.y(), -10000, 10000, 2, &ok);
-            if (ok) {
-                double dx = newX - m_selectedPos.x();
-                double dy = newY - m_selectedPos.y();
-                m_blocks[m_selectedBlockIdx].x += dx;
-                m_blocks[m_selectedBlockIdx].y += dy;
-                m_selectedPos = QPointF(newX, newY);
-                emit refPointSelected(m_selectedBlockIdx, m_selectedPtIdx, m_selectedPos); // 同步刷新右侧信息面板
-            }
-        }
+        QDialog* dlg = new QDialog(this);
+        dlg->setWindowTitle("移动定位块");
+        dlg->setWindowModality(Qt::NonModal);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+
+        QFormLayout* layout = new QFormLayout(dlg);
+        QDoubleSpinBox* sbX = new QDoubleSpinBox(dlg);
+        sbX->setRange(-10000, 10000); sbX->setDecimals(2); sbX->setValue(m_selectedPos.x());
+        QDoubleSpinBox* sbY = new QDoubleSpinBox(dlg);
+        sbY->setRange(-10000, 10000); sbY->setDecimals(2); sbY->setValue(m_selectedPos.y());
+
+        layout->addRow("新 X 坐标:", sbX);
+        layout->addRow("新 Y 坐标:", sbY);
+
+        QDialogButtonBox* btnBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dlg);
+        layout->addWidget(btnBox);
+
+        connect(btnBox, &QDialogButtonBox::rejected, dlg, &QDialog::reject);
+        // 使用 Lambda 表达式处理确定逻辑
+        connect(btnBox, &QDialogButtonBox::accepted, dlg, [this, dlg, sbX, sbY]() {
+            double newX = sbX->value();
+            double newY = sbY->value();
+            double dx = newX - m_selectedPos.x();
+            double dy = newY - m_selectedPos.y();
+            m_blocks[m_selectedBlockIdx].x += dx;
+            m_blocks[m_selectedBlockIdx].y += dy;
+            m_selectedPos = QPointF(newX, newY);
+            emit refPointSelected(m_selectedBlockIdx, m_selectedPtIdx, m_selectedPos);
+            update();
+            dlg->accept();
+        });
+        dlg->show();
     } else if (res == actRot) {
-        bool ok;
-        double angle = QInputDialog::getDouble(this, "旋转", "输入定位块绕【当前参考点】增加的角度:", 0, -360, 360, 2, &ok);
-        if (ok && angle != 0) {
-            // 解析几何，让矩形原点绕参考点旋转指定角度
-            double rad = angle * M_PI / 180.0;
-            double cosA = std::cos(rad);
-            double sinA = std::sin(rad);
-            double dx = m_blocks[m_selectedBlockIdx].x - m_selectedPos.x();
-            double dy = m_blocks[m_selectedBlockIdx].y - m_selectedPos.y();
-            m_blocks[m_selectedBlockIdx].x = m_selectedPos.x() + (dx * cosA - dy * sinA);
-            m_blocks[m_selectedBlockIdx].y = m_selectedPos.y() + (dx * sinA + dy * cosA);
-            m_blocks[m_selectedBlockIdx].angle += angle;
-        }
+        QDialog* dlg = new QDialog(this);
+        dlg->setWindowTitle("旋转定位块");
+        dlg->setWindowModality(Qt::NonModal);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+
+        QFormLayout* layout = new QFormLayout(dlg);
+        QDoubleSpinBox* sbAngle = new QDoubleSpinBox(dlg);
+        sbAngle->setRange(-360, 360); sbAngle->setDecimals(2); sbAngle->setValue(0);
+        layout->addRow("绕【当前参考点】增加角度:", sbAngle);
+
+        QDialogButtonBox* btnBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dlg);
+        layout->addWidget(btnBox);
+
+        connect(btnBox, &QDialogButtonBox::rejected, dlg, &QDialog::reject);
+        connect(btnBox, &QDialogButtonBox::accepted, dlg, [this, dlg, sbAngle]() {
+            double angle = sbAngle->value();
+            if (angle != 0) {
+                double rad = angle * M_PI / 180.0;
+                double cosA = std::cos(rad);
+                double sinA = std::sin(rad);
+                double dx = m_blocks[m_selectedBlockIdx].x - m_selectedPos.x();
+                double dy = m_blocks[m_selectedBlockIdx].y - m_selectedPos.y();
+                m_blocks[m_selectedBlockIdx].x = m_selectedPos.x() + (dx * cosA - dy * sinA);
+                m_blocks[m_selectedBlockIdx].y = m_selectedPos.y() + (dx * sinA + dy * cosA);
+                m_blocks[m_selectedBlockIdx].angle += angle;
+                update(); // 刷新画布
+            }
+            dlg->accept();
+        });
+        dlg->show();
     }
     update();
 }

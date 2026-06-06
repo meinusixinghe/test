@@ -43,7 +43,6 @@
 namespace {
 struct RobotConnectResult {
     int ret = -1;
-    int apiRet = -1;
     unsigned int devId = 0;
 };
 
@@ -283,6 +282,13 @@ void MainWindow::setupUi()
     m_powerBtn = new QPushButton("机器人上电", renderArea);
     m_powerBtn->setStyleSheet(btnStyle);
     m_powerBtn->setCursor(Qt::PointingHandCursor);
+    m_powerBtn->setStyleSheet(
+        "QPushButton {"
+        "   background-color: #2196F3; color: white; border: 1px solid #1E88E5; border-radius: 4px; padding: 5px 15px; font-weight: bold;"
+        "}"
+        "QPushButton:hover { background-color: #42A5F5; }"
+        );
+    m_powerBtn->setVisible(false);
 
     bottomBtnLayout->addWidget(m_startBtn);
     bottomBtnLayout->addWidget(m_powerBtn);
@@ -1251,7 +1257,6 @@ void MainWindow::onConnectTriggered()
                 result.ret = RobotAPI::ConnectRobot(ip.toStdString(), result.devId, true);
                 if (result.ret == 0 || result.ret == 10021) {
                     RobotAPI::SelectRobot(result.devId);
-                    result.apiRet = RobotAPI::EnableApiControl(true, result.devId);
                 }
 
                 QMetaObject::invokeMethod(this, [this, result]() {
@@ -1261,11 +1266,7 @@ void MainWindow::onConnectTriggered()
                     if (result.ret == 0 || result.ret == 10021) {
                         m_currentDevId = result.devId;
                         showAndSaveLog(QString("SDK连接就绪！分配ID为: %1").arg(m_currentDevId));
-                        if (result.apiRet == 0) {
-                            showAndSaveLog("已使能当前机器人外部 API 控制权限。");
-                        } else {
-                            showAndSaveLog(QString("警告：使能 API 权限失败，错误码: %1").arg(result.apiRet));
-                        }
+                        showAndSaveLog("已连接机器人；外部 API 控制将在上电或运行时按需申请。");
 
                         m_statusTimer->start(200); // 启动状态轮询
                     } else {
@@ -2024,6 +2025,7 @@ void MainWindow::onStatusTimer()
         m_statusIconLabel->setStyleSheet("background-color: #F44336; border-radius: 8px;");
         m_statusTextLabel->setText("未连接");
         m_startBtn->setVisible(false);
+        m_powerBtn->setVisible(false);
         return;
     }
 
@@ -2031,6 +2033,7 @@ void MainWindow::onStatusTimer()
     m_statusIconLabel->setStyleSheet("background-color: #4CAF50; border-radius: 8px;");
     m_statusTextLabel->setText("已连接");
     m_startBtn->setVisible(true);
+    m_powerBtn->setVisible(true);
 
     // 1. 获取伺服状态
     bool servoStatus = false;
@@ -2042,6 +2045,7 @@ void MainWindow::onStatusTimer()
         m_servoIconLabel->setStyleSheet("background-color: #9E9E9E; border-radius: 8px;");
         m_servoTextLabel->setText("伺服断开");
     }
+    m_isRobotPoweredOn = servoStatus;
     if (servoStatus != m_isRobotPoweredOn) {
         m_isRobotPoweredOn = servoStatus; // 同步标志位
 
@@ -2629,4 +2633,26 @@ void UserCoordDialog::updateUCSDisplay() {
     ucs.yAxis = m_yAxis;
     ucs.valid = false;
     m_renderArea->setUCS(ucs);
+}
+
+void MainWindow::checkRobotAlarm() {
+    if (m_devId == 0 || !RobotAPI::IsConnected(m_devId)) {
+        m_clearAlarmBtn->setVisible(false);
+        return;
+    }
+
+    bool isAlarm = false;
+    // 如果获取成功，且 isAlarm 为 true，则显示按钮；否则隐藏
+    if (RobotAPI::GetCurrentAlarmStatus(isAlarm, m_devId) == 0) {
+        m_clearAlarmBtn->setVisible(isAlarm);
+    }
+}
+
+void MainWindow::clearRobotAlarm() {
+    if (m_devId != 0) {
+        int ret = RobotAPI::ClearAlarm(m_devId);
+        if (ret == 0) {
+            m_clearAlarmBtn->setVisible(false); // 清除成功后隐藏
+        }
+    }
 }

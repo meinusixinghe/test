@@ -6,7 +6,6 @@
 #include <QPushButton>
 #include <QListWidget>
 #include <QStackedWidget>
-#include <functional>
 #include <QTimer>
 #include <QComboBox>
 
@@ -16,6 +15,7 @@ class RobotParameterDialog : public QDialog {
     Q_OBJECT
 public:
     explicit RobotParameterDialog(unsigned int devId, QWidget *parent = nullptr);
+    ~RobotParameterDialog() override;
 
 protected:
     // 声明事件过滤器函数，用于拦截鼠标滚轮
@@ -33,6 +33,7 @@ private slots:
     void onDecreaseReleased();
 
     void updateRealTimeStatus();
+    void updatePositionValues();
     void onServoTimerTimeout();
     void updateCoordinateSystems();
 private:
@@ -53,8 +54,9 @@ private:
     QWidget* createSpeedPage();       // 创建“全局速度”页面
     QWidget* createMotionPage();      // 创建“机器人运动”页面
 
+    int sendJogCommand(int axisIndex, bool positive, bool pressed) const;
     void handleJogButton(int axisIndex, bool positive, bool pressed, QLabel* statusLabel);
-    void runAsyncCommand(std::function<void()> cmd);
+    void stopActiveJog();
 
     QLabel* m_servoStatusLabel = nullptr;
     QPushButton* m_manualPowerBtn = nullptr;
@@ -65,6 +67,8 @@ private:
     QComboBox* m_userCombo = nullptr;
     bool m_isUpdatingCoords = false;
     int m_currentJogMode = 0;
+    int m_activeJogAxis = 0;
+    bool m_activeJogPositive = false;
     QLabel* m_posLabels[6] = {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
 };
 

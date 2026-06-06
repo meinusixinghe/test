@@ -7,6 +7,7 @@
 #include <QLabel>
 #include <QVector>
 #include "mainwindow.h"
+#include <QTimer>
 
 class TaskProgramDialog : public QDialog
 {
@@ -23,6 +24,7 @@ private slots:
     void onResumeClicked();
     void onResetClicked();
     void generateProgram();
+    void updateRobotState();
 
 private:
     void addRow(int moveType, int posType, double* pos, double speed, double acc, double dec, double overlap, const QString& remark = "");
@@ -34,9 +36,12 @@ private:
     QTableWidget* m_table;
     QLabel* m_statusLabel;
 
-    QComboBox* m_coordCombo;     // 几何基准
-    QComboBox* m_robotToolCombo; // 机器人工具(Tool)
-    QComboBox* m_robotUserCombo; // 机器人用户(Wobj)
+    QLabel* m_robotStateLabel;
+    QTimer* m_statusTimer;
+
+    QComboBox* m_coordCombo;
+    QComboBox* m_robotToolCombo;
+    QComboBox* m_robotUserCombo;
 
     QPushButton* m_startBtn;
     QPushButton* m_pauseBtn;
