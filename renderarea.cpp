@@ -1529,28 +1529,30 @@ void RenderArea::contextMenuEvent(QContextMenuEvent *event) {
         emit reorderPathsRequested();
     }
     else if (actMoveUCS && res == actMoveUCS) {
-        QDialog dlg(this);
-        dlg.setWindowTitle("移动坐标系");
-        dlg.setWindowModality(Qt::NonModal);
+        QDialog* dlg = new QDialog(this);
+        dlg->setWindowTitle("移动坐标系");
+        dlg->setWindowModality(Qt::NonModal);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
 
-        QFormLayout layout(&dlg);
-        QDoubleSpinBox sbX(&dlg);
-        sbX.setRange(-10000, 10000); sbX.setDecimals(2); sbX.setValue(m_ucs.origin.x());
-        QDoubleSpinBox sbY(&dlg);
-        sbY.setRange(-10000, 10000); sbY.setDecimals(2); sbY.setValue(m_ucs.origin.y());
+        QFormLayout* layout = new QFormLayout(dlg);
+        QDoubleSpinBox* sbX = new QDoubleSpinBox(dlg);
+        sbX->setRange(-10000, 10000); sbX->setDecimals(2); sbX->setValue(m_ucs.origin.x());
+        QDoubleSpinBox* sbY = new QDoubleSpinBox(dlg);
+        sbY->setRange(-10000, 10000); sbY->setDecimals(2); sbY->setValue(m_ucs.origin.y());
 
-        layout.addRow("新原点 X 坐标:", &sbX);
-        layout.addRow("新原点 Y 坐标:", &sbY);
+        layout->addRow("新原点 X 坐标:", sbX);
+        layout->addRow("新原点 Y 坐标:", sbY);
 
-        QDialogButtonBox btnBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
-        layout.addWidget(&btnBox);
-        connect(&btnBox, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-        connect(&btnBox, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+        QDialogButtonBox* btnBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dlg);
+        layout->addWidget(btnBox);
 
-        if (dlg.exec() == QDialog::Accepted) {
-            m_ucs.origin = QPointF(sbX.value(), sbY.value());
+        connect(btnBox, &QDialogButtonBox::rejected, dlg, &QDialog::reject);
+        connect(btnBox, &QDialogButtonBox::accepted, dlg, [this, dlg, sbX, sbY]() {
+            m_ucs.origin = QPointF(sbX->value(), sbY->value());
             update();
-        }
+            dlg->accept();
+        });
+        dlg->show();
     }else if (actShowConstraints && res == actShowConstraints) {
         QDialog dlg(this);
         dlg.setWindowTitle("查看当前的装配约束");

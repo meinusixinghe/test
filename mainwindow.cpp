@@ -283,6 +283,12 @@ void MainWindow::setupUi()
     m_powerBtn = new QPushButton("机器人上电", renderArea);
     m_powerBtn->setStyleSheet(btnStyle);
     m_powerBtn->setCursor(Qt::PointingHandCursor);
+    m_powerBtn->setStyleSheet(
+        "QPushButton {"
+        "   background-color: #2196F3; color: white; border: 1px solid #1E88E5; border-radius: 4px; padding: 5px 15px; font-weight: bold;"
+        "}"
+        "QPushButton:hover { background-color: #42A5F5; }"
+        );
     m_powerBtn->setVisible(false);
 
     bottomBtnLayout->addWidget(m_startBtn);
@@ -2045,6 +2051,7 @@ void MainWindow::onStatusTimer()
         m_servoIconLabel->setStyleSheet("background-color: #9E9E9E; border-radius: 8px;");
         m_servoTextLabel->setText("伺服断开");
     }
+    m_isRobotPoweredOn = servoStatus;
     if (servoStatus != m_isRobotPoweredOn) {
         m_isRobotPoweredOn = servoStatus; // 同步标志位
 
