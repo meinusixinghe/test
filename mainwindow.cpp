@@ -1960,7 +1960,7 @@ void MainWindow::moveSelectedRowsToBottom()
 
 void MainWindow::toggleRobotPower()
 {
-    // 如果 ID 还是 0，说明压根还没点“建立连接”
+    // 1. 基本安全拦截
     if (m_currentDevId == 0 || !RobotAPI::IsConnected(m_currentDevId)) {
         QMessageBox::warning(this, "未连接", "请先在上方菜单中建立机器人的网络连接！");
         return;
@@ -1969,106 +1969,69 @@ void MainWindow::toggleRobotPower()
     if (!RobotAPI::IsApiControl(m_currentDevId)) {
         int apiRet = RobotAPI::EnableApiControl(true, m_currentDevId);
         if (apiRet != 0) {
-            QMessageBox::critical(this, "权限拒绝 (ERROR_ACCESS_REJECTED)",
-                                  "无法获取机器人的外部 API 控制权！\n\n"
-                                  "【请严格检查机器人物理状态】\n"
-                                  "1. 控制柜钥匙是否已拨到【自动(AUT)/远程(Remote)】模式？\n"
-                                  "2. 实体示教器是否正在被操作或未释放控制权？\n"
-                                  "3. 是否有急停未复位？");
-            return; // 拦截危险指令，防止出现 Access Rejected
+            QMessageBox::critical(this, "权限拒绝", "无法获取机器人的外部 API 控制权！请检查示教器权限！");
+            return;
         }
     }
 
     if (!m_isRobotPoweredOn) {
-        showAndSaveLog(QString("正在尝试为机器人(Id: %1)上电...").arg(m_currentDevId));
-
-        int ret = RobotAPI::PowerOn(m_currentDevId);
-
-        if (ret == 0) {
-            m_isRobotPoweredOn = true;
-            m_powerBtn->setText("机器人断电");
-            m_powerBtn->setStyleSheet(
-                "QPushButton {"
-                "   background-color: #E53935; color: white; border: 1px solid #D32F2F; border-radius: 4px; padding: 5px 15px;"
-                "}"
-                "QPushButton:hover { background-color: #EF5350; }"
-                );
-            showAndSaveLog("机器人上电成功！");
-        } else {
-            showAndSaveLog(QString("上电失败！错误码: %1").arg(ret));
-        }
+        showAndSaveLog(QString("正在发送上电指令 (Id: %1)...").arg(m_currentDevId));
+        RobotAPI::PowerOn(m_currentDevId);
     } else {
-        showAndSaveLog(QString("正在尝试关闭机器人(Id: %1)伺服...").arg(m_currentDevId));
-
-        int ret = RobotAPI::PowerOff();
-
-        if (ret == 0) {
-            m_isRobotPoweredOn = false;
-            m_powerBtn->setText("机器人上电");
-            m_powerBtn->setStyleSheet(
-                "QPushButton {"
-                "   background-color: #2196F3; color: white; border: 1px solid #1E88E5; border-radius: 4px; padding: 5px 15px;"
-                "}"
-                "QPushButton:hover { background-color: #42A5F5; }"
-                );
-            showAndSaveLog("机器人断电成功！");
-        } else {
-            showAndSaveLog(QString("断电失败！错误码: %1").arg(ret));
-        }
+        showAndSaveLog(QString("正在发送断电指令 (Id: %1)...").arg(m_currentDevId));
+        RobotAPI::PowerOff(m_currentDevId); // 注意此处补齐参数
     }
 }
 
 void MainWindow::onStatusTimer()
 {
     if (m_currentDevId == 0 || !RobotAPI::IsConnected(m_currentDevId)) {
-        // 如果断线了，UI 变红
         m_statusIconLabel->setStyleSheet("background-color: #F44336; border-radius: 8px;");
         m_statusTextLabel->setText("未连接");
         m_startBtn->setVisible(false);
         m_powerBtn->setVisible(false);
+        m_isRobotPoweredOn = false;
         return;
     }
 
-    // 正常连接时，UI 变绿
     m_statusIconLabel->setStyleSheet("background-color: #4CAF50; border-radius: 8px;");
     m_statusTextLabel->setText("已连接");
     m_startBtn->setVisible(true);
     m_powerBtn->setVisible(true);
 
-    // 1. 获取伺服状态
     bool servoStatus = false;
     RobotAPI::GetCurrentServoStatus(servoStatus, m_currentDevId);
+
     if (servoStatus) {
-        m_servoIconLabel->setStyleSheet("background-color: #4CAF50; border-radius: 8px;");
-        m_servoTextLabel->setText("伺服使能");
-    } else {
         m_servoIconLabel->setStyleSheet("background-color: #9E9E9E; border-radius: 8px;");
         m_servoTextLabel->setText("伺服断开");
+    } else {
+        m_servoIconLabel->setStyleSheet("background-color: #4CAF50; border-radius: 8px;");
+        m_servoTextLabel->setText("伺服使能");
     }
-    m_isRobotPoweredOn = servoStatus;
+
     if (servoStatus != m_isRobotPoweredOn) {
-        m_isRobotPoweredOn = servoStatus; // 同步标志位
+        m_isRobotPoweredOn = servoStatus;
 
         if (m_isRobotPoweredOn) {
-            m_powerBtn->setText("机器人断电");
-            m_powerBtn->setStyleSheet(
-                "QPushButton {"
-                "   background-color: #E53935; color: white; border: 1px solid #D32F2F; border-radius: 4px; padding: 5px 15px;"
-                "}"
-                "QPushButton:hover { background-color: #EF5350; }"
-                );
-        } else {
             m_powerBtn->setText("机器人上电");
             m_powerBtn->setStyleSheet(
                 "QPushButton {"
-                "   background-color: #2196F3; color: white; border: 1px solid #1E88E5; border-radius: 4px; padding: 5px 15px;"
+                "   background-color: #2196F3; color: white; border: 1px solid #1E88E5; border-radius: 4px; padding: 5px 15px; font-weight: bold;"
                 "}"
                 "QPushButton:hover { background-color: #42A5F5; }"
+                );
+        } else {
+            m_powerBtn->setText("机器人断电");
+            m_powerBtn->setStyleSheet(
+                "QPushButton {"
+                "   background-color: #E53935; color: white; border: 1px solid #D32F2F; border-radius: 4px; padding: 5px 15px; font-weight: bold;"
+                "}"
+                "QPushButton:hover { background-color: #EF5350; }"
                 );
         }
     }
 
-    // 2. 获取自动/手动模式
     RoboxKeyMode keyMode = RoboxKeyMode::ROBOX_MODE_MANUAL;
     RobotAPI::GetCurrentKeyMode(keyMode, m_currentDevId);
 
@@ -2076,24 +2039,16 @@ void MainWindow::onStatusTimer()
         m_modeCombo->blockSignals(true);
         if (keyMode == RoboxKeyMode::ROBOX_MODE_AUTO) {
             m_modeCombo->setCurrentIndex(2);
-            m_modeCombo->setStyleSheet("QComboBox { background-color: #E53935; color: white; border-radius: 3px; padding: 2px 6px; }");
+            m_modeCombo->setStyleSheet("QComboBox { background-color: #E53935; color: white; border-radius: 3px; padding: 2px 6px; font-weight: bold; }");
         } else if (keyMode == RoboxKeyMode::ROBOX_MODE_MANUFAST) {
             m_modeCombo->setCurrentIndex(1);
-            m_modeCombo->setStyleSheet("QComboBox { background-color: #FF9800; color: white; border-radius: 3px; padding: 2px 6px; }");
+            m_modeCombo->setStyleSheet("QComboBox { background-color: #FF9800; color: white; border-radius: 3px; padding: 2px 6px; font-weight: bold; }");
         } else {
             m_modeCombo->setCurrentIndex(0);
-            m_modeCombo->setStyleSheet("QComboBox { background-color: #4CAF50; color: white; border-radius: 3px; padding: 2px 6px; }");
+            m_modeCombo->setStyleSheet("QComboBox { background-color: #4CAF50; color: white; border-radius: 3px; padding: 2px 6px; font-weight: bold; }");
         }
-
-        m_lastModeIndex = m_modeCombo->currentIndex(); // 记录正确的底层状态
-        m_modeCombo->blockSignals(false); // 解除阻塞
-    }
-
-    // 3. 监控报警状态
-    bool alarmStatus = false;
-    RobotAPI::GetCurrentAlarmStatus(alarmStatus, m_currentDevId);
-    if (alarmStatus) {
-        m_statusLabel->setText("机器人当前存在报警，请复位！");
+        m_lastModeIndex = m_modeCombo->currentIndex();
+        m_modeCombo->blockSignals(false);
     }
 }
 
