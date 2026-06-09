@@ -533,53 +533,34 @@ void RobotParameterDialog::updateCoordinateSystems()
 {
     if (m_devId == 0 || !m_toolCombo || !m_userCombo) return;
 
-    m_isUpdatingCoords = true;
+    QStringList tools, users;
+    QString curToolStr = "tool0", curUserStr = "wobj0";
 
-    std::vector<std::string> realToolList, realUserList;
-    QStringList finalTools, finalUsers;
-
-    if (RobotAPI::GetToolNameList(realToolList, m_devId) == 0 && !realToolList.empty()) {
-        for (const auto& name : realToolList) {
-            finalTools << QString::fromStdString(name);
-        }
-    } else {
-        for (int i = 0; i <= 31; ++i) {
-            finalTools << QString("tool%1").arg(i);
-        }
+    for (int i = 0; i <= 31; ++i) {
+        tools << QString("tool%1").arg(i);
+        users << QString("wobj%1").arg(i);
     }
 
-    if (RobotAPI::GetUserNameList(realUserList, m_devId) == 0 && !realUserList.empty()) {
-        for (const auto& name : realUserList) {
-            finalUsers << QString::fromStdString(name);
-        }
-    } else {
-        for (int i = 0; i <= 31; ++i) {
-            finalUsers << QString("wobj%1").arg(i);
-        }
-    }
-
-    QString curToolStr = "tool0";
     std::string currentTool;
     if (RobotAPI::GetCurrentToolName(currentTool, m_devId) == 0) {
         curToolStr = QString::fromStdString(currentTool);
     }
 
-    QString curUserStr = "wobj0";
     std::string currentUser;
     if (RobotAPI::GetCurrentUframeName(currentUser, m_devId) == 0) {
         curUserStr = QString::fromStdString(currentUser);
     }
 
+    m_isUpdatingCoords = true;
+
     m_toolCombo->clear();
-    m_toolCombo->addItems(finalTools);
-    // 如果列表里有这个名字，就选中它；如果没有（且允许编辑），也能直接显示文字
+    m_toolCombo->addItems(tools);
     m_toolCombo->setCurrentText(curToolStr);
 
     m_userCombo->clear();
-    m_userCombo->addItems(finalUsers);
+    m_userCombo->addItems(users);
     m_userCombo->setCurrentText(curUserStr);
 
-    // 解除更新锁
     m_isUpdatingCoords = false;
 }
 

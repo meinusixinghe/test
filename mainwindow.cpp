@@ -187,6 +187,7 @@ FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
 }
 
 void FloatingToolWidget::mousePressEvent(QMouseEvent *event) {
+    // 记录鼠标按下的相对位置，用于拖拽
     if (event->button() == Qt::LeftButton) {
         m_dragPosition = event->globalPosition().toPoint() - frameGeometry().topLeft();
         event->accept();
