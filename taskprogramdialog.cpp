@@ -226,12 +226,13 @@ void TaskProgramDialog::onStartClicked() {
     std::string selTool = m_robotToolCombo->currentText().toStdString();
     std::string selWobj = m_robotUserCombo->currentText().toStdString();
     bool useUcs = (m_coordCombo->currentData().toInt() == 1);
+    const std::string motionWobj = useUcs ? selWobj : std::string("wobj0");
 
     m_startBtn->setEnabled(false);
-    m_statusLabel->setText("正在底层全量换算坐标与轨迹安全检查...");
-    QApplication::processEvents(); // 刷新 UI
+    m_statusLabel->setText("正在进行离线全量运动学逆解...");
+    QApplication::processEvents();
 
-    // 1. 提前拿到当前的真实物理配置
+    // 1. 提取当前物理坐标配置
     RobotAPI::RobotPos currentPos;
     memset(&currentPos, 0, sizeof(currentPos));
     if (useUcs) RobotAPI::GetUserCoordinatePos2(currentPos, m_devId);
@@ -248,12 +249,12 @@ void TaskProgramDialog::onStartClicked() {
         for (int i = 0; i < 6; ++i) p[i] = m_table->item(row, i + 2)->text().toDouble();
 
         if (posType == 2 && useUcs) {
-            RobotAPI::RobotPos localP = currentPos; // 继承当前真实 CFG
+            RobotAPI::RobotPos localP = currentPos;
             localP.x = p[0]; localP.y = p[1]; localP.z = p[2];
 
             RobotAPI::RobotJoint tJoints; memset(&tJoints, 0, sizeof(tJoints));
             // 🚨 全量离线预解算：确保轨迹 100% 可达
-            if (RobotAPI::IkSolver(localP, tJoints, selTool, selWobj, m_devId) == 0) {
+            if (RobotAPI::IkSolver(localP, tJoints, selTool, motionWobj, m_devId) == 0) {
                 RobotAPI::RobotPos baseP; memset(&baseP, 0, sizeof(baseP));
                 if (RobotAPI::FkSolver(tJoints, baseP, selTool, "wobj0", m_devId) == 0) {
                     targetMp.cp[arrayIndex].x = baseP.x; targetMp.cp[arrayIndex].y = baseP.y; targetMp.cp[arrayIndex].z = baseP.z;
@@ -290,37 +291,27 @@ void TaskProgramDialog::onStartClicked() {
         mp.posType = posCombo ? posCombo->currentText().left(1).toInt() : 2;
 
         // 强制第一点为关节运动，防止过大跨度导致规划器死锁
-        if (r == 0) {
-            mp.moveType = 1;
-        }
+        if (r == 0) mp.moveType = 1;
 
         mp.speed = m_table->item(r, 8)->text().toDouble();
         mp.acc = m_table->item(r, 9)->text().toDouble();
         mp.dec = m_table->item(r, 10)->text().toDouble();
 
         // 强制收尾点平滑度为 0
-        if (r == rowCount - 1) {
-            mp.overlapping = 0;
-        } else {
-            mp.overlapping = m_table->item(r, 11)->text().toDouble();
-        }
+        if (r == rowCount - 1) mp.overlapping = 0;
+        else mp.overlapping = m_table->item(r, 11)->text().toDouble();
 
         mp.auxOverlapping = 1e100;
         mp.flags = 0;
 
-        // 🎯 圆弧必须强行吞下两行数据
         if (mp.moveType == 3) {
             if (r + 1 >= rowCount) {
                 QMessageBox::warning(this, "轨迹错误", "发现不完整的圆弧指令（缺少终点）！");
                 m_startBtn->setEnabled(true);
                 return;
             }
-            if (!solveRow(r, mp, 0)) {
-                QMessageBox::warning(this, "严重错误", QString("第 %1 行圆弧途经点逆解不可达！").arg(r+1));
-                m_startBtn->setEnabled(true); return;
-            }
-            if (!solveRow(r + 1, mp, 1)) {
-                QMessageBox::warning(this, "严重错误", QString("第 %1 行圆弧终点逆解不可达！").arg(r+2));
+            if (!solveRow(r, mp, 0) || !solveRow(r + 1, mp, 1)) {
+                QMessageBox::warning(this, "严重错误", QString("第 %1 行圆弧点逆解不可达！").arg(r+1));
                 m_startBtn->setEnabled(true); return;
             }
             r++; // 跳过已消耗的终点行
@@ -339,72 +330,88 @@ void TaskProgramDialog::onStartClicked() {
         return;
     }
 
-    m_statusLabel->setText(QString("解算完毕，共 %1 个安全动作，准备下发...").arg(mps.size()));
+    setBlockMoveRunning(true);
+    m_blockMoveStopRequested = false;
+    m_resetAfterBlockStop = false;
+    m_statusLabel->setText(QString("解算完毕，共 %1 个动作，开启动态滑动窗口...").arg(mps.size()));
 
     // ====================================================================
-    // 🚨 第二阶段：开启滑动窗口子线程（纯净搬运，无任何逆解调用）
+    // 🚨 第二阶段：纯血版滑动窗口子线程（绝不混用任何 Block API）
     // ====================================================================
-    QThread* worker = QThread::create([this, mps, devId = m_devId, selTool, selWobj]() mutable {
+    m_blockMoveThread = QThread::create([this, mps, devId = m_devId, selTool, motionWobj]() mutable {
 
-        // 1. 初始化底层状态
+        // 💡 清除原有遗留的 BlockMultiMoveReset，严格使用 MultiMove2 系列重置
         RobotAPI::MultiMove2Reset(devId);
-        QThread::msleep(20);
-        if (!selTool.empty()) RobotAPI::SetCurrentToolByName(selTool, devId);
-        if (!selWobj.empty()) RobotAPI::SetCurrentUframeByName(selWobj, devId);
         QThread::msleep(50);
 
-        QMetaObject::invokeMethod(this, [this]() {
-            m_statusLabel->setText("执行中 (滑动窗口推进)...");
-        });
+        if (!selTool.empty()) RobotAPI::SetCurrentToolByName(selTool, devId);
+        if (!motionWobj.empty()) RobotAPI::SetCurrentUframeByName(motionWobj, devId);
+
+        // 💡 清除旧的 prepareBlockMultiMoveStart 封装调用，直接使用核心 API 确保连续运行和倍率
+        RobotAPI::SetCurrentStepMode(ROBOX_MODE_CONTINUOUS, devId);
+        RobotAPI::SetGlobalSpeed(10, devId);
+        QThread::msleep(50);
 
         int totalPoints = mps.size();
         int sentIndex = 0;
-        int windowSize = 8; // 埃夫特 MultiMove2Start 单次建议最多 10 个，我们留一点余量
-        bool hasStarted = false;
 
         while (sentIndex < totalPoints) {
-            // 如果已经被外部要求停止（可以通过原子变量扩展），则跳出
-            // if (m_stopRequested) break;
-
-            // 提取本次要发的小包
-            int chunkCount = std::min(windowSize, totalPoints - sentIndex);
-            std::vector<RobotAPI::MultiMoveInfo2> chunk(mps.begin() + sentIndex, mps.begin() + sentIndex + chunkCount);
-
-            // 纯净无脑推送给控制器
-            int ret = RobotAPI::MultiMove2Start(chunk, devId);
-
-            if (ret != 0 && ret != 40) {
-                // 假设 40 是某种特定的缓冲满状态（需参考埃夫特手册），若非缓冲满的致命错误则退出
-                QMetaObject::invokeMethod(this, [this, ret]() {
-                    m_statusLabel->setText(QString("运行中断，通信错误码: %1").arg(ret));
-                }, Qt::QueuedConnection);
+            // 如果用户点击了“停止”按钮 (复用了你头文件里的变量名)
+            if (m_blockMoveStopRequested) {
+                RobotAPI::MultiMove2Reset(devId);
                 break;
             }
 
-            sentIndex += chunkCount;
+            // 每次只切取 3 个点作为小包发送，细水长流
+            int chunkCount = std::min(3, totalPoints - sentIndex);
+            std::vector<RobotAPI::MultiMoveInfo2> chunk(mps.begin() + sentIndex, mps.begin() + sentIndex + chunkCount);
 
-            // ⚠️ 强制点火：一旦推入第一包数据，立刻强制控制柜动起来
-            if (!hasStarted && sentIndex > 0) {
-                hasStarted = true;
-                // 注意：大部分控制器的 MultiMove2Start 收到数据就走。
-                // 若需要单独的启动指令，这里就是放置触发“点火”API的最佳位置。
+            // 🎯 唯一负责下发轨迹的 API，绝不触碰 BlockMultiMove
+            int ret = RobotAPI::MultiMove2Start(chunk, devId);
+
+            if (ret == 0) {
+                // 只有底层明确返回 0 (成功吃进缓冲区)，我们才允许推进索引
+                sentIndex += chunkCount;
+                QMetaObject::invokeMethod(this, [this, sentIndex, totalPoints]() {
+                    m_statusLabel->setText(QString("滑动窗口持续喂点中: %1 / %2").arg(sentIndex).arg(totalPoints));
+                }, Qt::QueuedConnection);
+
+            } else if (ret < 0) {
+                // 致命通信断开 (-48, -59 等)，强行跳出
+                QMetaObject::invokeMethod(this, [this, ret]() {
+                    m_statusLabel->setText(QString("致命错误：控制器通信断开，错误码 %1").arg(ret));
+                }, Qt::QueuedConnection);
+                break;
+            } else {
+                // 底层满载拒收 (例如返回 40)
+                // 【绝对不增加 sentIndex】，线程静默休眠，等机器人消化掉一部分后再重传。
             }
 
-            // 动态调节等待时间。这里简单化使用 50ms 轮询。
-            // 更成熟的做法是：调用类似 GetMultiMove2BufferFreeSize 的 API（若 SDK 支持），
-            // 如果发现剩余空间大于等于 5，再继续发。
-            QThread::msleep(50);
+            // 休眠 30 毫秒：匹配控制器的插补消化节奏
+            QThread::msleep(30);
         }
 
-        // 下发完毕后，释放 UI 控制权
-        QMetaObject::invokeMethod(this, [this]() {
+        // 推送循环结束，收尾工作
+        QMetaObject::invokeMethod(this, [this, sentIndex, totalPoints]() {
+            setBlockMoveRunning(false);
             m_startBtn->setEnabled(true);
-            m_statusLabel->setText("轨迹点位全量推送完毕。");
+            m_blockMoveThread = nullptr;
+
+            // 💡 清除原有遗留的 BlockMultiMoveReset，严格使用 MultiMove2 系列重置
+            if (m_resetAfterBlockStop && m_devId != 0) {
+                RobotAPI::MultiMove2Reset(m_devId);
+            }
+
+            if (m_blockMoveStopRequested) {
+                m_statusLabel->setText("已手动中止运行。");
+            } else if (sentIndex >= totalPoints) {
+                m_statusLabel->setText("🎉 轨迹已全量喂入控制器，等待物理动作执行结束...");
+            }
         }, Qt::QueuedConnection);
     });
 
-    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
-    worker->start();
+    connect(m_blockMoveThread, &QThread::finished, m_blockMoveThread, &QObject::deleteLater);
+    m_blockMoveThread->start();
 }
 
 void TaskProgramDialog::onPauseClicked() {
