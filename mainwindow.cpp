@@ -1975,11 +1975,27 @@ void MainWindow::toggleRobotPower()
     }
 
     bool realServoStatus = false;
-    RobotAPI::GetCurrentServoStatus(realServoStatus, m_currentDevId);
-    if (!realServoStatus) {
-        RobotAPI::PowerOn(m_currentDevId);
+    int ret = RobotAPI::GetCurrentServoStatus(realServoStatus, m_currentDevId);
+
+    if (ret == 0) {
+        m_powerBtn->setEnabled(false);
+        m_powerBtn->setText("正在切换...");
+        m_powerBtn->setStyleSheet(
+            "QPushButton { background-color: #FF9800; color: white; border: 1px solid #F57C00; border-radius: 4px; padding: 5px 15px; font-weight: bold; }"
+            );
+
+        // 下发真实指令
+        if (!realServoStatus) {
+            RobotAPI::PowerOn(m_currentDevId);
+        } else {
+            RobotAPI::PowerOff(m_currentDevId);
+        }
+        QTimer::singleShot(500, this, [this]() {
+            m_powerBtn->setEnabled(true);
+            onStatusTimer();
+        });
     } else {
-        RobotAPI::PowerOff(m_currentDevId);
+        showAndSaveLog(QString("获取状态失败(错误码:%1)，为保障安全拒绝下发指令！").arg(ret));
     }
 }
 
@@ -2000,43 +2016,47 @@ void MainWindow::onStatusTimer()
     m_powerBtn->setVisible(true);
 
     bool servoStatus = false;
-    RobotAPI::GetCurrentServoStatus(servoStatus, m_currentDevId);
+    int ret = RobotAPI::GetCurrentServoStatus(servoStatus, m_currentDevId);
 
-    if (servoStatus) {
-        m_servoIconLabel->setStyleSheet("background-color: #4CAF50; border-radius: 8px;");
-        m_servoTextLabel->setText("伺服使能");
-        m_powerBtn->setText("机器人断电");
-        m_powerBtn->setStyleSheet(
-            "QPushButton { background-color: #E53935; color: white; border: 1px solid #D32F2F; border-radius: 4px; padding: 5px 15px; font-weight: bold; }"
-            "QPushButton:hover { background-color: #EF5350; }"
-            );
-    } else {
-        m_servoIconLabel->setStyleSheet("background-color: #9E9E9E; border-radius: 8px;");
-        m_servoTextLabel->setText("伺服断开");
-        m_powerBtn->setText("机器人上电");
-        m_powerBtn->setStyleSheet(
-            "QPushButton { background-color: #2196F3; color: white; border: 1px solid #1E88E5; border-radius: 4px; padding: 5px 15px; font-weight: bold; }"
-            "QPushButton:hover { background-color: #42A5F5; }"
-            );
+    if (ret == 0 && m_powerBtn->isEnabled()) {
+        if (servoStatus) {
+            m_servoIconLabel->setStyleSheet("background-color: #4CAF50; border-radius: 8px;");
+            m_servoTextLabel->setText("伺服使能");
+
+            m_powerBtn->setText("机器人断电");
+            m_powerBtn->setStyleSheet(
+                "QPushButton { background-color: #E53935; color: white; border: 1px solid #D32F2F; border-radius: 4px; padding: 5px 15px; font-weight: bold; }"
+                "QPushButton:hover { background-color: #EF5350; }"
+                );
+        } else {
+            m_servoIconLabel->setStyleSheet("background-color: #9E9E9E; border-radius: 8px;");
+            m_servoTextLabel->setText("伺服断开");
+
+            m_powerBtn->setText("机器人上电");
+            m_powerBtn->setStyleSheet(
+                "QPushButton { background-color: #2196F3; color: white; border: 1px solid #1E88E5; border-radius: 4px; padding: 5px 15px; font-weight: bold; }"
+                "QPushButton:hover { background-color: #42A5F5; }"
+                );
+        }
     }
 
     RoboxKeyMode keyMode = RoboxKeyMode::ROBOX_MODE_MANUAL;
-    RobotAPI::GetCurrentKeyMode(keyMode, m_currentDevId);
-
-    if (m_modeCombo) {
-        m_modeCombo->blockSignals(true);
-        if (keyMode == RoboxKeyMode::ROBOX_MODE_AUTO) {
-            m_modeCombo->setCurrentIndex(2);
-            m_modeCombo->setStyleSheet("QComboBox { background-color: #E53935; color: white; border-radius: 3px; padding: 2px 6px; font-weight: bold; }");
-        } else if (keyMode == RoboxKeyMode::ROBOX_MODE_MANUFAST) {
-            m_modeCombo->setCurrentIndex(1);
-            m_modeCombo->setStyleSheet("QComboBox { background-color: #FF9800; color: white; border-radius: 3px; padding: 2px 6px; font-weight: bold; }");
-        } else {
-            m_modeCombo->setCurrentIndex(0);
-            m_modeCombo->setStyleSheet("QComboBox { background-color: #4CAF50; color: white; border-radius: 3px; padding: 2px 6px; font-weight: bold; }");
+    if (RobotAPI::GetCurrentKeyMode(keyMode, m_currentDevId) == 0) {
+        if (m_modeCombo) {
+            m_modeCombo->blockSignals(true);
+            if (keyMode == RoboxKeyMode::ROBOX_MODE_AUTO) {
+                m_modeCombo->setCurrentIndex(2);
+                m_modeCombo->setStyleSheet("QComboBox { background-color: #E53935; color: white; border-radius: 3px; padding: 2px 6px; font-weight: bold; }");
+            } else if (keyMode == RoboxKeyMode::ROBOX_MODE_MANUFAST) {
+                m_modeCombo->setCurrentIndex(1);
+                m_modeCombo->setStyleSheet("QComboBox { background-color: #FF9800; color: white; border-radius: 3px; padding: 2px 6px; font-weight: bold; }");
+            } else {
+                m_modeCombo->setCurrentIndex(0);
+                m_modeCombo->setStyleSheet("QComboBox { background-color: #4CAF50; color: white; border-radius: 3px; padding: 2px 6px; font-weight: bold; }");
+            }
+            m_lastModeIndex = m_modeCombo->currentIndex();
+            m_modeCombo->blockSignals(false);
         }
-        m_lastModeIndex = m_modeCombo->currentIndex();
-        m_modeCombo->blockSignals(false);
     }
 }
 

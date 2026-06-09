@@ -250,18 +250,16 @@ QWidget* RobotParameterDialog::createMotionPage()
 
     connect(m_manualPowerBtn, &QPushButton::clicked, this, [this]() {
         if (m_devId == 0 || !RobotAPI::IsConnected(m_devId)) return;
+        if (!m_servoStatusKnown) {
+            updateRealTimeStatus();
+            return;
+        }
+
         m_manualPowerBtn->setEnabled(false);
         m_manualPowerBtn->setText("动作中...");
         m_manualPowerBtn->setStyleSheet("QPushButton { padding: 6px 12px; font-weight: bold; background-color: #9E9E9E; color: white; border-radius: 4px; }");
 
-        bool isEnabled = false;
-        int statusRet = RobotAPI::GetCurrentServoStatus(isEnabled, m_devId);
-        if (statusRet != 0) {
-            m_manualPowerBtn->setEnabled(true);
-            updateRealTimeStatus();
-            QMessageBox::warning(this, "读取失败", QString("读取伺服状态失败，错误码: %1").arg(statusRet));
-            return;
-        }
+        const bool isEnabled = m_cachedServoEnabled;
 
         int ret = isEnabled ? RobotAPI::PowerOffManual(m_devId)
                             : RobotAPI::PowerOnManual(m_devId);
@@ -269,8 +267,11 @@ QWidget* RobotParameterDialog::createMotionPage()
         m_manualPowerBtn->setEnabled(true);
         if (ret != 0) {
             QMessageBox::warning(this, "操作失败", QString("%1失败！错误码: %2").arg(isEnabled ? "关闭手动使能" : "开启手动使能").arg(ret));
+            updateRealTimeStatus();
+            return;
         }
-        updateRealTimeStatus();
+
+        applyServoStatusUi(!isEnabled);
     });
 
     connect(refreshStatusBtn, &QPushButton::clicked, this, &RobotParameterDialog::updateRealTimeStatus);
@@ -454,23 +455,12 @@ void RobotParameterDialog::onServoTimerTimeout()
 // ==========================================
 // 核心状态刷新逻辑
 // ==========================================
-void RobotParameterDialog::updateRealTimeStatus()
+void RobotParameterDialog::applyServoStatusUi(bool isEnabled)
 {
-    if (m_devId == 0 || !m_servoStatusLabel || !m_manualPowerBtn) return;
+    if (!m_servoStatusLabel || !m_manualPowerBtn) return;
 
-    m_isQueryingServo = true; // 上锁
-
-    bool isEnabled = false;
-    int ret = RobotAPI::GetCurrentServoStatus(isEnabled, m_devId);
-    if (ret != 0) {
-        m_servoStatusLabel->setText(QString("伺服状态: 读取失败 (%1)").arg(ret));
-        m_servoStatusLabel->setStyleSheet("color: #FF9800; font-weight: bold; font-size: 13px;");
-        m_manualPowerBtn->setEnabled(false);
-        m_manualPowerBtn->setText("状态未知");
-        m_manualPowerBtn->setStyleSheet("QPushButton { padding: 6px 12px; font-weight: bold; background-color: #9E9E9E; color: white; border-radius: 4px; }");
-        m_isQueryingServo = false; // 解锁
-        return;
-    }
+    m_servoStatusKnown = true;
+    m_cachedServoEnabled = isEnabled;
 
     if (isEnabled) {
         m_servoStatusLabel->setText("伺服状态: 已使能 (ON)");
@@ -485,6 +475,28 @@ void RobotParameterDialog::updateRealTimeStatus()
         m_manualPowerBtn->setText("开启手动使能");
         m_manualPowerBtn->setStyleSheet("QPushButton { padding: 6px 12px; font-weight: bold; background-color: #4CAF50; color: white; border-radius: 4px; }");
     }
+}
+
+void RobotParameterDialog::updateRealTimeStatus()
+{
+    if (m_devId == 0 || !m_servoStatusLabel || !m_manualPowerBtn) return;
+
+    m_isQueryingServo = true; // 上锁
+
+    bool isEnabled = false;
+    int ret = RobotAPI::GetCurrentServoStatus(isEnabled, m_devId);
+    if (ret != 0) {
+        m_servoStatusKnown = false;
+        m_servoStatusLabel->setText(QString("伺服状态: 读取失败 (%1)").arg(ret));
+        m_servoStatusLabel->setStyleSheet("color: #FF9800; font-weight: bold; font-size: 13px;");
+        m_manualPowerBtn->setEnabled(false);
+        m_manualPowerBtn->setText("状态未知");
+        m_manualPowerBtn->setStyleSheet("QPushButton { padding: 6px 12px; font-weight: bold; background-color: #9E9E9E; color: white; border-radius: 4px; }");
+        m_isQueryingServo = false; // 解锁
+        return;
+    }
+
+    applyServoStatusUi(isEnabled);
 
     m_isQueryingServo = false; // 解锁
 }

@@ -54,6 +54,7 @@ private:
     QWidget* createSpeedPage();       // 创建“全局速度”页面
     QWidget* createMotionPage();      // 创建“机器人运动”页面
 
+    void applyServoStatusUi(bool isEnabled);
     int sendJogCommand(int axisIndex, bool positive, bool pressed) const;
     void handleJogButton(int axisIndex, bool positive, bool pressed, QLabel* statusLabel);
     void stopActiveJog();
@@ -62,6 +63,8 @@ private:
     QPushButton* m_manualPowerBtn = nullptr;
     QTimer* m_servoTimer = nullptr;
     bool m_isQueryingServo = false;
+    bool m_servoStatusKnown = false;
+    bool m_cachedServoEnabled = false;
 
     QComboBox* m_toolCombo = nullptr;
     QComboBox* m_userCombo = nullptr;
