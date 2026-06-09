@@ -183,64 +183,18 @@ int prepareBlockMultiMoveStart(unsigned int devId, QString& failStep)
     logSdkReturn("GetPermission(worker)", ret, devId);
     if (ret != 0) {
         qWarning() << "[TaskProgram][Prepare] GetPermission returned non-zero, continue to start checks"
-                   << "ret =" << ret
-                   << "devId =" << devId;
+                   << "ret =" << ret << "devId =" << devId;
     }
 
-    ret = RobotAPI::EnableProExec(devId);
-    logSdkReturn("EnableProExec(worker)", ret, devId);
-    if (ret != 0) {
-        failStep = "EnableProExec";
-        return ret;
-    }
-
-    RobotAPI::RunInfo runInfo;
-    memset(&runInfo, 0, sizeof(runInfo));
-    ret = RobotAPI::GetRobotStatusData(runInfo, devId);
-    if (ret == 0) {
-        qInfo() << "[TaskProgram][Prepare] program before start"
-                << "robotRunMode =" << runInfo.robotRunMode
-                << "programStatus =" << proStatusText(runInfo.programStatus)
-                << "programName =" << QString::fromLocal8Bit(runInfo.programName)
-                << "devId =" << devId;
-        if (!runInfo.robotRunMode || runInfo.programStatus != RPL_RUN) {
-            const int startRet = RobotAPI::StartProgram(devId);
-            logSdkReturn("StartProgram(worker)", startRet, devId);
-            if (startRet != 0) {
-                failStep = "StartProgram";
-                return startRet;
-            }
-
-            for (int i = 0; i < 10; ++i) {
-                QThread::msleep(100);
-                memset(&runInfo, 0, sizeof(runInfo));
-                const int statusRet = RobotAPI::GetRobotStatusData(runInfo, devId);
-                if (statusRet == 0) {
-                    qInfo() << "[TaskProgram][Prepare] program after StartProgram"
-                            << "try =" << (i + 1)
-                            << "robotRunMode =" << runInfo.robotRunMode
-                            << "programStatus =" << proStatusText(runInfo.programStatus)
-                            << "tcpSpeed =" << runInfo.tcpSpeed
-                            << "devId =" << devId;
-                    if (runInfo.robotRunMode || runInfo.programStatus == RPL_RUN) {
-                        break;
-                    }
-                } else {
-                    logSdkReturn("GetRobotStatusData(after StartProgram)", statusRet, devId);
-                }
-            }
-        }
-    } else {
-        logSdkReturn("GetRobotStatusData(before StartProgram)", ret, devId);
-    }
-
+    // 确保机器人处于连续运行模式 (Continuous)
     RoboxStartMode stepMode = ROBOX_MODE_CONTINUOUS;
     ret = RobotAPI::GetCurrentStepMode(stepMode, devId);
     logSdkReturn("GetCurrentStepMode(worker)", ret, devId);
     if (ret == 0) {
         qInfo() << "[TaskProgram][Prepare] current step mode =" << stepModeText(stepMode)
-                << "devId =" << devId;
+        << "devId =" << devId;
     }
+
     if (ret != 0 || stepMode != ROBOX_MODE_CONTINUOUS) {
         ret = RobotAPI::SetCurrentStepMode(ROBOX_MODE_CONTINUOUS, devId);
         logSdkReturn("SetCurrentStepMode(CONTINUOUS)", ret, devId);
@@ -250,6 +204,7 @@ int prepareBlockMultiMoveStart(unsigned int devId, QString& failStep)
         }
     }
 
+    // 确保全局倍率不是 0，否则机器人不走
     unsigned int speedRatio = 0;
     ret = RobotAPI::GetCurrentSpeedRatio(speedRatio, devId);
     logSdkReturn("GetCurrentSpeedRatio(worker)", ret, devId);
@@ -408,6 +363,30 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
             m_robotUserCombo->addItem(QString("wobj%1").arg(i));
         }
     }
+
+    connect(m_robotToolCombo, QOverload<int>::of(&QComboBox::activated), this, [this](int) {
+        if (m_devId != 0 && RobotAPI::IsConnected(m_devId)) {
+            QString tool = m_robotToolCombo->currentText();
+            int ret = RobotAPI::SetCurrentToolByName(tool.toStdString(), m_devId);
+            if (ret == 0 && m_statusLabel) {
+                m_statusLabel->setText(QString("✔️ 工具坐标系已实时切换为: %1").arg(tool));
+            }
+        }
+    });
+
+    connect(m_robotUserCombo, QOverload<int>::of(&QComboBox::activated), this, [this](int) {
+        if (m_devId != 0 && RobotAPI::IsConnected(m_devId)) {
+            QString wobj = m_robotUserCombo->currentText();
+            int ret = RobotAPI::SetCurrentUframeByName(wobj.toStdString(), m_devId);
+            if (ret == 0 && m_statusLabel) {
+                m_statusLabel->setText(QString("✔️ 用户坐标系已实时切换为: %1").arg(wobj));
+            }
+            // 如果用户选择了使用 UCS 偏移，换了坐标系后触发重算表格点位
+            if (m_coordCombo->currentData().toInt() == 1) {
+                generateProgram();
+            }
+        }
+    });
 
     // 增加第 13 列 -> 备注
     m_table = new QTableWidget(0, 13, this);
