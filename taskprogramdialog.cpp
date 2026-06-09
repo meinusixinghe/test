@@ -360,22 +360,53 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
     coordLayout->addStretch();
     tableLayout->addLayout(coordLayout);
 
-    for (int i = 0; i <= 31; ++i) {
-        m_robotToolCombo->addItem(QString("tool%1").arg(i));
-        m_robotUserCombo->addItem(QString("wobj%1").arg(i));
-    }
+    m_robotToolCombo->clear();
+    m_robotUserCombo->clear();
 
-    // 只读取当前 Tool/Wobj；不调用列表接口，避免部分控制器在该接口上持续写日志。
     if (m_devId != 0 && RobotAPI::IsConnected(m_devId)) {
+        std::vector<std::string> realToolList;
+        std::vector<std::string> realUserList;
+
+        // 尝试从控制器底层抓取名称列表
+        RobotAPI::GetToolNameList(realToolList, m_devId);
+        RobotAPI::GetUserNameList(realUserList, m_devId);
+
+        // 1. 严格映射 32 个工具坐标系通道
+        for (int i = 0; i <= 31; ++i) {
+            QString toolName = QString("tool%1").arg(i);
+            // 如果机器人返回了该通道的真实别名，且不为空，则使用别名
+            if (i < static_cast<int>(realToolList.size()) && !realToolList[i].empty()) {
+                toolName = QString::fromStdString(realToolList[i]);
+            }
+            m_robotToolCombo->addItem(toolName);
+        }
+
+        // 2. 严格映射 32 个用户坐标系通道
+        for (int i = 0; i <= 31; ++i) {
+            QString wobjName = QString("wobj%1").arg(i); // 默认保底命名
+            // 如果机器人返回了该通道的真实别名，且不为空，则使用别名
+            if (i < static_cast<int>(realUserList.size()) && !realUserList[i].empty()) {
+                wobjName = QString::fromStdString(realUserList[i]);
+            }
+            m_robotUserCombo->addItem(wobjName);
+        }
+
+        // 3. 自动同步当前机械臂正在使用的坐标系选中状态
         try {
             std::string curTool, curWobj;
-            if (RobotAPI::GetCurrentToolName(curTool, m_devId) == 0) {
+            if (RobotAPI::GetCurrentToolName(curTool, m_devId) == 0 && !curTool.empty()) {
                 m_robotToolCombo->setCurrentText(QString::fromStdString(curTool));
             }
-            if (RobotAPI::GetCurrentUframeName(curWobj, m_devId) == 0) {
+            if (RobotAPI::GetCurrentUframeName(curWobj, m_devId) == 0 && !curWobj.empty()) {
                 m_robotUserCombo->setCurrentText(QString::fromStdString(curWobj));
             }
         } catch (...) {}
+    } else {
+        // 未连接机器人时的安全兜底
+        for (int i = 0; i <= 31; ++i) {
+            m_robotToolCombo->addItem(QString("tool%1").arg(i));
+            m_robotUserCombo->addItem(QString("wobj%1").arg(i));
+        }
     }
 
     // 增加第 13 列 -> 备注
@@ -397,7 +428,7 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
     tableLayout->addLayout(editLayout);
     mainLayout->addWidget(tableGroup);
 
-    // 2. 状态与控制区 (保持不变)
+    // 2. 状态与控制区
     QHBoxLayout* bottomLayout = new QHBoxLayout();
     m_robotStateLabel = new QLabel("底层状态: BlockMultiMove 空闲", this);
     m_robotStateLabel->setStyleSheet("font-weight: bold; color: #D84315; font-size: 14px;");
