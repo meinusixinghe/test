@@ -162,6 +162,12 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
     m_statusTimer->start(500);
 }
 
+void TaskProgramDialog::setBlockMoveRunning(bool running) {
+    if (m_startBtn) m_startBtn->setEnabled(!running);
+    if (m_pauseBtn) m_pauseBtn->setEnabled(running);
+    if (m_resetBtn) m_resetBtn->setEnabled(running);
+}
+
 // ----------------------------------------------------
 // 辅助添加行 (带备注)
 // ----------------------------------------------------
@@ -416,7 +422,6 @@ void TaskProgramDialog::onStartClicked() {
 
 void TaskProgramDialog::onPauseClicked() {
     if (m_devId == 0) return;
-    // 👇 前面加上 (void) 强转，消除警告
     (void)QtConcurrent::run([this]() {
         RobotAPI::MultiMove2Hold(m_devId);
         QMetaObject::invokeMethod(this, [this](){ m_statusLabel->setText("程序已暂停 (Hold)."); });

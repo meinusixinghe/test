@@ -47,6 +47,12 @@ private:
     QPushButton* m_pauseBtn;
     QPushButton* m_resumeBtn;
     QPushButton* m_resetBtn;
+
+    QThread* m_blockMoveThread = nullptr;
+    bool m_blockMoveStopRequested = false;
+    bool m_resetAfterBlockStop = false;
+
+    void setBlockMoveRunning(bool running);
 };
 
 #endif // TASKPROGRAMDIALOG_H
