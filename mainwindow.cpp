@@ -290,8 +290,13 @@ void MainWindow::setupUi()
         );
     m_powerBtn->setVisible(false);
 
+    m_clearAlarmBtn = new QPushButton("清除报警", renderArea);
+    m_clearAlarmBtn->setStyleSheet("QPushButton { background-color: #E53935; color: white; border: 1px solid #D32F2F; border-radius: 4px; padding: 5px 15px; font-weight: bold; } QPushButton:hover { background-color: #EF5350; }");
+    m_clearAlarmBtn->setVisible(false);
+
     bottomBtnLayout->addWidget(m_startBtn);
     bottomBtnLayout->addWidget(m_powerBtn);
+    bottomBtnLayout->addWidget(m_clearAlarmBtn);
     bottomBtnLayout->addStretch();
     overlayLayout->addLayout(bottomBtnLayout);
 
@@ -511,7 +516,7 @@ void MainWindow::setupUi()
 
 
     // =================================================================
-    // 👇【新增测试代码】：在“操作”菜单下注入测试 Action（极易查找、极易删除）
+    // 在“操作”菜单下注入测试 Action（极易查找、极易删除）
     // =================================================================
     QPushButton* mlinTestBtn = new QPushButton("测试界面", this);
 
@@ -640,6 +645,7 @@ void MainWindow::setupUi()
     connect(dataTable, &QTableWidget::itemSelectionChanged,this, &MainWindow::handleTableSelectionChanged);
     connect(rotateAction, &QAction::triggered, this, &MainWindow::applyRotationMatrix);
     connect(m_robotParamAction, &QAction::triggered, this, &MainWindow::onRobotParameterSettings);
+    connect(m_clearAlarmBtn, &QPushButton::clicked, this, &MainWindow::onClearAlarmClicked);
 
     // 焊接工艺
     connect(m_manageProcessAction, &QAction::triggered, this, &MainWindow::onManageWeldingProcess);
@@ -1966,11 +1972,11 @@ void MainWindow::toggleRobotPower()
         return;
     }
 
-    if (!RobotAPI::IsApiControl(m_currentDevId)) {
         int apiRet = RobotAPI::EnableApiControl(true, m_currentDevId);
         if (apiRet != 0) {
             QMessageBox::critical(this, "权限拒绝", "无法获取机器人的外部 API 控制权！请检查示教器权限！");
             return;
+            if (!RobotAPI::IsApiControl(m_currentDevId)) {
         }
     }
 
@@ -2007,6 +2013,7 @@ void MainWindow::onStatusTimer()
         m_startBtn->setVisible(false);
         m_powerBtn->setVisible(false);
         m_isRobotPoweredOn = false;
+        if (m_clearAlarmBtn) m_clearAlarmBtn->setVisible(false);
         return;
     }
 
@@ -2038,6 +2045,13 @@ void MainWindow::onStatusTimer()
                 "QPushButton:hover { background-color: #42A5F5; }"
                 );
         }
+    }
+
+    bool hasAlarm = false;
+    int alarmRet = RobotAPI::GetCurrentAlarmStatus(hasAlarm, m_currentDevId);
+    if (alarmRet == 0 && m_clearAlarmBtn) {
+        // 如果有报警就显示，没有就隐藏
+        m_clearAlarmBtn->setVisible(hasAlarm);
     }
 
     RoboxKeyMode keyMode = RoboxKeyMode::ROBOX_MODE_MANUAL;
@@ -2616,6 +2630,22 @@ void MainWindow::clearRobotAlarm() {
         int ret = RobotAPI::ClearAlarm(m_devId);
         if (ret == 0) {
             m_clearAlarmBtn->setVisible(false); // 清除成功后隐藏
+        }
+    }
+}
+
+void MainWindow::onClearAlarmClicked()
+{
+    // 再次确认通信处于连接状态
+    if (m_currentDevId != 0 && RobotAPI::IsConnected(m_currentDevId)) {
+        // 调用底层 API 清除报警
+        int ret = RobotAPI::ClearAlarm(m_currentDevId);
+
+        if (ret == 0) {
+            if (m_clearAlarmBtn) m_clearAlarmBtn->setVisible(false);
+            qInfo() << "[MainWindow] 成功向控制器下发清除报警指令";
+        } else {
+            qWarning() << "[MainWindow] 清除报警指令下发失败，错误码:" << ret;
         }
     }
 }

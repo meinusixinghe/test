@@ -190,6 +190,7 @@ private slots:
     void reorderPathsGeo();
     void checkRobotAlarm();
     void clearRobotAlarm();
+    void onClearAlarmClicked();
 
 private:
     void loadDrawingData(const QString &filePath);
@@ -275,9 +276,8 @@ private:
     MotionTestDialog* m_motionTestDialog = nullptr;
 
     QTimer* m_alarmTimer;
-    QPushButton* m_clearAlarmBtn;
+    QPushButton* m_clearAlarmBtn = nullptr;
     unsigned int m_devId = 0;
-
 };
 
 #endif

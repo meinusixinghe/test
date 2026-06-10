@@ -279,7 +279,7 @@ void TaskProgramDialog::onStartClicked() {
     else RobotAPI::GetBaseCoordinatePos2(currentPos, m_devId);
 
     // ====================================================================
-    // 💡 辅助工具：提取表格指定行的数据，并完成安全的逆解/正解
+    // 辅助工具：提取表格指定行的数据，并完成安全的逆解/正解
     // ====================================================================
     auto solveRow = [&](int row, RobotAPI::MultiMoveInfo2& targetMp, int arrayIndex) -> bool {
         QComboBox* posCombo = qobject_cast<QComboBox*>(m_table->cellWidget(row, 1));
@@ -293,7 +293,7 @@ void TaskProgramDialog::onStartClicked() {
             localP.x = p[0]; localP.y = p[1]; localP.z = p[2];
 
             RobotAPI::RobotJoint tJoints; memset(&tJoints, 0, sizeof(tJoints));
-            // 🚨 全量离线预解算：确保轨迹 100% 可达
+
             if (RobotAPI::IkSolver(localP, tJoints, selTool, motionWobj, m_devId) == 0) {
                 RobotAPI::RobotPos baseP; memset(&baseP, 0, sizeof(baseP));
                 if (RobotAPI::FkSolver(tJoints, baseP, selTool, "wobj0", m_devId) == 0) {
@@ -318,7 +318,7 @@ void TaskProgramDialog::onStartClicked() {
     std::vector<RobotAPI::MultiMoveInfo2> mps;
 
     // ====================================================================
-    // 🚨 第一阶段：全量预计算（内存囤货），发现任何不可达点立刻阻断
+    // 第一阶段：全量预计算（内存囤货），发现任何不可达点立刻阻断
     // ====================================================================
     for (int r = 0; r < rowCount; ++r) {
         RobotAPI::MultiMoveInfo2 mp;
