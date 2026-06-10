@@ -8,6 +8,7 @@
 #include <QVector>
 #include "mainwindow.h"
 #include <QTimer>
+#include <QSpinBox>
 
 class TaskProgramDialog : public QDialog
 {
@@ -53,6 +54,8 @@ private:
     bool m_resetAfterBlockStop = false;
 
     void setBlockMoveRunning(bool running);
+
+    QSpinBox* m_speedRatioSpinBox = nullptr;
 };
 
 #endif // TASKPROGRAMDIALOG_H

@@ -130,6 +130,40 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
     bottomLayout->addWidget(m_statusLabel);
     bottomLayout->addStretch();
 
+    QLabel* speedLabel = new QLabel("全局倍率:", this);
+    speedLabel->setStyleSheet("font-weight: bold; font-size: 14px; color: #333;");
+    bottomLayout->addWidget(speedLabel);
+
+    m_speedRatioSpinBox = new QSpinBox(this);
+    m_speedRatioSpinBox->setRange(1, 100);  // 倍率范围 1% - 100%
+    m_speedRatioSpinBox->setSuffix(" %");
+    m_speedRatioSpinBox->setFixedWidth(80);
+    m_speedRatioSpinBox->setStyleSheet("QSpinBox { padding: 4px; font-weight: bold; font-size: 14px; border: 1px solid #aaa; border-radius: 3px; }");
+    bottomLayout->addWidget(m_speedRatioSpinBox);
+    bottomLayout->addSpacing(20);
+
+    // 1. 初始化时尝试读取底层的真实倍率并同步到界面
+    if (m_devId != 0 && RobotAPI::IsConnected(m_devId)) {
+        unsigned int curRatio = 20; // 给个保底值 20
+        if (RobotAPI::GetCurrentSpeedRatio(curRatio, m_devId) == 0) {
+            m_speedRatioSpinBox->setValue(curRatio);
+        } else {
+            m_speedRatioSpinBox->setValue(20);
+        }
+    } else {
+        m_speedRatioSpinBox->setValue(20);
+    }
+
+    // 2. 绑定事件：允许用户在机器人运行时实时点击上下箭头改变速度
+    connect(m_speedRatioSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int value) {
+        if (m_devId != 0 && RobotAPI::IsConnected(m_devId)) {
+            int ret = RobotAPI::SetGlobalSpeed(value, m_devId);
+            if (ret == 0 && m_statusLabel) {
+                m_statusLabel->setText(QString("✔️ 全局倍率已实时调整为: %1%").arg(value));
+            }
+        }
+    });
+
     m_startBtn = new QPushButton("▶ 启动程序", this);
     m_startBtn->setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 8px 15px; border-radius: 4px;");
     m_pauseBtn = new QPushButton("⏸ 暂停", this);
@@ -341,21 +375,17 @@ void TaskProgramDialog::onStartClicked() {
     m_resetAfterBlockStop = false;
     m_statusLabel->setText(QString("解算完毕，共 %1 个动作，开启动态滑动窗口...").arg(mps.size()));
 
-    // ====================================================================
-    // 🚨 第二阶段：纯血版滑动窗口子线程（绝不混用任何 Block API）
-    // ====================================================================
-    m_blockMoveThread = QThread::create([this, mps, devId = m_devId, selTool, motionWobj]() mutable {
+    unsigned int startSpeedRatio = m_speedRatioSpinBox->value();
+    m_blockMoveThread = QThread::create([this, mps, devId = m_devId, selTool, motionWobj, startSpeedRatio]() mutable {
 
-        // 💡 清除原有遗留的 BlockMultiMoveReset，严格使用 MultiMove2 系列重置
         RobotAPI::MultiMove2Reset(devId);
         QThread::msleep(50);
 
         if (!selTool.empty()) RobotAPI::SetCurrentToolByName(selTool, devId);
         if (!motionWobj.empty()) RobotAPI::SetCurrentUframeByName(motionWobj, devId);
 
-        // 💡 清除旧的 prepareBlockMultiMoveStart 封装调用，直接使用核心 API 确保连续运行和倍率
         RobotAPI::SetCurrentStepMode(ROBOX_MODE_CONTINUOUS, devId);
-        RobotAPI::SetGlobalSpeed(10, devId);
+        RobotAPI::SetGlobalSpeed(startSpeedRatio, devId);
         QThread::msleep(50);
 
         int totalPoints = mps.size();
@@ -372,7 +402,6 @@ void TaskProgramDialog::onStartClicked() {
             int chunkCount = std::min(3, totalPoints - sentIndex);
             std::vector<RobotAPI::MultiMoveInfo2> chunk(mps.begin() + sentIndex, mps.begin() + sentIndex + chunkCount);
 
-            // 🎯 唯一负责下发轨迹的 API，绝不触碰 BlockMultiMove
             int ret = RobotAPI::MultiMove2Start(chunk, devId);
 
             if (ret == 0) {
@@ -397,13 +426,11 @@ void TaskProgramDialog::onStartClicked() {
             QThread::msleep(30);
         }
 
-        // 推送循环结束，收尾工作
         QMetaObject::invokeMethod(this, [this, sentIndex, totalPoints]() {
             setBlockMoveRunning(false);
             m_startBtn->setEnabled(true);
             m_blockMoveThread = nullptr;
 
-            // 💡 清除原有遗留的 BlockMultiMoveReset，严格使用 MultiMove2 系列重置
             if (m_resetAfterBlockStop && m_devId != 0) {
                 RobotAPI::MultiMove2Reset(m_devId);
             }
@@ -411,7 +438,7 @@ void TaskProgramDialog::onStartClicked() {
             if (m_blockMoveStopRequested) {
                 m_statusLabel->setText("已手动中止运行。");
             } else if (sentIndex >= totalPoints) {
-                m_statusLabel->setText("🎉 轨迹已全量喂入控制器，等待物理动作执行结束...");
+                m_statusLabel->setText("轨迹已全量喂入控制器，等待物理动作执行结束...");
             }
         }, Qt::QueuedConnection);
     });
