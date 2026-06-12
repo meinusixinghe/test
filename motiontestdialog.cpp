@@ -11,8 +11,8 @@
 MotionTestDialog::MotionTestDialog(unsigned int devId, QWidget *parent)
     : QDialog(parent), m_devId(devId)
 {
-    setWindowTitle("机器人高级运动测试台");
-    setFixedSize(850, 450); // 调大窗口以容纳左侧菜单和右侧表格
+    setWindowTitle("机器人高级运动测试台 (姿态 CFG 自适应版)");
+    setFixedSize(850, 450);
 
     setupUi();
 }
@@ -124,6 +124,7 @@ void MotionTestDialog::onMlinGetPosClicked() {
         int ret = RobotAPI::GetPositionData(pd, m_devId);
         QMetaObject::invokeMethod(this, [this, ret, pd]() {
             if (ret == 0) {
+                // 默认拿工作坐标系(kcsPos 是基坐标, pcsPos 是用户坐标，此处按常用 kcs 取值)
                 double p[6]; for(int i=0; i<6; i++) p[i] = pd.kcsPos[i];
                 addRowToMlinTable(p, 100, 10.0);
                 m_mlinStatusLabel->setText("当前位置已加入 MLIN 队列！");
@@ -153,6 +154,7 @@ void MotionTestDialog::onExecuteMlinClicked() {
         int ret = 0;
         for (auto& pt : queue) {
             double currentPos[6]; for(int k=0; k<6; k++) currentPos[k] = pt.p[k];
+            // MLIN_ZONE 等价于 MLIN, 且自带过渡，如果底层有 MLIN_CFG 接口，在这里也是最好调用带 CFG 的
             ret = RobotAPI::MLIN(currentPos, pt.s, pt.z, devId);
             if (ret != 0) break;
         }
@@ -197,7 +199,7 @@ QWidget* MotionTestDialog::createMultiMovePage()
 
     QHBoxLayout* bottomLayout = new QHBoxLayout();
     m_multiStatusLabel = new QLabel("状态: 准备就绪...", page);
-    m_multiStatusLabel->setStyleSheet("color: #E53935; font-weight: bold;"); // 红色警示色
+    m_multiStatusLabel->setStyleSheet("color: #E53935; font-weight: bold;");
 
     m_multiRunBtn = new QPushButton("执行组合运动 (自动 Reset)", page);
     m_multiRunBtn->setStyleSheet("background-color: #FF9800; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px;");
@@ -227,10 +229,8 @@ void MotionTestDialog::addRowToMultiTable(int type, double* pos, int speed, doub
     double defaultPos[6] = {0,0,0,0,0,0};
     if (!pos) pos = defaultPos;
 
-    // 单元格 0: 运动类型下拉框
     QComboBox* typeCombo = new QComboBox();
     typeCombo->addItems({"1: 关节 (Joint)", "2: 直线 (Lin)", "3: 圆弧 (Circ)"});
-    // 默认选中传入的 type
     if (type >= 1 && type <= 3) typeCombo->setCurrentIndex(type - 1);
     m_multiTable->setCellWidget(row, 0, typeCombo);
 
@@ -252,7 +252,7 @@ void MotionTestDialog::onMultiGetJointPosClicked() {
         QMetaObject::invokeMethod(this, [this, ret, pd]() {
             if (ret == 0) {
                 double p[6]; for(int i=0; i<6; i++) p[i] = pd.acsPos[i];
-                addRowToMultiTable(1, p, 100, 0); // Type 1 关节
+                addRowToMultiTable(1, p, 100, 0);
             }
         }, Qt::QueuedConnection);
     });
@@ -268,7 +268,7 @@ void MotionTestDialog::onMultiGetCartPosClicked() {
         QMetaObject::invokeMethod(this, [this, ret, pd]() {
             if (ret == 0) {
                 double p[6]; for(int i=0; i<6; i++) p[i] = pd.kcsPos[i];
-                addRowToMultiTable(2, p, 100, 0); // Type 2 笛卡尔
+                addRowToMultiTable(2, p, 100, 0);
             }
         }, Qt::QueuedConnection);
     });
@@ -280,19 +280,18 @@ void MotionTestDialog::onExecuteMultiMoveClicked() {
     int rowCount = m_multiTable->rowCount();
     if (m_devId == 0 || rowCount == 0) return;
 
-    // 从表格打包 MultiMovePos 结构体数据
     std::vector<RobotAPI::MultiMovePos> mps;
     for (int r = 0; r < rowCount; ++r) {
         RobotAPI::MultiMovePos mp;
 
         QComboBox* combo = qobject_cast<QComboBox*>(m_multiTable->cellWidget(r, 0));
-        if(combo) mp.type = combo->currentText().left(1).toInt(); /* 截取 "1", "2", "3" 转为整数 */
-        else mp.type = 2; // 容错兜底
+        if(combo) mp.type = combo->currentText().left(1).toInt();
+        else mp.type = 2;
 
         for (int i = 0; i < 6; ++i) mp.pos[i] = m_multiTable->item(r, i + 1)->text().toDouble();
         mp.speed = m_multiTable->item(r, 7)->text().toInt();
         mp.overlapping = m_multiTable->item(r, 8)->text().toDouble();
-
+        mp.cfg = 0; // 旧版接口缺少获取当前 CFG 的简易方法，如需彻底稳妥，更推荐用 MultiMove2
         mps.push_back(mp);
     }
 
@@ -300,10 +299,7 @@ void MotionTestDialog::onExecuteMultiMoveClicked() {
     m_multiStatusLabel->setText("正在重置并下发组合运动...");
 
     QThread* worker = QThread::create([this, mps, devId = m_devId]() {
-        // 👇 核心机制：执行前必须调用 Reset，否则后续可能会被拒绝
         RobotAPI::MultiMoveReset(devId);
-
-        // 下发整个列表
         int ret = RobotAPI::MultiMoveStart(mps, devId);
 
         QMetaObject::invokeMethod(this, [this, ret]() {
@@ -321,7 +317,7 @@ void MotionTestDialog::onExecuteMultiMoveClicked() {
 }
 
 // =======================================================================
-// 第三页：第2类组合运动 (MultiMove2) 构建与逻辑
+// 第三页：第2类组合运动 (MultiMove2) 构建与逻辑 (完全注入 CFG！)
 // =======================================================================
 QWidget* MotionTestDialog::createMultiMove2Page()
 {
@@ -329,10 +325,9 @@ QWidget* MotionTestDialog::createMultiMove2Page()
     QVBoxLayout* layout = new QVBoxLayout(page);
     layout->setContentsMargins(0, 0, 0, 0);
 
-    QGroupBox* tableGroup = new QGroupBox("MultiMove2 高级运动队列 (支持加减速设定)", page);
+    QGroupBox* tableGroup = new QGroupBox("MultiMove2 高级运动队列 (支持姿态防跳变校验)", page);
     QVBoxLayout* tableLayout = new QVBoxLayout(tableGroup);
 
-    // 表格增加至 12 列，涵盖 acc 和 dec
     m_multi2Table = new QTableWidget(0, 12, page);
     m_multi2Table->setHorizontalHeaderLabels({"插补模式", "位置类型", "J1/X", "J2/Y", "J3/Z", "J4/RX", "J5/RY", "J6/RZ", "速度", "加Acc", "减Dec", "Overlap"});
     m_multi2Table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
@@ -354,9 +349,9 @@ QWidget* MotionTestDialog::createMultiMove2Page()
 
     QHBoxLayout* bottomLayout = new QHBoxLayout();
     m_multi2StatusLabel = new QLabel("状态: 准备就绪...", page);
-    m_multi2StatusLabel->setStyleSheet("color: #9C27B0; font-weight: bold;"); // 紫色区分
+    m_multi2StatusLabel->setStyleSheet("color: #9C27B0; font-weight: bold;");
 
-    m_multi2RunBtn = new QPushButton("执行 MultiMove2 (自动 Reset)", page);
+    m_multi2RunBtn = new QPushButton("执行 MultiMove2 (自动填充CFG)", page);
     m_multi2RunBtn->setStyleSheet("background-color: #9C27B0; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px;");
 
     bottomLayout->addWidget(m_multi2StatusLabel);
@@ -380,19 +375,17 @@ void MotionTestDialog::addRowToMulti2Table(int moveType, int posType, double* po
     double defaultPos[6] = {0,0,0,0,0,0};
     if (!pos) pos = defaultPos;
 
-    // 单元格 0: moveType (插补模式)
     QComboBox* moveCombo = new QComboBox();
     moveCombo->addItems({"1: 关节(Joint)", "2: 直线(Lin)", "3: 圆弧(Circ)", "4: 圆角(CircAng)"});
     if (moveType >= 1 && moveType <= 4) moveCombo->setCurrentIndex(moveType - 1);
     m_multi2Table->setCellWidget(row, 0, moveCombo);
 
-    // 单元格 1: posType (位置类型)
     QComboBox* posCombo = new QComboBox();
     posCombo->addItems({"1: Joint数据", "2: Cart数据"});
     if (posType == 1 || posType == 2) posCombo->setCurrentIndex(posType - 1);
+    // ✔️ 修复：只使用正确的 m_multi2Table 变量
     m_multi2Table->setCellWidget(row, 1, posCombo);
 
-    // 坐标与参数填入
     for (int i = 0; i < 6; ++i) m_multi2Table->setItem(row, i + 2, new QTableWidgetItem(QString::number(pos[i], 'f', 3)));
 
     m_multi2Table->setItem(row, 8, new QTableWidgetItem(QString::number(speed, 'f', 1)));
@@ -414,7 +407,7 @@ void MotionTestDialog::onMulti2GetJointPosClicked() {
         QMetaObject::invokeMethod(this, [this, ret, pd]() {
             if (ret == 0) {
                 double p[6]; for(int i=0; i<6; i++) p[i] = pd.acsPos[i];
-                addRowToMulti2Table(1, 1, p, 100, 50, 50, 0); // moveType=1(关节插补), posType=1(关节数据)
+                addRowToMulti2Table(1, 1, p, 100, 50, 50, 0);
             }
         }, Qt::QueuedConnection);
     });
@@ -430,7 +423,7 @@ void MotionTestDialog::onMulti2GetCartPosClicked() {
         QMetaObject::invokeMethod(this, [this, ret, pd]() {
             if (ret == 0) {
                 double p[6]; for(int i=0; i<6; i++) p[i] = pd.kcsPos[i];
-                addRowToMulti2Table(2, 2, p, 100, 50, 50, 0); // moveType=2(直线插补), posType=2(Cart数据)
+                addRowToMulti2Table(2, 2, p, 100, 50, 50, 0);
             }
         }, Qt::QueuedConnection);
     });
@@ -438,16 +431,26 @@ void MotionTestDialog::onMulti2GetCartPosClicked() {
     worker->start();
 }
 
+// 核心修复逻辑：动态提取系统当前 CFG，并强行融合到用户修改的数据包里！
 void MotionTestDialog::onExecuteMultiMove2Clicked() {
     int rowCount = m_multi2Table->rowCount();
     if (m_devId == 0 || rowCount == 0) return;
 
-    // SDK 数据结构：MultiMoveInfo2 (在某些 SDK 版本中被typedef 为 BlockMultiMoveInfo)
+    // 获取机器人的当前工具、坐标系和真实 CFG 姿态
+    std::string curTool, curWobj;
+    RobotAPI::GetCurrentToolName(curTool, m_devId);
+    RobotAPI::GetCurrentUframeName(curWobj, m_devId);
+
+    RobotAPI::RobotPos currentPos;
+    memset(&currentPos, 0, sizeof(currentPos));
+    // 我们必须调用带后缀 2 的方法，因为它返回的数据体包含了骨架配置！
+    RobotAPI::GetBaseCoordinatePos2(currentPos, m_devId);
+
     std::vector<RobotAPI::MultiMoveInfo2> mps;
 
     for (int r = 0; r < rowCount; ++r) {
         RobotAPI::MultiMoveInfo2 mp;
-        memset(&mp, 0, sizeof(RobotAPI::MultiMoveInfo2)); // 内存清零，防止无效标志位导致机器人死机
+        memset(&mp, 0, sizeof(RobotAPI::MultiMoveInfo2));
 
         QComboBox* moveCombo = qobject_cast<QComboBox*>(m_multi2Table->cellWidget(r, 0));
         mp.moveType = moveCombo ? moveCombo->currentText().left(1).toInt() : 2;
@@ -455,46 +458,66 @@ void MotionTestDialog::onExecuteMultiMove2Clicked() {
         QComboBox* posCombo = qobject_cast<QComboBox*>(m_multi2Table->cellWidget(r, 1));
         mp.posType = posCombo ? posCombo->currentText().left(1).toInt() : 2;
 
-        // 提取坐标系数据，并根据 posType 存入 ap(关节) 或 cp(笛卡尔)
         double p[6];
         for (int i = 0; i < 6; ++i) p[i] = m_multi2Table->item(r, i + 2)->text().toDouble();
 
-        if (mp.posType == 1) { // 关节坐标系 (使用 j 数组，下标 0~5 对应 1~6 轴)
+        if (mp.posType == 1) {
+            // 如果你选的是纯关节运动，关节天生不带多解问题，不需要 CFG
             mp.ap[0].j[0] = p[0]; mp.ap[0].j[1] = p[1]; mp.ap[0].j[2] = p[2];
             mp.ap[0].j[3] = p[3]; mp.ap[0].j[4] = p[4]; mp.ap[0].j[5] = p[5];
-        } else { // 笛卡尔坐标系 (x,y,z,a,b,c 是独立的成员变量)
-            mp.cp[0].x = p[0]; mp.cp[0].y = p[1]; mp.cp[0].z = p[2];
-            mp.cp[0].a = p[3]; mp.cp[0].b = p[4]; mp.cp[0].c = p[5];
+        } else {
+            // 🌟 选的是笛卡尔（XYZABC），这才是 Error 3 的重灾区！
+            RobotAPI::RobotPos localP;
+            memset(&localP, 0, sizeof(localP));
+            localP.x = p[0]; localP.y = p[1]; localP.z = p[2];
+            localP.a = p[3]; localP.b = p[4]; localP.c = p[5];
+
+            // 致命填充：将刚刚从机器人本体上剥下来的 CFG，硬塞给你在界面上输入的这个坐标里！
+            localP.cfgx = currentPos.cfgx;
+            localP.cfg1 = currentPos.cfg1;
+            localP.cfg4 = currentPos.cfg4;
+            localP.cfg6 = currentPos.cfg6;
+
+            RobotAPI::RobotJoint tJoints;
+            // 通过 IK/FK 重算，确保笛卡尔数据绝对完美且不违背物理常理！
+            if (RobotAPI::IkSolver(localP, tJoints, curTool, curWobj, m_devId) == 0) {
+                RobotAPI::RobotPos finalP;
+                if (RobotAPI::FkSolver(tJoints, finalP, curTool, curWobj, m_devId) == 0) {
+                    mp.cp[0] = finalP; // 使用正解出来、自带完美 CFG 的数据
+                } else {
+                    mp.cp[0] = localP; // 兜底
+                }
+            } else {
+                mp.cp[0] = localP;     // 如果因为超限逆解失败，原样发下去，让底层去报错
+            }
         }
 
         mp.speed = m_multi2Table->item(r, 8)->text().toDouble();
         mp.acc = m_multi2Table->item(r, 9)->text().toDouble();
         mp.dec = m_multi2Table->item(r, 10)->text().toDouble();
-        mp.jerk = 0; // 默认平滑
+        mp.jerk = 0;
         mp.overlapping = m_multi2Table->item(r, 11)->text().toDouble();
-        mp.auxOverlapping = 0;
+        mp.auxOverlapping = 1e100;
         mp.flags = 0;
 
         mps.push_back(mp);
     }
 
     m_multi2RunBtn->setEnabled(false);
-    m_multi2StatusLabel->setText("正在重置并下发 MultiMove2 ...");
+    m_multi2StatusLabel->setText("正在利用底层计算防突变骨架并下发...");
 
     QThread* worker = QThread::create([this, mps, devId = m_devId]() {
-        // 执行前强制调用第 2 类组合重置
-        RobotAPI::MultiMove2Reset(devId);
 
-        // 下发整个列队
+        RobotAPI::MultiMove2Reset(devId);
         int ret = RobotAPI::MultiMove2Start(mps, devId);
 
         QMetaObject::invokeMethod(this, [this, ret]() {
             m_multi2RunBtn->setEnabled(true);
             if (ret == 0) {
-                m_multi2StatusLabel->setText("MultiMove2 下发成功 (ERROR_OK)！");
+                m_multi2StatusLabel->setText("MultiMove2 带有灵魂的 CFG 数据已下发成功！");
             } else {
                 m_multi2StatusLabel->setText(QString("MultiMove2 失败，错误码: %1").arg(ret));
-                QMessageBox::warning(this, "下发失败", QString("MultiMove2Start 被拒绝！\n错误码: %1\n请检查加减速度(acc/dec)是否有效，以及坐标数据(posType)是否匹配。").arg(ret));
+                QMessageBox::warning(this, "下发失败", QString("即使加了 CFG 依然被拒绝！\n错误码: %1\n原因可能是你修改的 A 角过大，或者 XYZ 跑到天边去了，物理上确实走不通直线。").arg(ret));
             }
         }, Qt::QueuedConnection);
     });
