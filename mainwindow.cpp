@@ -2619,14 +2619,14 @@ void MainWindow::onReorderStartSelected(int pathIndex, int segIndex) {
 }
 
 // =========================================================================
-// 核心：基于面积推导轮廓层级、并重新洗牌重构节点的算法
+// 核心：将散乱图元缝合成回路(Loop)，基于面积推导轮廓层级并重新洗牌重构
 // =========================================================================
 void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
     if (m_displayPaths.isEmpty()) return;
 
     saveUndoState();
 
-    // 辅助闭包：计算多边形有符号面积 (在 Qt 屏幕系系中，由于 Y 朝下，正面积代表屏幕逆时针，实际物理模型顺时针)
+    // 辅助闭包：计算多边形有符号面积 (在 Qt 屏幕系中，由于 Y 朝下，正面积代表屏幕逆时针，物理模型顺时针)
     auto polygonArea = [](const QVector<QPointF>& pts) {
         double area = 0.0;
         int n = pts.size();
@@ -2638,105 +2638,219 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
         return area / 2.0;
     };
 
-    // 1. 计算所有图元的面积，找到最大面积的“外轮廓”
-    QVector<double> areas(m_displayPaths.size());
-    double maxArea = -1.0;
-    int maxAreaIdx = -1;
+    // ==============================================================
+    // 1. 将散装的图元 (Contour) 重新拼接为闭合的轮廓回路 (PathLoop)
+    // ==============================================================
+    struct PathLoop {
+        QList<int> originalIndices; // 存的在 m_displayPaths 中的下标
+        QVector<QPointF> fullPoly;  // 用于计算面积的完整多边形节点
+        double area = 0.0;          // 面积的绝对值
+        bool isCCW = false;         // 是否逆时针
+        bool isClosed = false;
+    };
+
+    QList<PathLoop> loops;
+    PathLoop currentLoop;
+
     for (int i = 0; i < m_displayPaths.size(); ++i) {
-        areas[i] = std::abs(polygonArea(m_displayPaths[i].points));
-        if (areas[i] > maxArea) {
-            maxArea = areas[i];
-            maxAreaIdx = i;
+        Contour c = m_displayPaths[i];
+
+        if (currentLoop.originalIndices.isEmpty()) {
+            currentLoop.originalIndices.append(i);
+            currentLoop.fullPoly.append(c.points.first());
+            for (int j = 1; j < c.points.size(); ++j) {
+                currentLoop.fullPoly.append(c.points[j]);
+            }
+        } else {
+            // 判断当前图元是否与 currentLoop 的尾部首尾相连 (容差 1e-3)
+            QPointF lastPt = currentLoop.fullPoly.last();
+            QPointF firstPt = c.points.first();
+            if (std::hypot(lastPt.x() - firstPt.x(), lastPt.y() - firstPt.y()) < 1e-3) {
+                currentLoop.originalIndices.append(i);
+                for (int j = 1; j < c.points.size(); ++j) {
+                    currentLoop.fullPoly.append(c.points[j]);
+                }
+            } else {
+                // 不相连，说明上一个 Loop 已经结束，将其保存，开启新的 Loop
+                loops.append(currentLoop);
+                currentLoop = PathLoop();
+
+                currentLoop.originalIndices.append(i);
+                currentLoop.fullPoly.append(c.points.first());
+                for (int j = 1; j < c.points.size(); ++j) {
+                    currentLoop.fullPoly.append(c.points[j]);
+                }
+            }
+        }
+
+        // 每加入一个图元，检查当前的 Loop 是否已经闭合首尾
+        if (!currentLoop.originalIndices.isEmpty() && currentLoop.fullPoly.size() > 1) {
+            QPointF startPt = currentLoop.fullPoly.first();
+            QPointF endPt = currentLoop.fullPoly.last();
+            if (std::hypot(startPt.x() - endPt.x(), startPt.y() - endPt.y()) < 1e-3) {
+                currentLoop.isClosed = true;
+                loops.append(currentLoop);
+                currentLoop = PathLoop(); // 清空，让下一个图元新开 Loop
+            }
+        }
+    }
+    // 把最后残留的未闭合 Loop 装进去
+    if (!currentLoop.originalIndices.isEmpty()) {
+        loops.append(currentLoop);
+    }
+
+    // ==============================================================
+    // 2. 分析每个 Loop 的方向与面积层级，并对 Loop 进行排序
+    // ==============================================================
+    int maxAreaLoopIdx = -1;
+    double maxArea = -1.0;
+    int startLoopIdx = -1;
+
+    for (int i = 0; i < loops.size(); ++i) {
+        if (loops[i].isClosed) {
+            double sArea = polygonArea(loops[i].fullPoly);
+            loops[i].isCCW = (sArea > 0);
+            loops[i].area = std::abs(sArea);
+        } else {
+            loops[i].area = 0.0;
+        }
+
+        if (loops[i].area > maxArea) {
+            maxArea = loops[i].area;
+            maxAreaLoopIdx = i;
+        }
+        if (loops[i].originalIndices.contains(startPathIdx)) {
+            startLoopIdx = i;
         }
     }
 
-    // 判断用户选的起刀图元是不是最外层轮廓
-    bool isOuterSelected = (startPathIdx == maxAreaIdx);
+    // 如果用户点的图纸不闭合或未选中，防呆
+    if (startLoopIdx == -1) startLoopIdx = 0;
 
-    QList<int> sortedIndices;
-    for (int i = 0; i < m_displayPaths.size(); ++i) sortedIndices.append(i);
+    // 判断用户选中的那个 Loop 是不是最大的外轮廓
+    bool isOuterSelected = (startLoopIdx == maxAreaLoopIdx);
 
-    // 2. 层级排序逻辑！
-    std::sort(sortedIndices.begin(), sortedIndices.end(), [&](int a, int b) {
-        if (isOuterSelected) return areas[a] > areas[b]; // 外轮廓被选: 面积从大到小排列 (外到内)
-        else return areas[a] < areas[b];                 // 内轮廓被选: 面积从小到大排列 (内到外)
+    QList<int> sortedLoopIndices;
+    for (int i = 0; i < loops.size(); ++i) {
+        sortedLoopIndices.append(i);
+    }
+
+    // 层级排序逻辑！
+    std::sort(sortedLoopIndices.begin(), sortedLoopIndices.end(), [&](int a, int b) {
+        if (isOuterSelected) return loops[a].area > loops[b].area; // 外向内: 降序
+        else return loops[a].area < loops[b].area;                 // 内向外: 升序
     });
 
-    // 强行把用户选中的起刀图元排在第 1 顺位
-    sortedIndices.removeAll(startPathIdx);
-    sortedIndices.prepend(startPathIdx);
+    // 强行把用户选中的起刀 Loop 排在第 1 顺位
+    sortedLoopIndices.removeAll(startLoopIdx);
+    sortedLoopIndices.prepend(startLoopIdx);
 
+    // ==============================================================
+    // 3. 对排序好的 Loop 内部的图元进行翻转、起点重构、并展平回列表
+    // ==============================================================
     QVector<Contour> reordered;
 
-    // 3. 对每个图元进行节点整理、翻转和移位
-    for (int i = 0; i < sortedIndices.size(); ++i) {
-        int idx = sortedIndices[i];
-        Contour c = m_displayPaths[idx];
-        if (c.points.size() < 2) {
-            reordered.append(c);
-            continue;
+    for (int i = 0; i < sortedLoopIndices.size(); ++i) {
+        int lIdx = sortedLoopIndices[i];
+        PathLoop& pl = loops[lIdx];
+
+        QList<Contour> loopContours;
+        for (int origIdx : pl.originalIndices) {
+            loopContours.append(m_displayPaths[origIdx]);
         }
 
-        bool isClosed = (std::hypot(c.points.first().x() - c.points.last().x(), c.points.first().y() - c.points.last().y()) < 1e-3);
-
-        double sArea = polygonArea(c.points);
-        bool currentIsCCW = (sArea > 0);
+        // 检查这个 Loop 是否需要翻转走向
         bool needsReverse = false;
-
-        // 判断当前节点是否符合用户的旋转意图
-        if (isCW && currentIsCCW) needsReverse = true;
-        if (!isCW && !currentIsCCW) needsReverse = true;
-
-        int targetStartPt = 0;
-        if (idx == startPathIdx) {
-            targetStartPt = startSegIdx; // 选中的起刀图元，严格从点击的段开始！
-        } else {
-            // 其余图元，通过寻找距离上一刀收刀点最近的位置，智能寻找起刀点以减小空跑！
-            if (!reordered.isEmpty() && isClosed) {
-                QPointF lastEnd = reordered.last().points.last();
-                double minDist = std::numeric_limits<double>::max();
-                for (int p = 0; p < c.points.size() - 1; ++p) {
-                    double dist = std::hypot(c.points[p].x() - lastEnd.x(), c.points[p].y() - lastEnd.y());
-                    if (dist < minDist) {
-                        minDist = dist;
-                        targetStartPt = p;
-                    }
-                }
-            }
+        if (pl.isClosed) {
+            if (isCW && pl.isCCW) needsReverse = true;
+            if (!isCW && !pl.isCCW) needsReverse = true;
         }
 
-        // 如果需要反向，将数组彻底反转，并利用高数偏移起刀索引
+        // 如果需要整体反转，则反转包含的图元顺序，并反转图元内部的点
         if (needsReverse) {
-            std::reverse(c.points.begin(), c.points.end());
-            if (idx == startPathIdx) {
-                int N = c.points.size();
-                targetStartPt = N - 2 - startSegIdx;
-                if (targetStartPt < 0) targetStartPt = 0;
-            } else if (isClosed) {
-                // 翻转后，物理位置全变了，需要再寻找一次最近点
+            QList<Contour> reversedContours;
+            for (int k = loopContours.size() - 1; k >= 0; --k) {
+                Contour revC = loopContours[k];
+                std::reverse(revC.points.begin(), revC.points.end());
+                reversedContours.append(revC);
+            }
+            loopContours = reversedContours;
+        }
+
+        // 寻找最优的下刀点
+        int targetStartElementIdx = 0; // Contour 级平移索引
+        int targetStartPtIdx = 0;      // Point 级平移索引 (仅针对单图元 Loop)
+
+        if (lIdx == startLoopIdx) {
+            if (needsReverse) {
+                int origPos = pl.originalIndices.indexOf(startPathIdx);
+                targetStartElementIdx = loopContours.size() - 1 - origPos;
+                if (loopContours.size() == 1) {
+                    int N = loopContours[0].points.size();
+                    targetStartPtIdx = N - 2 - startSegIdx;
+                    if (targetStartPtIdx < 0) targetStartPtIdx = 0;
+                }
+            } else {
+                targetStartElementIdx = pl.originalIndices.indexOf(startPathIdx);
+                if (loopContours.size() == 1) {
+                    targetStartPtIdx = startSegIdx;
+                }
+            }
+        } else {
+            // 对于其他的 Loop，智能寻找距离上一个落刀点最近的接缝特征点作为起刀点
+            if (!reordered.isEmpty() && pl.isClosed) {
                 QPointF lastEnd = reordered.last().points.last();
                 double minDist = std::numeric_limits<double>::max();
-                targetStartPt = 0;
-                for (int p = 0; p < c.points.size() - 1; ++p) {
-                    double dist = std::hypot(c.points[p].x() - lastEnd.x(), c.points[p].y() - lastEnd.y());
-                    if (dist < minDist) {
-                        minDist = dist;
-                        targetStartPt = p;
+
+                if (loopContours.size() > 1) {
+                    // 多图元：找离得最近的 Contour 起点下刀（不打断图元）
+                    for (int k = 0; k < loopContours.size(); ++k) {
+                        QPointF startPt = loopContours[k].points.first();
+                        double dist = std::hypot(startPt.x() - lastEnd.x(), startPt.y() - lastEnd.y());
+                        if (dist < minDist) {
+                            minDist = dist;
+                            targetStartElementIdx = k;
+                        }
+                    }
+                } else {
+                    // 单图元：找图元内离得最近的 Node 点
+                    for (int p = 0; p < loopContours[0].points.size() - 1; ++p) {
+                        bool isFittedData = loopContours[0].type.contains("拟合") || loopContours[0].type.contains("样条") || loopContours[0].type.contains("Spline", Qt::CaseInsensitive);
+                        if (isFittedData && (p % 2 != 0)) continue;
+
+                        QPointF pt = loopContours[0].points[p];
+                        double dist = std::hypot(pt.x() - lastEnd.x(), pt.y() - lastEnd.y());
+                        if (dist < minDist) {
+                            minDist = dist;
+                            targetStartPtIdx = p;
+                        }
                     }
                 }
             }
         }
 
-        // 环形移位：将被选中的特征段转移到数组的起始位置
-        if (isClosed && targetStartPt > 0 && targetStartPt < c.points.size() - 1) {
-            QVector<QPointF> newPts;
-            for (int p = targetStartPt; p < c.points.size() - 1; ++p) newPts.append(c.points[p]);
-            for (int p = 0; p < targetStartPt; ++p) newPts.append(c.points[p]);
-            newPts.append(newPts.first()); // 重新闭合缝合口
-            c.points = newPts;
+        // 环形移位：将找到的最佳下刀点放到数组的开头
+        if (pl.isClosed) {
+            if (loopContours.size() > 1 && targetStartElementIdx > 0 && targetStartElementIdx < loopContours.size()) {
+                QList<Contour> shiftedContours;
+                for (int k = targetStartElementIdx; k < loopContours.size(); ++k) shiftedContours.append(loopContours[k]);
+                for (int k = 0; k < targetStartElementIdx; ++k) shiftedContours.append(loopContours[k]);
+                loopContours = shiftedContours;
+            }
+            else if (loopContours.size() == 1 && targetStartPtIdx > 0 && targetStartPtIdx < loopContours[0].points.size() - 1) {
+                QVector<QPointF> &pts = loopContours[0].points;
+                QVector<QPointF> newPts;
+                for (int p = targetStartPtIdx; p < pts.size() - 1; ++p) newPts.append(pts[p]);
+                for (int p = 0; p < targetStartPtIdx; ++p) newPts.append(pts[p]);
+                newPts.append(newPts.first());
+                pts = newPts;
+            }
         }
 
-        reordered.append(c);
+        // 展平写入结果列表
+        for (const Contour& c : loopContours) {
+            reordered.append(c);
+        }
     }
 
     m_displayPaths = reordered;

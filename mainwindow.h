@@ -203,7 +203,6 @@ private slots:
     void onRobotParameterSettings();
     void onPermissionBtnClicked();
     void onRoboxModeChanged(int index);
-    void reorderPathsGeo();
     void checkRobotAlarm();
     void clearRobotAlarm();
     void onClearAlarmClicked();
