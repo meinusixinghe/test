@@ -1331,10 +1331,22 @@ void MainWindow::onStartClicked()
         return;
     }
 
+    if (m_taskProgramDialog) {
+        m_taskProgramDialog->show();            // 显示已有窗口
+        m_taskProgramDialog->raise();           // 提到所有窗口的最上层
+        m_taskProgramDialog->activateWindow();  // 激活焦点
+        return;
+    }
+
     UserCoordSystem ucs = renderArea->getUCS();
-    TaskProgramDialog* dlg = new TaskProgramDialog(m_currentDevId, m_displayPaths, ucs, this);
-    dlg->setAttribute(Qt::WA_DeleteOnClose);
-    dlg->show();
+    m_taskProgramDialog = new TaskProgramDialog(m_currentDevId, m_displayPaths, ucs, this);
+    m_taskProgramDialog->setAttribute(Qt::WA_DeleteOnClose);
+
+    connect(m_taskProgramDialog, &QObject::destroyed, this, [this]() {
+        m_taskProgramDialog = nullptr;
+    });
+
+    m_taskProgramDialog->show();
 }
 
 // ----------------------------------------------------
@@ -2363,9 +2375,11 @@ UserCoordDialog::UserCoordDialog(RenderArea* renderArea, QWidget* parent)
     : QDialog(parent), m_renderArea(renderArea)
 {
     setWindowTitle("建立用户坐标系");
-    setMinimumWidth(400);
+    setMinimumWidth(300);
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
+    mainLayout->setContentsMargins(10, 10, 10, 10);
+    mainLayout->setSpacing(5);
 
     m_lblStatus = new QLabel("请在下方依次完成设定", this);
     m_lblStatus->setStyleSheet("color: #1976D2; font-weight: bold; font-size: 13px;");
@@ -2376,60 +2390,78 @@ UserCoordDialog::UserCoordDialog(RenderArea* renderArea, QWidget* parent)
     m_rbUnknownOrigin->setEnabled(false);
     m_rbKnowOrigin->setChecked(true);
 
-    mainLayout->addWidget(m_rbKnowOrigin);
-    mainLayout->addWidget(m_rbUnknownOrigin);
+    QHBoxLayout* rbLayout = new QHBoxLayout();
+    rbLayout->addWidget(m_rbKnowOrigin);
+    rbLayout->addWidget(m_rbUnknownOrigin);
+    rbLayout->addStretch();
+    mainLayout->addLayout(rbLayout);
 
     m_knowOriginWidget = new QWidget(this);
     QVBoxLayout* knowLayout = new QVBoxLayout(m_knowOriginWidget);
     knowLayout->setContentsMargins(0, 5, 0, 0);
+    knowLayout->setSpacing(5);
 
     // 1. 原点设定 (加入方式选择)
     QGroupBox* gbOrigin = new QGroupBox("1. 原点设定");
     QVBoxLayout* vbOrigin = new QVBoxLayout(gbOrigin);
+    vbOrigin->setContentsMargins(5, 5, 5, 5);
+    vbOrigin->setSpacing(5);
+    QHBoxLayout* hbOrigin = new QHBoxLayout();
     m_cbOriginMethod = new QComboBox();
-    m_cbOriginMethod->addItems({"直接在图纸上选取特征点", "由 X轴与 Y轴延长线交点自动推导"});
-    m_btnSelectOrigin = new QPushButton("在图纸上选取原点");
+    m_cbOriginMethod->addItems({"在图纸上选取特征点", "自动推导交点"});
+    m_btnSelectOrigin = new QPushButton("选取原点");
+    hbOrigin->addWidget(m_cbOriginMethod);
+    hbOrigin->addWidget(m_btnSelectOrigin);
     m_lblOrigin = new QLabel("原点坐标: 未选取");
-    m_lblOrigin->setStyleSheet("color: #555; font-family: monospace;");
-    vbOrigin->addWidget(m_cbOriginMethod);
-    vbOrigin->addWidget(m_btnSelectOrigin);
+    m_lblOrigin->setStyleSheet("color: #555; font-family: monospace; font-size: 11px;");
+    vbOrigin->addLayout(hbOrigin);
     vbOrigin->addWidget(m_lblOrigin);
     knowLayout->addWidget(gbOrigin);
 
     // 2. X轴
     QGroupBox* gbX = new QGroupBox("2. 确立 X 轴");
     QVBoxLayout* vbX = new QVBoxLayout(gbX);
+    vbX->setContentsMargins(5, 5, 5, 5);
+    vbX->setSpacing(5);
+    QHBoxLayout* hbX = new QHBoxLayout();
     m_cbXMethod = new QComboBox();
-    m_cbXMethod->addItems({"两点确立 (起点 -> 终点)", "直线确立 (所选直线的方向)"});
-    m_btnSelectX = new QPushButton("在图纸上选取 X 轴特征");
-    m_btnRevX = new QPushButton("反转 X 轴正方向");
+    m_cbXMethod->addItems({"两点确立", "直线确立"});
+    m_btnSelectX = new QPushButton("选取特征");
+    m_btnRevX = new QPushButton("反转方向");
+    hbX->addWidget(m_cbXMethod);
+    hbX->addWidget(m_btnSelectX);
+    hbX->addWidget(m_btnRevX);
+
     m_lblX = new QLabel("X 轴向量: 未确立");
-    m_lblX->setStyleSheet("color: #555; font-family: monospace;");
-    vbX->addWidget(m_cbXMethod);
-    vbX->addWidget(m_btnSelectX);
-    vbX->addWidget(m_btnRevX);
+    m_lblX->setStyleSheet("color: #555; font-family: monospace; font-size: 11px;");
+    vbX->addLayout(hbX);
     vbX->addWidget(m_lblX);
     knowLayout->addWidget(gbX);
 
     // 3. Y轴
     QGroupBox* gbY = new QGroupBox("3. 确立 Y 轴");
     QVBoxLayout* vbY = new QVBoxLayout(gbY);
+    vbY->setContentsMargins(5, 5, 5, 5);
+    vbY->setSpacing(5);
+    QHBoxLayout* hbY = new QHBoxLayout();
     m_cbYMethod = new QComboBox();
-    m_cbYMethod->addItems({"两点确立 (起点 -> 终点)", "直线确立 (所选直线的方向)"});
-    m_btnSelectY = new QPushButton("在图纸上选取 Y 轴特征");
-    m_btnRevY = new QPushButton("反转 Y 轴正方向");
+    m_cbYMethod->addItems({"两点确立", "直线确立"});
+    m_btnSelectY = new QPushButton("选取特征");
+    m_btnRevY = new QPushButton("反转方向");
+    hbY->addWidget(m_cbYMethod);
+    hbY->addWidget(m_btnSelectY);
+    hbY->addWidget(m_btnRevY);
+
     m_lblY = new QLabel("Y 轴向量: 未确立");
-    m_lblY->setStyleSheet("color: #555; font-family: monospace;");
-    vbY->addWidget(m_cbYMethod);
-    vbY->addWidget(m_btnSelectY);
-    vbY->addWidget(m_btnRevY);
+    m_lblY->setStyleSheet("color: #555; font-family: monospace; font-size: 11px;");
+    vbY->addLayout(hbY);
     vbY->addWidget(m_lblY);
     knowLayout->addWidget(gbY);
 
     mainLayout->addWidget(m_knowOriginWidget);
 
     m_btnFinish = new QPushButton("确认完成 (执行校验与生成)");
-    m_btnFinish->setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 8px; border-radius: 4px;");
+    m_btnFinish->setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 6px; border-radius: 4px;");
     mainLayout->addWidget(m_btnFinish);
 
     // --- 交互逻辑槽连接 ---

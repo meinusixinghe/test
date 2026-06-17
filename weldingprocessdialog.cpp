@@ -68,7 +68,7 @@ WeldingProcessDialog::WeldingProcessDialog(QVector<WeldingProcess>* processList,
     : QDialog(parent), m_processList(processList)
 {
     setWindowTitle("工艺管理");
-    setMinimumSize(600, 400);
+    setMinimumSize(400, 250);
     setupUi();                                                                      // 初始化界面布局
     refreshTable();                                                                 // 初始化表格数据
 }

@@ -206,13 +206,21 @@ void TaskProgramDialog::setBlockMoveRunning(bool running) {
 // 辅助添加行 (带备注)
 // ----------------------------------------------------
 void TaskProgramDialog::addRow(int moveType, int posType, double* pos, double speed, double acc, double dec, double overlap, const QString& remark) {
-    int row = m_table->rowCount();
+    int row = m_table->currentRow();
+    if (row < 0) {
+        // 如果没有选中任何行，追加到末尾
+        row = m_table->rowCount();
+    } else {
+        // 如果选中了某行，将在选中行的下方插入 (如果想在上方插入，去掉 +1 即可)
+        row = row + 1;
+    }
+
     m_table->insertRow(row);
     double defaultPos[6] = {0,0,0,0,0,0};
     if (!pos) pos = defaultPos;
 
     QComboBox* moveCombo = new QComboBox();
-    moveCombo->addItems({"1: 关节(Joint)", "2: 直线(Lin)", "3: 圆弧(Circ)", "4: 圆角(CircAng)"});
+    moveCombo->addItems({"1: 独立直线(MLIN)", "2: 连续直线(Lin)", "3: 连续圆弧(Circ)", "4: 圆角(CircAng)"});
     if (moveType >= 1 && moveType <= 4) moveCombo->setCurrentIndex(moveType - 1);
     m_table->setCellWidget(row, 0, moveCombo);
 
@@ -232,6 +240,9 @@ void TaskProgramDialog::addRow(int moveType, int posType, double* pos, double sp
     QTableWidgetItem* remarkItem = new QTableWidgetItem(remark);
     remarkItem->setForeground(QBrush(QColor("#757575")));
     m_table->setItem(row, 12, remarkItem);
+
+    // 插入后自动选中新行，方便连续添加
+    m_table->selectRow(row);
 }
 
 void TaskProgramDialog::onAddRowClicked() { addRow(2, 2, nullptr, 100, 50, 50, 0); }
@@ -477,30 +488,35 @@ void TaskProgramDialog::onResetClicked() {
 
 void TaskProgramDialog::generateProgram()
 {
-    // 1. 清空旧的表格数据
+    // 1. 清空旧的表格数据与选中状态
     m_table->setRowCount(0);
+    m_table->clearSelection();
+    m_table->setCurrentCell(-1, -1);
 
-    // 2. 判断当前是否选择了“用户坐标系 (UCS)”
-    // 如果下拉框选中第1项（且其 Data 值为 1），说明启用了 UCS
     bool useUcs = (m_coordCombo->currentData().toInt() == 1);
 
     RobotAPI::RobotPos currentPose;
     memset(&currentPose, 0, sizeof(currentPose));
 
     if (m_devId != 0 && RobotAPI::IsConnected(m_devId)) {
-        // 【修改点1】：如果启用UCS，则获取UCS的位姿，保证ABC也是用户坐标系下的
-        if (useUcs) {
-            RobotAPI::GetUserCoordinatePos2(currentPose, m_devId);
-        } else {
-            RobotAPI::GetBaseCoordinatePos2(currentPose, m_devId);
-        }
+        if (useUcs) RobotAPI::GetUserCoordinatePos2(currentPose, m_devId);
+        else RobotAPI::GetBaseCoordinatePos2(currentPose, m_devId);
     }
 
-    // 记录上一个图形最后一个点的真实物理位置，用于判定是否“无缝衔接”
-    QPointF lastEndPos(-99999.0, -99999.0);
+    const double SAFE_HEIGHT = 50.0;
+
+    // 🌟 全局状态追踪器
+    double globalLastA = currentPose.a; // 记录前一个点的绝对A角，防止乱转
+    QPointF globalLastUcsPt(-99999.0, -99999.0); // 记录前一个点的用户坐标
+
+    // 🌟 核心修复：建立【全局唯一】的基准切线角度，杜绝分段图形导致的角度重置
+    bool hasGlobalInitialTangent = false;
+    double globalInitialTangentAngle = 0.0;
+
+    int closedShapeCount = 0; // 记录封闭图形数量，用于交替反向
 
     // ==========================================
-    // 开始遍历所有导入的图元并生成轨迹
+    // 开始遍历所有导入的图元并生成连续轨迹
     // ==========================================
     for (int idx = 0; idx < m_paths.size(); ++idx) {
         const Contour& c = m_paths[idx];
@@ -509,7 +525,6 @@ void TaskProgramDialog::generateProgram()
         QString typeStr = c.type;
         QString shapeName = QString("图元%1[%2]").arg(idx + 1).arg(typeStr);
 
-        // 临时存放当前图元解析出来的点位、插补类型(2:直线, 3:圆弧)和备注
         QVector<QPointF> targetPoints;
         QVector<int> targetMoveTypes;
         QVector<QString> targetRemarks;
@@ -519,24 +534,19 @@ void TaskProgramDialog::generateProgram()
         bool isCircle = typeStr.contains("圆") && !typeStr.contains("弧") && !typeStr.contains("角");
         bool isArc = typeStr.contains("弧") || typeStr.contains("Arc", Qt::CaseInsensitive);
 
-        // --- A. 整圆处理：拆分为两个半圆弧 ---
+        // --- 提取核心点位 ---
         if (isCircle && n >= 4) {
-            targetPoints << c.points[0];         targetMoveTypes << 2; targetRemarks << "-起点(圆弧1开始)";
-            targetPoints << c.points[n / 4];     targetMoveTypes << 3; targetRemarks << "-圆弧1途经点";
-            targetPoints << c.points[n / 2];     targetMoveTypes << 3; targetRemarks << "-圆弧1终点(圆弧2开始)";
-            targetPoints << c.points[3 * n / 4]; targetMoveTypes << 3; targetRemarks << "-圆弧2途经点";
-            targetPoints << c.points[n - 1];     targetMoveTypes << 3; targetRemarks << "-圆弧2终点";
+            targetPoints << c.points[0];         targetMoveTypes << 2; targetRemarks << "-起点(圆弧开始)";
+            targetPoints << c.points[n / 4];     targetMoveTypes << 3; targetRemarks << "-圆弧途经点";
+            targetPoints << c.points[n / 2];     targetMoveTypes << 3; targetRemarks << "-圆弧交接点";
+            targetPoints << c.points[3 * n / 4]; targetMoveTypes << 3; targetRemarks << "-圆弧途经点";
+            targetPoints << c.points[n - 1];     targetMoveTypes << 3; targetRemarks << "-圆弧终点";
         }
-        // --- B. 样条曲线/拟合线处理：三点共圆判定 ---
         else if (isFittedData && n >= 3) {
             targetPoints << c.points[0]; targetMoveTypes << 2; targetRemarks << "-样条起点";
             for (int i = 1; i < n - 1; i += 2) {
                 int segIdx = (i + 1) / 2;
-                QPointF p1 = c.points[i-1];
-                QPointF p2 = c.points[i];
-                QPointF p3 = c.points[i+1];
-
-                // 行列式判断三点是否共线 (极小曲率防呆)
+                QPointF p1 = c.points[i-1], p2 = c.points[i], p3 = c.points[i+1];
                 double D = 2 * (p1.x()*(p2.y() - p3.y()) + p2.x()*(p3.y() - p1.y()) + p3.x()*(p1.y() - p2.y()));
                 if (std::abs(D) < 1e-6) {
                     targetPoints << p3; targetMoveTypes << 2; targetRemarks << QString("-段%1[直线] 终点").arg(segIdx);
@@ -547,24 +557,40 @@ void TaskProgramDialog::generateProgram()
             }
             if (n % 2 == 0) { targetPoints << c.points[n - 1]; targetMoveTypes << 2; targetRemarks << "-尾部收尾"; }
         }
-        // --- C. 单一圆弧处理 ---
         else if (isArc && n >= 3) {
             targetPoints << c.points[0];         targetMoveTypes << 2; targetRemarks << "-圆弧起点";
             targetPoints << c.points[n / 2];     targetMoveTypes << 3; targetRemarks << "-圆弧途经点";
             targetPoints << c.points[n - 1];     targetMoveTypes << 3; targetRemarks << "-圆弧终点";
         }
-        // --- D. 普通多段线/直线处理 ---
         else {
             for (int i = 0; i < n; ++i) {
                 targetPoints << c.points[i]; targetMoveTypes << 2;
                 if (i == 0) targetRemarks << "-起点";
                 else if (i == n - 1) targetRemarks << "-终点";
-                else targetRemarks << QString("-途经点%1").arg(i);
+                else targetRemarks << QString("-直线途点%1").arg(i);
             }
         }
 
-        // --- 缝合计算：前瞻下一个图元的起点 ---
-        // 判断当前图元的尾巴是否和下一个图元的头连在一起
+        // 🌟【功能 1】：防缠绕，交替翻转封闭图形
+        bool isClosed = (std::hypot(targetPoints.first().x() - targetPoints.last().x(), targetPoints.first().y() - targetPoints.last().y()) < 0.001);
+        bool isReversed = false;
+        if (isClosed) {
+            closedShapeCount++;
+            if (closedShapeCount % 2 == 0) { // 偶数个封闭图形，整体倒序！
+                isReversed = true;
+                std::reverse(targetPoints.begin(), targetPoints.end());
+
+                // 翻转后修复插补类型映射
+                QVector<int> newMoveTypes(targetPoints.size(), 2);
+                for(int i = 0; i < targetPoints.size(); i++) {
+                    if(targetMoveTypes[targetPoints.size() - 1 - i] == 3) newMoveTypes[i] = 3;
+                }
+                newMoveTypes[0] = 2; // 起点必须是直线切入
+                targetMoveTypes = newMoveTypes;
+            }
+        }
+
+        // 判断是否与下个图形无缝相连
         bool isConnectedWithNext = false;
         if (idx + 1 < m_paths.size() && !m_paths[idx + 1].points.isEmpty()) {
             QPointF nextStart = m_paths[idx + 1].points.first();
@@ -574,57 +600,123 @@ void TaskProgramDialog::generateProgram()
             }
         }
 
+        double B = c.bevelAngle;
+        double offsetDist = c.rootFace * std::tan(B * M_PI / 180.0);
+
+        // 🌟 初始化全局基准切线（整个图纸只抓取一次，彻底解决转弯归零问题）
+        if (!hasGlobalInitialTangent && targetPoints.size() > 1) {
+            QPointF t0 = targetPoints[1] - targetPoints[0];
+            globalInitialTangentAngle = std::atan2(t0.y(), t0.x()) * 180.0 / M_PI;
+            hasGlobalInitialTangent = true;
+        }
+
         // ==========================================
-        // 将提取的点位写入表格，并执行 UCS 坐标变换
+        // 开始组装每一行的轨迹数据
         // ==========================================
         for (int i = 0; i < targetPoints.size(); ++i) {
             QPointF pt = targetPoints[i];
             int moveType = targetMoveTypes[i];
-            QString baseRemark = shapeName + targetRemarks[i];
+            QString remark = targetRemarks[i];
+            if (isReversed) remark += "[反转]";
 
-            // 拦截：如果当前图形的起点和上一个图形终点无缝重合，直接丢弃该重叠点，防止机器人卡顿
-            bool isConnectedWithPrev = (std::hypot(pt.x() - lastEndPos.x(), pt.y() - lastEndPos.y()) < 0.001);
-            if (i == 0 && isConnectedWithPrev) continue;
+            // --- 1. 计算当前的切向矢量 ---
+            QPointF tangent(0, 0);
+            if (i == 0) {
+                if (targetPoints.size() > 1) tangent = targetPoints[1] - targetPoints[0];
+                else tangent = QPointF(1, 0);
+            } else if (moveType == 2) {
+                tangent = pt - targetPoints[i-1];
+            } else {
+                if (i < targetPoints.size() - 1) tangent = targetPoints[i+1] - targetPoints[i-1];
+                else tangent = pt - targetPoints[i-1];
+            }
 
-            // 如果启用了 UCS，需要把 DXF 图纸的绝对坐标，投影到自定义坐标系的新坐标轴上
+            // --- 2. 计算法向（用于坡口偏移） ---
+            double len = std::hypot(tangent.x(), tangent.y());
+            QPointF normal(0, 0);
+            double currentTangentAngle = globalInitialTangentAngle;
+
+            if (len > 1e-6) {
+                if (isReversed) normal = QPointF(tangent.y() / len, -tangent.x() / len);
+                else normal = QPointF(-tangent.y() / len, tangent.x() / len);
+
+                currentTangentAngle = std::atan2(tangent.y(), tangent.x()) * 180.0 / M_PI;
+            }
+
+            pt.setX(pt.x() + normal.x() * offsetDist);
+            pt.setY(pt.y() + normal.y() * offsetDist);
+
+            // --- 3. 转换到用户坐标系 (UCS) ---
+            QPointF ucsPt = pt;
             if (useUcs && m_ucs.valid) {
-                QPointF v = pt - m_ucs.origin; // 计算点相对于 UCS 原点的向量
-                // 使用点乘 (Dot Product) 投影到新的 X 轴和 Y 轴向量上
+                QPointF v = pt - m_ucs.origin;
                 double local_x = v.x() * m_ucs.xAxis.x() + v.y() * m_ucs.xAxis.y();
                 double local_y = v.x() * m_ucs.yAxis.x() + v.y() * m_ucs.yAxis.y();
-                pt = QPointF(local_x, local_y); // 覆盖为相对坐标
+                ucsPt = QPointF(local_x, local_y);
             }
 
-            // 构造 6 自由度数组：[X, Y, Z, RX, RY, RZ]
-            double p[6] = { pt.x(), pt.y(), 0.0, currentPose.a, currentPose.b, currentPose.c };
+            // --- 4. 完全回归你最认可的 A 角计算代码（使用 currentPose.a 挂钩） ---
+            double deltaA = currentTangentAngle - globalInitialTangentAngle;
+            while (deltaA > 180.0) deltaA -= 360.0;
+            while (deltaA <= -180.0) deltaA += 360.0;
 
-            // 动态调节速度与平滑度 (Overlapping)
-            double overlap = 0.0;
-            double speed = 50.0;
+            double finalA = currentPose.a + deltaA;
+            while (finalA > 180.0) finalA -= 360.0;
+            while (finalA <= -180.0) finalA += 360.0;
 
+            // --- 5. 无缝与转向判断 ---
+            bool isConnectedWithPrev = (std::hypot(ucsPt.x() - globalLastUcsPt.x(), ucsPt.y() - globalLastUcsPt.y()) < 0.001);
+
+            // 🌟【功能 2】：走直线前，保持坐标不动，原地扭正姿态！
+            if (i > 0 || isConnectedWithPrev) {
+                if (moveType == 2 || (i == 0 && isConnectedWithPrev)) {
+                    double angDiff = finalA - globalLastA;
+                    while (angDiff > 180.0) angDiff -= 360.0;
+                    while (angDiff <= -180.0) angDiff += 360.0;
+
+                    if (std::abs(angDiff) > 0.5) {
+                        // 在上一个点的位置插入一个纯姿态旋转指令
+                        double pTurn[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), 0.0, finalA, B, 0.0 };
+                        addRow(2, 2, pTurn, 50, 50, 50, 2.0, shapeName + remark + " 🔄[直行前转向]");
+                        globalLastA = finalA;
+                    }
+                }
+            }
+
+            // 如果起点重合，直接跳过生成坐标点（因为上面已经处理过原地转向了）
+            if (i == 0 && isConnectedWithPrev) {
+                globalLastA = finalA;
+                globalLastUcsPt = ucsPt;
+                continue;
+            }
+
+            // --- 输出到表格 ---
             if (i == 0) {
-                speed = 100.0; // 空走跳转时速度翻倍
-                overlap = 0.0;
-                baseRemark += "(空走跳转)";
+                if (!isConnectedWithPrev) {
+                    double pSafe[6] = { ucsPt.x(), ucsPt.y(), SAFE_HEIGHT, finalA, 0.0, 0.0 };
+                    addRow(2, 2, pSafe, 100, 50, 50, 0.0, shapeName + remark + " [跨域: 高空就位]");
+                }
+                double pStart[6] = { ucsPt.x(), ucsPt.y(), 0.0, finalA, B, 0.0 };
+                addRow(moveType, 2, pStart, 30, 50, 50, 0.0, shapeName + remark + " [起刀]");
             }
             else if (i == targetPoints.size() - 1) {
+                double pEnd[6] = { ucsPt.x(), ucsPt.y(), 0.0, finalA, B, 0.0 };
                 if (isConnectedWithNext) {
-                    overlap = 2.0; // 如果与下一个零件无缝衔接，不减速直接划过
-                    baseRemark += "(无缝衔接下个)";
+                    addRow(moveType, 2, pEnd, 50, 50, 50, 2.0, shapeName + remark + " (无缝)");
                 } else {
-                    overlap = 0.0; // 独立图形结束，必须精准停住
-                    baseRemark += "(加工结束抬刀)";
+                    addRow(moveType, 2, pEnd, 50, 50, 50, 0.0, shapeName + remark + " (切割结束)");
+                    double pRetract[6] = { ucsPt.x(), ucsPt.y(), SAFE_HEIGHT, finalA, 0.0, 0.0 };
+                    addRow(2, 2, pRetract, 100, 50, 50, 0.0, shapeName + " [跨域: 抬刀]");
                 }
-            } else {
-                overlap = 2.0; // 途经点开启平滑度，防止机械臂剧烈抖动
+            }
+            else {
+                double p[6] = { ucsPt.x(), ucsPt.y(), 0.0, finalA, B, 0.0 };
+                addRow(moveType, 2, p, 50, 50, 50, 2.0, shapeName + remark);
             }
 
-            // 将计算好的这一行数据写入 UI 表格
-            // 参数顺序: 插补类型(2/3), 坐标类型(2=Cart), 坐标数组, 速度, 加速, 减速, 平滑度, 备注
-            addRow(moveType, 2, p, speed, 50, 50, overlap, baseRemark);
-
-            // 更新最后位置留存（注意：留存的用于判断连贯性的永远是变换前的真实物理坐标）
-            lastEndPos = targetPoints[i];
+            // 更新追踪器状态
+            globalLastA = finalA;
+            globalLastUcsPt = ucsPt;
         }
     }
 }

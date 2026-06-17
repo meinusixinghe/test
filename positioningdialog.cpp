@@ -56,13 +56,13 @@ QPainterPath PositioningBlock::getPath() const {
 // 2. 左侧预览绘图区 (强化：特征点吸附与右键锚点物理计算)
 // ========================================================
 PreviewArea::PreviewArea(QWidget *parent) : QWidget(parent) {
-    setMinimumWidth(400);
+    setMinimumWidth(300);
     setStyleSheet("background-color: white; border: 1px solid #ccc;");
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
 }
 
-// 👇 提取几何特征参考点算法
+// 提取几何特征参考点算法
 QList<QPointF> PreviewArea::getReferencePoints(const PositioningBlock& b) const {
     QList<QPointF> pts;
     QTransform t;
@@ -108,9 +108,7 @@ void PreviewArea::paintEvent(QPaintEvent *event) {
     Q_UNUSED(event);
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
-
     if (m_blocks.isEmpty()) return;
-
     if (m_firstPaint) { autoFit(); m_firstPaint = false; }
 
     painter.translate(width() / 2.0 + m_panOffset.x(), height() / 2.0 + m_panOffset.y());
@@ -173,7 +171,7 @@ void PreviewArea::mouseMoveEvent(QMouseEvent *event) {
         m_lastMousePos = event->pos();
         setCursor(Qt::ClosedHandCursor);
     } else {
-        // 👇 特征点悬浮捕捉逻辑
+        // 特征点悬浮捕捉逻辑
         QPointF dxfPos = m_transform.inverted().map(QPointF(event->pos()));
         m_hoveredBlockIdx = -1;
         m_hoveredPtIdx = -1;
@@ -337,12 +335,14 @@ void PreviewArea::setInitialBlocks(const QList<PositioningBlock>& blocks) {
 QDoubleSpinBox* PositioningDialog::createSpinBox(double min, double max, double val) {
     QDoubleSpinBox* sb = new QDoubleSpinBox(this);
     sb->setRange(min, max); sb->setValue(val); sb->setDecimals(2);
+    sb->setMaximumWidth(70);
+    sb->setStyleSheet("font-size: 10px; min-height: 18px; padding: 1px;");
     return sb;
 }
 
 PositioningDialog::PositioningDialog(QWidget *parent) : QDialog(parent) {
     setWindowTitle("建立定位");
-    setMinimumSize(900, 600);
+    setMinimumSize(600, 380);
 
     QHBoxLayout *mainLayout = new QHBoxLayout(this);
     mainLayout->setSpacing(0);
@@ -352,24 +352,28 @@ PositioningDialog::PositioningDialog(QWidget *parent) : QDialog(parent) {
     leftFrame->setFrameShape(QFrame::StyledPanel);
     leftFrame->setStyleSheet("QFrame { background-color: #f0f0f0; border-right: 2px solid #dcdcdc; }");
     QVBoxLayout *leftLayout = new QVBoxLayout(leftFrame);
+    leftLayout->setContentsMargins(0, 0, 0, 0);
 
     m_previewArea = new PreviewArea(leftFrame);
     leftLayout->addWidget(m_previewArea);
-    mainLayout->addWidget(leftFrame, 2);
+
+    mainLayout->addWidget(leftFrame, 6);
 
     QFrame *rightFrame = new QFrame(this);
+
     QVBoxLayout *rightLayout = new QVBoxLayout(rightFrame);
-    rightLayout->setContentsMargins(20, 20, 20, 20);
-    rightLayout->setSpacing(20);
+    rightLayout->setContentsMargins(10, 10, 10, 10);
+    rightLayout->setSpacing(6);
 
     QLabel *typeTitle = new QLabel("选择添加定位块类型");
-    typeTitle->setStyleSheet("font-weight: bold; font-size: 14px; color: #333;");
+    typeTitle->setStyleSheet("font-weight: bold; font-size: 11px; color: #333;");
     rightLayout->addWidget(typeTitle);
 
     QGridLayout *gridSelector = new QGridLayout();
-    gridSelector->setVerticalSpacing(15);
-    gridSelector->setHorizontalSpacing(60);
-    QStringList types = {"直线定位", "点定位", "圆弧定位", "圆定位"};
+    gridSelector->setSpacing(5);
+    gridSelector->setContentsMargins(0, 0, 0, 0);
+
+    QStringList types = {"直线", "点", "圆弧", "圆"};
     QStringList icons = {":/img/images/line_pos.png", ":/img/images/point_pos.png", ":/img/images/arc_pos.png", ":/img/images/circle_pos.png"};
 
     QButtonGroup *btnGroup = new QButtonGroup(this);
@@ -377,26 +381,26 @@ PositioningDialog::PositioningDialog(QWidget *parent) : QDialog(parent) {
 
     for (int i = 0; i < 4; ++i) {
         QVBoxLayout *itemLayout = new QVBoxLayout();
-        itemLayout->setSpacing(8);
+        itemLayout->setSpacing(2);
         itemLayout->setAlignment(Qt::AlignCenter);
 
         QToolButton *btn = new QToolButton();
         btn->setIcon(QIcon(icons[i]));
-        btn->setIconSize(QSize(70, 70));
+        btn->setIconSize(QSize(45, 45));
         btn->setCheckable(true);
-        btn->setFixedSize(80, 80);
+        btn->setFixedSize(55, 55);
         btn->setStyleSheet("QToolButton { border: 1px solid #ccc; border-radius: 6px; background: white; }"
                            "QToolButton:checked { border: 2px solid #2196F3; background: #e3f2fd; }");
 
         QLabel *lbl = new QLabel(types[i]);
         lbl->setAlignment(Qt::AlignCenter);
-        lbl->setStyleSheet("color: #333; font-size: 13px;");
+        lbl->setStyleSheet("color: #333; font-size: 11px;");
 
         itemLayout->addWidget(btn, 0, Qt::AlignHCenter);
         itemLayout->addWidget(lbl, 0, Qt::AlignHCenter);
 
         btnGroup->addButton(btn, i);
-        gridSelector->addLayout(itemLayout, i/2, i%2);
+        gridSelector->addLayout(itemLayout, i / 2, i % 2);
 
         connect(btn, &QToolButton::clicked, [this, i]() {
             m_stackedWidget->setCurrentIndex(i);
@@ -405,60 +409,87 @@ PositioningDialog::PositioningDialog(QWidget *parent) : QDialog(parent) {
             m_detailContainer->setVisible(true);
         });
     }
-    QHBoxLayout *gridWrapper = new QHBoxLayout();
-    gridWrapper->addStretch();
-    gridWrapper->addLayout(gridSelector);
-    gridWrapper->addStretch();
-    rightLayout->addLayout(gridWrapper);
+    rightLayout->addLayout(gridSelector);
 
     m_detailContainer = new QWidget();
     QVBoxLayout *detailVBox = new QVBoxLayout(m_detailContainer);
     detailVBox->setContentsMargins(0, 0, 0, 0);
+    detailVBox->setSpacing(4);
 
     QLabel *detailTitle = new QLabel("详细设置");
-    detailTitle->setStyleSheet("color: #666; font-size: 12px; font-weight: bold;");
+    detailTitle->setStyleSheet("color: #666; font-size: 11px; font-weight: bold;");
     detailVBox->addWidget(detailTitle);
 
     QFrame *detailFrame = new QFrame();
     detailFrame->setStyleSheet("QFrame { background-color: #fafafa; border: 1px solid #ddd; border-radius: 4px; }");
     QVBoxLayout *innerDetailLayout = new QVBoxLayout(detailFrame);
+    innerDetailLayout->setContentsMargins(6, 6, 6, 6);
+    innerDetailLayout->setSpacing(4);
 
     m_stackedWidget = new QStackedWidget();
 
-    QWidget *pageLine = new QWidget(); QFormLayout *fl0 = new QFormLayout(pageLine);
-    fl0->addRow("长度:", m_lineLen = createSpinBox(0, 10000, 50));
-    fl0->addRow("宽度:", m_lineWidth = createSpinBox(0, 10000, 10));
-    fl0->addRow("X 坐标:", m_lineX = createSpinBox());
-    fl0->addRow("Y 坐标:", m_lineY = createSpinBox());
-    fl0->addRow("旋转角度:", m_lineAngle = createSpinBox(-360, 360));
+    auto makeLbl = [](const QString& txt) {
+        QLabel* l = new QLabel(txt);
+        l->setStyleSheet("font-size: 10px; color: #555;");
+        return l;
+    };
+
+    // --- [直线] ---
+    QWidget *pageLine = new QWidget();
+    QVBoxLayout *vl0 = new QVBoxLayout(pageLine); vl0->setContentsMargins(0,0,0,0); vl0->setSpacing(2);
+    QHBoxLayout *hl0_1 = new QHBoxLayout();
+    hl0_1->addWidget(makeLbl("长:")); hl0_1->addWidget(m_lineLen = createSpinBox(0, 10000, 50));
+    hl0_1->addWidget(makeLbl("宽:")); hl0_1->addWidget(m_lineWidth = createSpinBox(0, 10000, 10));
+    QHBoxLayout *hl0_2 = new QHBoxLayout();
+    hl0_2->addWidget(makeLbl("X:")); hl0_2->addWidget(m_lineX = createSpinBox());
+    hl0_2->addWidget(makeLbl("Y:")); hl0_2->addWidget(m_lineY = createSpinBox());
+    QHBoxLayout *hl0_3 = new QHBoxLayout();
+    hl0_3->addWidget(makeLbl("角度:")); hl0_3->addWidget(m_lineAngle = createSpinBox(-360, 360)); hl0_3->addStretch();
+    vl0->addLayout(hl0_1); vl0->addLayout(hl0_2); vl0->addLayout(hl0_3);
     m_stackedWidget->addWidget(pageLine);
 
-    QWidget *pagePt = new QWidget(); QFormLayout *fl1 = new QFormLayout(pagePt);
-    fl1->addRow("X 坐标:", m_ptX = createSpinBox());
-    fl1->addRow("Y 坐标:", m_ptY = createSpinBox());
-    fl1->addRow("旋转角度:", m_ptAngle = createSpinBox(-360, 360));
+    // --- [点] ---
+    QWidget *pagePt = new QWidget();
+    QVBoxLayout *vl1 = new QVBoxLayout(pagePt); vl1->setContentsMargins(0,0,0,0); vl1->setSpacing(2);
+    QHBoxLayout *hl1_1 = new QHBoxLayout();
+    hl1_1->addWidget(makeLbl("X:")); hl1_1->addWidget(m_ptX = createSpinBox());
+    hl1_1->addWidget(makeLbl("Y:")); hl1_1->addWidget(m_ptY = createSpinBox());
+    QHBoxLayout *hl1_2 = new QHBoxLayout();
+    hl1_2->addWidget(makeLbl("角度:")); hl1_2->addWidget(m_ptAngle = createSpinBox(-360, 360)); hl1_2->addStretch();
+    vl1->addLayout(hl1_1); vl1->addLayout(hl1_2);
     m_stackedWidget->addWidget(pagePt);
 
-    QWidget *pageArc = new QWidget(); QFormLayout *fl2 = new QFormLayout(pageArc);
-    fl2->addRow("圆心 X:", m_arcX = createSpinBox());
-    fl2->addRow("圆心 Y:", m_arcY = createSpinBox());
-    fl2->addRow("圆弧半径:", m_arcR = createSpinBox(0, 10000, 20));
-    fl2->addRow("旋转角度:", m_arcAngle = createSpinBox(-360, 360));
+    // --- [圆弧] ---
+    QWidget *pageArc = new QWidget();
+    QVBoxLayout *vl2 = new QVBoxLayout(pageArc); vl2->setContentsMargins(0,0,0,0); vl2->setSpacing(2);
+    QHBoxLayout *hl2_1 = new QHBoxLayout();
+    hl2_1->addWidget(makeLbl("圆心X:")); hl2_1->addWidget(m_arcX = createSpinBox());
+    hl2_1->addWidget(makeLbl("Y:")); hl2_1->addWidget(m_arcY = createSpinBox());
+    QHBoxLayout *hl2_2 = new QHBoxLayout();
+    hl2_2->addWidget(makeLbl("半径:")); hl2_2->addWidget(m_arcR = createSpinBox(0, 10000, 20));
+    hl2_2->addWidget(makeLbl("角度:")); hl2_2->addWidget(m_arcAngle = createSpinBox(-360, 360));
+    vl2->addLayout(hl2_1); vl2->addLayout(hl2_2);
     m_stackedWidget->addWidget(pageArc);
 
-    QWidget *pageCir = new QWidget(); QFormLayout *fl3 = new QFormLayout(pageCir);
-    fl3->addRow("圆心 X:", m_cirX = createSpinBox());
-    fl3->addRow("圆心 Y:", m_cirY = createSpinBox());
-    fl3->addRow("半径:", m_cirR = createSpinBox(0, 10000, 20));
+    // --- [圆] ---
+    QWidget *pageCir = new QWidget();
+    QVBoxLayout *vl3 = new QVBoxLayout(pageCir); vl3->setContentsMargins(0,0,0,0); vl3->setSpacing(2);
+    QHBoxLayout *hl3_1 = new QHBoxLayout();
+    hl3_1->addWidget(makeLbl("圆心X:")); hl3_1->addWidget(m_cirX = createSpinBox());
+    hl3_1->addWidget(makeLbl("Y:")); hl3_1->addWidget(m_cirY = createSpinBox());
+    QHBoxLayout *hl3_2 = new QHBoxLayout();
+    hl3_2->addWidget(makeLbl("半径:")); hl3_2->addWidget(m_cirR = createSpinBox(0, 10000, 20)); hl3_2->addStretch();
+    vl3->addLayout(hl3_1); vl3->addLayout(hl3_2);
     m_stackedWidget->addWidget(pageCir);
 
     innerDetailLayout->addWidget(m_stackedWidget);
 
     QHBoxLayout *addBtnLayout = new QHBoxLayout();
     addBtnLayout->addStretch();
+
     QPushButton *btnAdd = new QPushButton("确认添加");
-    btnAdd->setMinimumHeight(20); btnAdd->setMinimumWidth(80);
-    btnAdd->setStyleSheet("background-color: #2196F3; color: white; font-weight: bold; border-radius: 4px;");
+    btnAdd->setFixedSize(65, 22);
+    btnAdd->setStyleSheet("background-color: #2196F3; color: white; font-weight: bold; font-size: 10px; border-radius: 3px;");
     connect(btnAdd, &QPushButton::clicked, this, &PositioningDialog::onAddClicked);
     addBtnLayout->addWidget(btnAdd);
     innerDetailLayout->addLayout(addBtnLayout);
@@ -468,54 +499,55 @@ PositioningDialog::PositioningDialog(QWidget *parent) : QDialog(parent) {
     m_infoContainer = new QWidget();
     QVBoxLayout *infoVBox = new QVBoxLayout(m_infoContainer);
     infoVBox->setContentsMargins(0, 0, 0, 0);
-    QLabel *infoTitle = new QLabel("参考点信息反馈");
-    infoTitle->setStyleSheet("color: #666; font-size: 12px; font-weight: bold;");
+    infoVBox->setSpacing(4);
+    QLabel *infoTitle = new QLabel("参考点信息");
+    infoTitle->setStyleSheet("color: #666; font-size: 11px; font-weight: bold;");
     infoVBox->addWidget(infoTitle);
 
     QFrame *infoFrame = new QFrame();
     infoFrame->setStyleSheet("QFrame { background-color: #e3f2fd; border: 1px solid #90caf9; border-radius: 4px; }");
     QVBoxLayout *innerInfoLayout = new QVBoxLayout(infoFrame);
+    innerInfoLayout->setContentsMargins(6, 6, 6, 6);
+
     m_infoLabel = new QLabel("...");
-    m_infoLabel->setStyleSheet("font-size: 14px; color: #333; line-height: 1.5;");
+    m_infoLabel->setWordWrap(true);
+    m_infoLabel->setStyleSheet("font-size: 11px; color: #333;");
     innerInfoLayout->addWidget(m_infoLabel);
 
     infoVBox->addWidget(infoFrame);
     infoVBox->addStretch();
     m_infoContainer->setVisible(false);
 
-    // 将两个面板放入右侧布局，通过 Visible 控制轮流显示
     rightLayout->addWidget(m_detailContainer);
     rightLayout->addWidget(m_infoContainer);
     rightLayout->addStretch();
 
+    // 交互逻辑保持不变
     connect(m_previewArea, &PreviewArea::refPointSelected, this, [this, btnGroup](int bIdx, int ptIdx, QPointF pos) {
         if (btnGroup->checkedButton()) {
             btnGroup->setExclusive(false);
-            btnGroup->checkedButton()->setChecked(false); // 取消四个添加按钮的高亮
+            btnGroup->checkedButton()->setChecked(false);
             btnGroup->setExclusive(true);
         }
-
-        m_detailContainer->setVisible(false); // 隐藏添加面板
-        m_infoContainer->setVisible(true);    // 呼出信息反馈面板
+        m_detailContainer->setVisible(false);
+        m_infoContainer->setVisible(true);
 
         PositioningBlock b = m_previewArea->getBlocks()[bIdx];
-        QString text = QString("<b>块类型：</b> %1<br><br>").arg(
-            b.type == PosBlockType::Line ? "直线定位 (挡板)" :
-                b.type == PosBlockType::Point ? "点定位 (销钉)" :
-                b.type == PosBlockType::Arc ? "圆弧定位 (槽)" : "圆定位 (法兰)"
+        QString text = QString("<b>类型：</b> %1<br><br>").arg(
+            b.type == PosBlockType::Line ? "直线定位" :
+                b.type == PosBlockType::Point ? "点定位" :
+                b.type == PosBlockType::Arc ? "圆弧定位" : "圆定位"
             );
 
-        QString ptTypeStr = "圆心基准";
+        QString ptTypeStr = "圆心";
         if (b.type == PosBlockType::Line) {
-            if (ptIdx == 0) ptTypeStr = "矩形中心";
-            else if (ptIdx == 1) ptTypeStr = "左上角点";
-            else if (ptIdx == 2) ptTypeStr = "右上角点";
-            else if (ptIdx == 3) ptTypeStr = "右下角点";
-            else if (ptIdx == 4) ptTypeStr = "左下角点";
+            if (ptIdx == 0) ptTypeStr = "中心";
+            else if (ptIdx == 1) ptTypeStr = "左上";
+            else if (ptIdx == 2) ptTypeStr = "右上";
+            else if (ptIdx == 3) ptTypeStr = "右下";
+            else if (ptIdx == 4) ptTypeStr = "左下";
         }
-
-        text += QString("<b>所选参考特征：</b> [%1]<br><b>全局 X:</b> &nbsp;%2<br><b>全局 Y:</b> &nbsp;%3<br>").arg(ptTypeStr).arg(pos.x(), 0, 'f', 2).arg(pos.y(), 0, 'f', 2);
-
+        text += QString("<b>特征：</b> [%1]<br><b>X:</b> &nbsp;%2<br><b>Y:</b> &nbsp;%3<br>").arg(ptTypeStr).arg(pos.x(), 0, 'f', 2).arg(pos.y(), 0, 'f', 2);
         if (b.type == PosBlockType::Arc || b.type == PosBlockType::Circle) {
             text += QString("<br><b>约束半径：</b> %1").arg(b.radius, 0, 'f', 2);
         }
@@ -523,16 +555,16 @@ PositioningDialog::PositioningDialog(QWidget *parent) : QDialog(parent) {
     });
 
     connect(m_previewArea, &PreviewArea::backgroundClicked, this, [this]() {
-        m_infoContainer->setVisible(false); // 点空白处时隐藏
+        m_infoContainer->setVisible(false);
     });
 
-    QPushButton *btnConfirm = new QPushButton("确认定位配置");
-    btnConfirm->setMinimumHeight(35);
-    btnConfirm->setStyleSheet("background-color: #4CAF50; color: white; font-size: 14px; font-weight: bold; border-radius: 4px;");
+    QPushButton *btnConfirm = new QPushButton("确认配置");
+    btnConfirm->setMinimumHeight(28);
+    btnConfirm->setStyleSheet("background-color: #4CAF50; color: white; font-size: 11px; font-weight: bold; border-radius: 4px;");
     connect(btnConfirm, &QPushButton::clicked, this, &QDialog::accept);
     rightLayout->addWidget(btnConfirm);
 
-    mainLayout->addWidget(rightFrame, 1);
+    mainLayout->addWidget(rightFrame, 4);
 }
 
 void PositioningDialog::onAddClicked() {

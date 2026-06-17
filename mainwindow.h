@@ -34,6 +34,7 @@
 
 class QCalendarWidget;
 class RenderArea;
+class TaskProgramDialog;
 
 class LogViewerDialog : public QDialog {
     Q_OBJECT
@@ -278,6 +279,8 @@ private:
     QTimer* m_alarmTimer;
     QPushButton* m_clearAlarmBtn = nullptr;
     unsigned int m_devId = 0;
+
+    TaskProgramDialog* m_taskProgramDialog = nullptr;
 };
 
 #endif
