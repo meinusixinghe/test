@@ -210,11 +210,7 @@ void TaskProgramDialog::setBlockMoveRunning(bool running) {
 void TaskProgramDialog::addRow(int moveType, int posType, double* pos, double speed, double acc, double dec, double overlap, const QString& remark) {
     int row = m_table->currentRow();
     if (row < 0) {
-        // 如果没有选中任何行，追加到末尾
         row = m_table->rowCount();
-    } else {
-        // 如果选中了某行，将在选中行的下方插入 (如果想在上方插入，去掉 +1 即可)
-        row = row + 1;
     }
 
     m_table->insertRow(row);
@@ -245,7 +241,7 @@ void TaskProgramDialog::addRow(int moveType, int posType, double* pos, double sp
     remarkItem->setForeground(QBrush(QColor("#757575")));
     m_table->setItem(row, 12, remarkItem);
 
-    // 插入后自动选中新行，方便连续添加
+    // 插入后自动选中新行
     m_table->selectRow(row);
 }
 
@@ -439,7 +435,6 @@ void TaskProgramDialog::onStartClicked() {
                 break; // 跳出滑动窗口，停止一切发送行为
             }
 
-            // 每次只切取 3 个点作为小包发送，细水长流
             int chunkCount = std::min(3, totalPoints - sentIndex);
             std::vector<RobotAPI::MultiMoveInfo2> chunk(mps.begin() + sentIndex, mps.begin() + sentIndex + chunkCount);
 
@@ -460,8 +455,7 @@ void TaskProgramDialog::onStartClicked() {
                 }, Qt::QueuedConnection);
                 break;
             } else {
-                // 底层满载拒收 (例如返回 40)
-                // 【绝对不增加 sentIndex】，线程静默休眠，等机器人消化掉一部分后再重传。
+
             }
 
             // 休眠 30 毫秒：匹配控制器的插补消化节奏
@@ -665,9 +659,6 @@ void TaskProgramDialog::generateProgram()
             hasGlobalInitialTangent = true;
         }
 
-        // ==========================================
-        // 开始组装每一行的轨迹数据
-        // ==========================================
         for (int i = 0; i < targetPoints.size(); ++i) {
             QPointF pt = targetPoints[i];
             int moveType = targetMoveTypes[i];
