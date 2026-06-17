@@ -509,11 +509,13 @@ void TaskProgramDialog::generateProgram()
 
     const double SAFE_HEIGHT = 50.0;
 
-    // 🌟 全局状态追踪器
+    // 全局状态追踪器
     double globalLastA = currentPose.a; // 记录前一个点的绝对A角，防止乱转
-    QPointF globalLastUcsPt(-99999.0, -99999.0); // 记录前一个点的用户坐标
+    QPointF globalLastOffsetPt(-99999.0, -99999.0); // 记录前一个点的物理偏移坐标
+    QPointF globalLastUcsPt(-99999.0, -99999.0);    // 记录前一个点的用户坐标
+    QPointF globalLastOriginalPt(-99999.0, -99999.0);
 
-    // 🌟 核心修复：建立【全局唯一】的基准切线角度，杜绝分段图形导致的角度重置
+    // 核心修复：建立【全局唯一】的基准切线角度，杜绝分段图形导致的角度重置
     bool hasGlobalInitialTangent = false;
     double globalInitialTangentAngle = 0.0;
 
@@ -523,20 +525,48 @@ void TaskProgramDialog::generateProgram()
     // 开始遍历所有导入的图元并生成连续轨迹
     // ==========================================
     for (int idx = 0; idx < m_paths.size(); ++idx) {
-        const Contour& c = m_paths[idx];
+        Contour c = m_paths[idx];
         if (c.points.isEmpty()) continue;
 
         QString typeStr = c.type;
         QString shapeName = QString("图元%1[%2]").arg(idx + 1).arg(typeStr);
+
+        bool isFittedData = typeStr.contains("拟合") || typeStr.contains("样条") || typeStr.contains("Spline", Qt::CaseInsensitive);
+        bool isCircle = typeStr.contains("圆") && !typeStr.contains("弧") && !typeStr.contains("角");
+        bool isArc = typeStr.contains("弧") || typeStr.contains("Arc", Qt::CaseInsensitive);
+
+        bool isClosedRaw = (std::hypot(c.points.first().x() - c.points.last().x(), c.points.first().y() - c.points.last().y()) < 0.001);
+        if (isClosedRaw && idx > 0 && globalLastOriginalPt.x() > -90000) {
+            int bestK = 0;
+            double minDist = std::numeric_limits<double>::max();
+
+            // 扫描当前图形轮廓上的所有点，找一个离上一刀结束点最近的
+            for (int i = 0; i < c.points.size() - 1; ++i) {
+                // 对于样条拟合曲线，必须保证切点在原始端点上（即偶数索引），不能从弧线中间下刀
+                if (isFittedData && (i % 2 != 0)) continue;
+
+                double dist = std::hypot(c.points[i].x() - globalLastOriginalPt.x(), c.points[i].y() - globalLastOriginalPt.y());
+                if (dist < minDist) {
+                    minDist = dist;
+                    bestK = i;
+                }
+            }
+
+            if (bestK > 0) {
+                // 找到了更近的点！对坐标数组进行环形移位，把这个最近点变成新图形的绝对起点！
+                QVector<QPointF> newPts;
+                for (int i = bestK; i < c.points.size() - 1; ++i) newPts.append(c.points[i]);
+                for (int i = 0; i < bestK; ++i) newPts.append(c.points[i]);
+                newPts.append(newPts.first()); // 首尾相连重新闭合
+                c.points = newPts;
+            }
+        }
 
         QVector<QPointF> targetPoints;
         QVector<int> targetMoveTypes;
         QVector<QString> targetRemarks;
 
         int n = c.points.size();
-        bool isFittedData = typeStr.contains("拟合") || typeStr.contains("样条") || typeStr.contains("Spline", Qt::CaseInsensitive);
-        bool isCircle = typeStr.contains("圆") && !typeStr.contains("弧") && !typeStr.contains("角");
-        bool isArc = typeStr.contains("弧") || typeStr.contains("Arc", Qt::CaseInsensitive);
 
         // --- 提取核心点位 ---
         if (isCircle && n >= 4) {
@@ -575,7 +605,6 @@ void TaskProgramDialog::generateProgram()
             }
         }
 
-        // 🌟【功能 1】：防缠绕，交替翻转封闭图形
         bool isClosed = (std::hypot(targetPoints.first().x() - targetPoints.last().x(), targetPoints.first().y() - targetPoints.last().y()) < 0.001);
         bool isReversed = false;
         if (isClosed) {
@@ -607,7 +636,6 @@ void TaskProgramDialog::generateProgram()
         double B = c.bevelAngle;
         double offsetDist = c.rootFace * std::tan(B * M_PI / 180.0);
 
-        // 🌟 初始化全局基准切线（整个图纸只抓取一次，彻底解决转弯归零问题）
         if (!hasGlobalInitialTangent && targetPoints.size() > 1) {
             QPointF t0 = targetPoints[1] - targetPoints[0];
             globalInitialTangentAngle = std::atan2(t0.y(), t0.x()) * 180.0 / M_PI;
@@ -659,7 +687,7 @@ void TaskProgramDialog::generateProgram()
                 ucsPt = QPointF(local_x, local_y);
             }
 
-            // --- 4. 完全回归你最认可的 A 角计算代码（使用 currentPose.a 挂钩） ---
+            // --- 4. 纯净计算 A 角 ---
             double deltaA = currentTangentAngle - globalInitialTangentAngle;
             while (deltaA > 180.0) deltaA -= 360.0;
             while (deltaA <= -180.0) deltaA += 360.0;
@@ -671,7 +699,6 @@ void TaskProgramDialog::generateProgram()
             // --- 5. 无缝与转向判断 ---
             bool isConnectedWithPrev = (std::hypot(ucsPt.x() - globalLastUcsPt.x(), ucsPt.y() - globalLastUcsPt.y()) < 0.001);
 
-            // 🌟【功能 2】：走直线前，保持坐标不动，原地扭正姿态！
             if (i > 0 || isConnectedWithPrev) {
                 if (moveType == 2 || (i == 0 && isConnectedWithPrev)) {
                     double angDiff = finalA - globalLastA;
@@ -679,7 +706,6 @@ void TaskProgramDialog::generateProgram()
                     while (angDiff <= -180.0) angDiff += 360.0;
 
                     if (std::abs(angDiff) > 0.5) {
-                        // 在上一个点的位置插入一个纯姿态旋转指令
                         double pTurn[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), 0.0, finalA, B, 0.0 };
                         addRow(2, 2, pTurn, 50, 50, 50, 2.0, shapeName + remark + " 🔄[直行前转向]");
                         globalLastA = finalA;
@@ -687,10 +713,11 @@ void TaskProgramDialog::generateProgram()
                 }
             }
 
-            // 如果起点重合，直接跳过生成坐标点（因为上面已经处理过原地转向了）
+            // 如果起点重合，直接跳过生成坐标点
             if (i == 0 && isConnectedWithPrev) {
                 globalLastA = finalA;
                 globalLastUcsPt = ucsPt;
+                globalLastOriginalPt = targetPoints[i]; // 记得更新真实原始点
                 continue;
             }
 
@@ -718,9 +745,11 @@ void TaskProgramDialog::generateProgram()
                 addRow(moveType, 2, p, 50, 50, 50, 2.0, shapeName + remark);
             }
 
-            // 更新追踪器状态
+            // 更新所有追踪器状态
             globalLastA = finalA;
+            globalLastOffsetPt = pt;
             globalLastUcsPt = ucsPt;
+            globalLastOriginalPt = targetPoints[i];
         }
     }
 }
