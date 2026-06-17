@@ -49,6 +49,7 @@ public:
     void resetView();
     QList<PositioningBlock> getPositioningBlocks() const { return m_posBlocks; }
     UserCoordSystem getUCS() const { return m_ucs; }
+    void setReorderSelectMode(bool enabled);
 public slots:
     void executeMove();
     void executeRotate();
@@ -62,6 +63,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent *event) override;
 
     void contextMenuEvent(QContextMenuEvent *event) override;
+
 signals:
     void itemDeleted(const QPointF &dxfPos);
     void bulkPathsDeleted(QList<int> indices);
@@ -70,6 +72,8 @@ signals:
     void reorderPathsRequested();
     void ucsPointSelected(QPointF pt);
     void ucsLineSelected(QLineF line);
+    void reorderStartSelected(int pathIndex, int segIndex);
+
 private:
     QVector<Hole> weldHoles;
     Hole mainPlateHole;
@@ -151,6 +155,10 @@ private:
     int m_highlightedBlockIndex = -1;
 
     QPointF getShapeCenter(const Contour& contour);
+
+    bool m_reorderSelectMode = false;
+    int m_hoveredPathIndex = -1;
+    int m_hoveredSegmentIndex = -1;
 };
 
 #endif // RENDERAREA_H

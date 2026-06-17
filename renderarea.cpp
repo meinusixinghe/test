@@ -256,13 +256,13 @@ void RenderArea::paintEvent(QPaintEvent *event)
         }
     }
 
-    if ((m_transformState == TS_SelectShapeFeature || m_ucsSelectMode != 0) && m_hasHoveredFeature) {
+    if ((m_transformState == TS_SelectShapeFeature || m_ucsSelectMode != 0 || m_reorderSelectMode) && m_hasHoveredFeature) {
         painter.save();
         QPen blinkPen((QTime::currentTime().msec() % 500 < 250) ? Qt::cyan : Qt::blue, 0);
         blinkPen.setWidth(m_lineWidth + 2);
         blinkPen.setCosmetic(true);
         painter.setPen(blinkPen);
-        if (m_ucsSelectMode == 2 || (m_transformState == TS_SelectShapeFeature && m_alignTargetType == PosBlockType::Line)) {
+        if (m_ucsSelectMode == 2 || m_reorderSelectMode || (m_transformState == TS_SelectShapeFeature && m_alignTargetType == PosBlockType::Line)) {
             painter.drawLine(m_hoveredLine);
         } else {
             double safeScale = (m_scaleFactor > 0.001) ? m_scaleFactor : 1.0;
@@ -562,6 +562,14 @@ void RenderArea::mousePressEvent(QMouseEvent *event) {
         return;
     }
 
+    if (m_reorderSelectMode && event->button() == Qt::LeftButton) {
+        if (m_hasHoveredFeature) {
+            emit reorderStartSelected(m_hoveredPathIndex, m_hoveredSegmentIndex);
+        }
+        event->accept();
+        return;
+    }
+
     if (m_ucsSelectMode != 0 && event->button() == Qt::LeftButton) {
         if (m_hasHoveredFeature) {
             if (m_ucsSelectMode == 1) {
@@ -743,6 +751,36 @@ void RenderArea::mouseMoveEvent(QMouseEvent *event) {
         QPoint delta = event->pos() - m_lastMousePos;
         m_panOffsetDXF += QPointF(delta.x() / m_scaleFactor, -delta.y() / m_scaleFactor);
         m_lastMousePos = event->pos();
+        update();
+        event->accept();
+        return;
+    }
+
+    if (m_reorderSelectMode) {
+        m_hasHoveredFeature = false;
+        QTransform transform;
+        transform.translate(width() / 2.0, height() / 2.0);
+        transform.scale(m_scaleFactor, -m_scaleFactor);
+        transform.translate(m_panOffsetDXF.x(), m_panOffsetDXF.y());
+        QPointF dxfPos = transform.inverted().map(QPointF(event->pos()));
+
+        double minDist = 15.0 / m_scaleFactor;
+
+        for (int idx = 0; idx < m_displayPaths.size(); ++idx) {
+            const auto& contour = m_displayPaths[idx];
+            for (int i = 0; i < contour.points.size() - 1; ++i) {
+                QPointF p1 = contour.points[i];
+                QPointF p2 = contour.points[i+1];
+                double dist = distancePointToSegment(dxfPos, p1, p2);
+                if (dist < minDist) {
+                    minDist = dist;
+                    m_hasHoveredFeature = true;
+                    m_hoveredLine = QLineF(p1, p2);
+                    m_hoveredPathIndex = idx;
+                    m_hoveredSegmentIndex = i;
+                }
+            }
+        }
         update();
         event->accept();
         return;
@@ -1190,7 +1228,11 @@ void RenderArea::keyPressEvent(QKeyEvent *event) {
         }
     }
     else if (event->key() == Qt::Key_Escape) {
-        if (m_ucsSelectMode != 0) {
+        if (m_reorderSelectMode) {
+            setReorderSelectMode(false);
+            emit cancelModesRequested();
+            update();
+        } else if (m_ucsSelectMode != 0) {
             setUCSSelectionMode(0);
             update();
         } else if (m_isMoveMode || m_isRotateMode || m_isMirrorMode) {
@@ -1720,4 +1762,15 @@ QPointF RenderArea::getShapeCenter(const Contour& contour) {
         if (pt.y() < cMinY) cMinY = pt.y(); if (pt.y() > cMaxY) cMaxY = pt.y();
     }
     return QPointF((cMinX + cMaxX)/2.0, (cMinY + cMaxY)/2.0);
+}
+
+void RenderArea::setReorderSelectMode(bool enabled) {
+    m_reorderSelectMode = enabled;
+    if (enabled) {
+        setCursor(Qt::CrossCursor); // 变成十字光标
+        m_hasHoveredFeature = false;
+    } else {
+        setCursor(Qt::OpenHandCursor);
+    }
+    update();
 }

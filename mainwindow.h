@@ -207,6 +207,8 @@ private slots:
     void checkRobotAlarm();
     void clearRobotAlarm();
     void onClearAlarmClicked();
+    void onReorderStartSelected(int pathIndex, int segIndex);
+    void executeReorder(int startPathIdx, int startSegIdx, bool isCW);
 
 private:
     void loadDrawingData(const QString &filePath);
