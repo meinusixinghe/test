@@ -16,6 +16,9 @@ class TaskProgramDialog : public QDialog
 public:
     explicit TaskProgramDialog(unsigned int devId, const QVector<Contour>& paths, const UserCoordSystem& ucs, QWidget *parent = nullptr);
 
+protected:
+    bool eventFilter(QObject *obj, QEvent *event) override;
+
 private slots:
     void onAddRowClicked();
     void onRemoveRowClicked();

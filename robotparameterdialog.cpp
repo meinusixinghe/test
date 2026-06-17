@@ -536,9 +536,22 @@ void RobotParameterDialog::updateCoordinateSystems()
     QStringList tools, users;
     QString curToolStr = "tool0", curUserStr = "wobj0";
 
-    for (int i = 0; i <= 31; ++i) {
-        tools << QString("tool%1").arg(i);
-        users << QString("wobj%1").arg(i);
+    std::vector<std::string> toolNames;
+    if (RobotAPI::GetToolNameList(toolNames, m_devId) == 0 && !toolNames.empty()) {
+        for (const std::string& name : toolNames) {
+            tools << QString::fromStdString(name);
+        }
+    } else {
+        for (int i = 0; i <= 10; ++i) tools << QString("tool%1").arg(i);
+    }
+
+    std::vector<std::string> wobjNames;
+    if (RobotAPI::GetUserNameList(wobjNames, m_devId) == 0 && !wobjNames.empty()) {
+        for (const std::string& name : wobjNames) {
+            users << QString::fromStdString(name);
+        }
+    } else {
+        for (int i = 0; i <= 32; ++i) users << QString("wobj%1").arg(i);
     }
 
     std::string currentTool;
@@ -571,9 +584,7 @@ bool RobotParameterDialog::eventFilter(QObject *obj, QEvent *event)
 {
     // 如果触发的是鼠标滚轮事件
     if (event->type() == QEvent::Wheel) {
-        // 判断被滚动的是不是 QComboBox
         if (qobject_cast<QComboBox*>(obj)) {
-            // 忽略该事件，告诉 Qt 当前控件(下拉框)不处理滚轮
             event->ignore();
             return true;
         }

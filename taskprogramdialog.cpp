@@ -12,6 +12,7 @@
 #include <QVector3D>
 #include <QtConcurrentRun>
 #include <QApplication>
+#include <QEvent>
 
 // ====================================================================
 // 构造函数：解析线条序列并生成运动程序表格
@@ -33,6 +34,7 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
     QHBoxLayout* coordLayout = new QHBoxLayout();
     coordLayout->addWidget(new QLabel("加工几何基准:", this));
     m_coordCombo = new QComboBox(this);
+    m_coordCombo->installEventFilter(this);
     m_coordCombo->addItem("默认基座坐标系 (图纸绝对坐标)", 0);
     if (m_ucs.valid) {
         m_coordCombo->addItem("当前用户坐标系 (UCS相对坐标)", 1);
@@ -44,14 +46,14 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
     coordLayout->addWidget(new QLabel("机器人 Tool:", this));
     m_robotToolCombo = new QComboBox(this);
     m_robotToolCombo->setEditable(true);
-    for(int i=0; i<=31; i++) m_robotToolCombo->addItem(QString("tool%1").arg(i));
+    m_robotToolCombo->installEventFilter(this);
     coordLayout->addWidget(m_robotToolCombo);
 
     coordLayout->addSpacing(10);
     coordLayout->addWidget(new QLabel("机器人 Wobj:", this));
     m_robotUserCombo = new QComboBox(this);
     m_robotUserCombo->setEditable(true);
-    for(int i=0; i<=31; i++) m_robotUserCombo->addItem(QString("wobj%1").arg(i));
+    m_robotUserCombo->installEventFilter(this);
     coordLayout->addWidget(m_robotUserCombo);
     coordLayout->addStretch();
     tableLayout->addLayout(coordLayout);
@@ -92,10 +94,10 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
 
     // 智能兜底：如果列表还是空的（比如获取失败），自动生成 32 个默认编号！
     if (m_robotToolCombo->count() == 0) {
-        for(int i=0; i<=31; i++) m_robotToolCombo->addItem(QString("tool%1").arg(i));
+        for(int i=0; i<=10; i++) m_robotToolCombo->addItem(QString("tool%1").arg(i));
     }
     if (m_robotUserCombo->count() == 0) {
-        for(int i=0; i<=31; i++) m_robotUserCombo->addItem(QString("wobj%1").arg(i));
+        for(int i=0; i<=32; i++) m_robotUserCombo->addItem(QString("wobj%1").arg(i));
     }
 
     // 增加第 13 列 -> 备注
@@ -222,11 +224,13 @@ void TaskProgramDialog::addRow(int moveType, int posType, double* pos, double sp
     QComboBox* moveCombo = new QComboBox();
     moveCombo->addItems({"1: 独立直线(MLIN)", "2: 连续直线(Lin)", "3: 连续圆弧(Circ)", "4: 圆角(CircAng)"});
     if (moveType >= 1 && moveType <= 4) moveCombo->setCurrentIndex(moveType - 1);
+    moveCombo->installEventFilter(this);
     m_table->setCellWidget(row, 0, moveCombo);
 
     QComboBox* posCombo = new QComboBox();
     posCombo->addItems({"1: Joint数据", "2: Cart数据"});
     if (posType == 1 || posType == 2) posCombo->setCurrentIndex(posType - 1);
+    posCombo->installEventFilter(this);
     m_table->setCellWidget(row, 1, posCombo);
 
     for (int i = 0; i < 6; ++i) m_table->setItem(row, i + 2, new QTableWidgetItem(QString::number(pos[i], 'f', 3)));
@@ -753,4 +757,19 @@ void TaskProgramDialog::updateRobotState()
             m_robotStateLabel->setText("底层状态: 读取失败");
         }
     }
+}
+
+// ==========================================
+// 事件过滤器：全局拦截特定控件的鼠标事件
+// ==========================================
+bool TaskProgramDialog::eventFilter(QObject *obj, QEvent *event)
+{
+    if (event->type() == QEvent::Wheel) {
+        if (qobject_cast<QComboBox*>(obj)) {
+            event->ignore();
+            return true;
+        }
+    }
+
+    return QDialog::eventFilter(obj, event);
 }
