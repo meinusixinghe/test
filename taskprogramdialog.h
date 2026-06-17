@@ -15,7 +15,7 @@ class TaskProgramDialog : public QDialog
 {
     Q_OBJECT
 public:
-    explicit TaskProgramDialog(unsigned int devId, const QVector<Contour>& paths, const UserCoordSystem& ucs, QWidget *parent = nullptr);
+    explicit TaskProgramDialog(unsigned int devId, const QVector<Contour>& paths, const UserCoordSystem& ucs, int platePos, double thickness, QWidget *parent = nullptr);
     void updateWorkpieceParams(int posIndex, double thickness);
 
 signals:

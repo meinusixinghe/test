@@ -552,39 +552,6 @@ void MainWindow::setupUi()
         "QToolButton:hover { background-color: #E3F2FD; border: 1px solid #90CAF9; }"
         );
 
-
-    // =================================================================
-    // 在“操作”菜单下注入测试 Action（极易查找、极易删除）
-    // =================================================================
-    QPushButton* mlinTestBtn = new QPushButton("测试界面", this);
-
-    // 设置按钮的大小和绝对位置 (X:20, Y:100, 宽:200, 高:40)
-    // 你可以根据你的主界面空缺位置，自己调整 20 和 100 这两个坐标数字
-    mlinTestBtn->setGeometry(20, 100, 200, 40);
-
-    // 给按钮加上醒目的黄色背景，方便测试完找到它并删掉
-    mlinTestBtn->setStyleSheet("background-color: #FFEB3B; font-weight: bold; border-radius: 5px;");
-    mlinTestBtn->show(); // 强制显示在最上层
-
-    // 绑定点击事件
-    connect(mlinTestBtn, &QPushButton::clicked, this, [this]() {
-        if (m_currentDevId == 0) {
-            QMessageBox::warning(this, "通信断开", "请确保主界面已成功建立机器人通信连接！");
-            return;
-        }
-        if (!m_motionTestDialog) {
-            m_motionTestDialog = new MotionTestDialog(m_currentDevId, this);
-            m_motionTestDialog->setWindowFlags(Qt::Tool);
-        } else {
-            m_motionTestDialog->setDevId(m_currentDevId);
-        }
-        m_motionTestDialog->show();       // 显示窗口
-        m_motionTestDialog->raise();      // 提到最上层
-        m_motionTestDialog->activateWindow(); // 激活焦点
-    });
-    // =================================================================
-
-
     // 5. 绑定选项卡点击逻辑，动态切换下方工具栏的内容
     auto switchTab = [=](QAction* currentTab) {
         toolBar->clear(); // 切换时先清空下方工具栏
