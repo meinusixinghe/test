@@ -122,6 +122,21 @@ private:
     void updateUCSDisplay();
 };
 
+// 加工件参数设置对话框
+class WorkpieceParamDialog : public QDialog {
+    Q_OBJECT
+public:
+    explicit WorkpieceParamDialog(QWidget *parent = nullptr);
+    void setValues(int posIndex, double thickness);
+
+signals:
+    void parametersChanged(int posIndex, double thickness);
+
+private:
+    QComboBox* m_posCombo;
+    QDoubleSpinBox* m_thicknessSpin;
+};
+
 #include "robotparameterdialog.h"
 #include "weldingprocessdialog.h"
 #include "motiontestdialog.h"
@@ -273,6 +288,12 @@ private:
     QTimer* m_statusTimer;
 
     QAction* m_robotParamAction;
+
+    QAction* m_workpieceParamAction;
+    QAction* m_testAction;
+    WorkpieceParamDialog* m_workpieceParamDialog = nullptr;
+    int m_workpiecePosIndex = 0;
+    double m_workpieceThickness = 0.0;
 
     MotionTestDialog* m_motionTestDialog = nullptr;
 

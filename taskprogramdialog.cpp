@@ -17,7 +17,7 @@
 // ====================================================================
 // 构造函数：解析线条序列并生成运动程序表格
 // ====================================================================
-TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>& paths, const UserCoordSystem& ucs, QWidget *parent)
+TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>& paths, const UserCoordSystem& ucs, int platePos, double thickness, QWidget *parent)
     : QDialog(parent), m_devId(devId), m_paths(paths), m_ucs(ucs)
 {
     setWindowTitle("任务程序运行控制台 (MultiMove2)");
@@ -59,6 +59,7 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
     coordLayout->addWidget(new QLabel("板材位置:", this));
     m_platePosCombo = new QComboBox(this);
     m_platePosCombo->addItems({"Z轴上方", "Z轴下方"});
+    m_platePosCombo->setCurrentIndex(platePos);
     m_platePosCombo->installEventFilter(this);
     coordLayout->addWidget(m_platePosCombo);
     coordLayout->addSpacing(10);
@@ -66,7 +67,7 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
     m_thicknessSpin = new QDoubleSpinBox(this);
     m_thicknessSpin->setRange(0, 1000);
     m_thicknessSpin->setDecimals(2);
-    m_thicknessSpin->setValue(0.0);
+    m_thicknessSpin->setValue(thickness);
     m_thicknessSpin->setSuffix(" mm");
     m_thicknessSpin->installEventFilter(this);
     coordLayout->addWidget(m_thicknessSpin);
@@ -148,6 +149,15 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
     });
     connect(m_thicknessSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double) {
         if (!m_paths.isEmpty()) generateProgram();
+    });
+
+    connect(m_platePosCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (!m_paths.isEmpty()) generateProgram();
+        emit workpieceParamsChanged(index, m_thicknessSpin->value());
+    });
+    connect(m_thicknessSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (!m_paths.isEmpty()) generateProgram();
+        emit workpieceParamsChanged(m_platePosCombo->currentIndex(), value);
     });
 
     // 增加第 13 列 -> 备注
@@ -768,7 +778,7 @@ void TaskProgramDialog::generateProgram()
 
             bool isConnectedWithPrev = (std::hypot(ucsPt.x() - globalLastUcsPt.x(), ucsPt.y() - globalLastUcsPt.y()) < 0.001);
 
-            // 🌟 转向点：Z 轴同步为 plateZ
+            // 转向点：Z 轴同步为 plateZ
             if (i > 0 || isConnectedWithPrev) {
                 if (moveType == 2 || (i == 0 && isConnectedWithPrev)) {
                     double angDiff = finalA - globalLastA;
@@ -872,4 +882,17 @@ bool TaskProgramDialog::eventFilter(QObject *obj, QEvent *event)
     }
 
     return QDialog::eventFilter(obj, event);
+}
+
+void TaskProgramDialog::updateWorkpieceParams(int posIndex, double thickness) {
+    m_platePosCombo->blockSignals(true);
+    m_thicknessSpin->blockSignals(true);
+
+    m_platePosCombo->setCurrentIndex(posIndex);
+    m_thicknessSpin->setValue(thickness);
+
+    m_platePosCombo->blockSignals(false);
+    m_thicknessSpin->blockSignals(false);
+
+    generateProgram();
 }

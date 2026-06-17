@@ -53,6 +53,42 @@ struct RobotMotionResult {
 };
 }
 
+WorkpieceParamDialog::WorkpieceParamDialog(QWidget *parent) : QDialog(parent) {
+    setWindowTitle("加工件参数设置");
+    setFixedSize(300, 120);
+    setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
+
+    QFormLayout* layout = new QFormLayout(this);
+
+    m_posCombo = new QComboBox(this);
+    m_posCombo->addItems({"Z轴上方", "Z轴下方"});
+
+    m_thicknessSpin = new QDoubleSpinBox(this);
+    m_thicknessSpin->setRange(0, 1000);
+    m_thicknessSpin->setDecimals(2);
+    m_thicknessSpin->setSuffix(" mm");
+
+    layout->addRow("板材位置:", m_posCombo);
+    layout->addRow("板材厚度:", m_thicknessSpin);
+
+    // 值改变时立刻发送信号给主界面
+    connect(m_posCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index){
+        emit parametersChanged(index, m_thicknessSpin->value());
+    });
+    connect(m_thicknessSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double value){
+        emit parametersChanged(m_posCombo->currentIndex(), value);
+    });
+}
+
+void WorkpieceParamDialog::setValues(int posIndex, double thickness) {
+    m_posCombo->blockSignals(true);
+    m_thicknessSpin->blockSignals(true);
+    m_posCombo->setCurrentIndex(posIndex);
+    m_thicknessSpin->setValue(thickness);
+    m_posCombo->blockSignals(false);
+    m_thicknessSpin->blockSignals(false);
+}
+
 FloatingToolWidget::FloatingToolWidget(QWidget *parent) : QWidget(parent) {
     setAttribute(Qt::WA_StyledBackground, true);
     // 设置工具箱的现代 UI 风格
@@ -483,6 +519,8 @@ void MainWindow::setupUi()
     QAction* m_positioningAction = new QAction("建立定位", this);
     m_connectAction = new QAction(QIcon(":/img/images/icons6.png"), "建立连接", this);
     m_robotParamAction = new QAction(QIcon(":/img/images/icons4.png"), "机器参数设置", this);
+    m_workpieceParamAction = new QAction(QIcon(":/img/images/icons4.png"), "加工件参数设置", this);
+    m_testAction = new QAction(QIcon(":/img/images/icons4.png"), "测试界面", this);
     // --- 创建第一层：“选项卡”栏 ---
     QToolBar* tabBar = addToolBar("选项卡");
     tabBar->setMovable(false); // 禁止拖动
@@ -557,6 +595,8 @@ void MainWindow::setupUi()
             toolBar->addAction(m_ucsAction);
             toolBar->addAction(m_manageProcessAction);
             toolBar->addAction(m_robotParamAction);
+            toolBar->addAction(m_workpieceParamAction);
+            toolBar->addAction(m_testAction);
         } else if (currentTab == tabTools) {
             toolBar->addAction(m_imageProcessAction);
             toolBar->addAction(m_positioningAction);
@@ -749,6 +789,42 @@ void MainWindow::setupUi()
 
     m_floatingToolWidget->installEventFilter(this);
     m_startBtn->installEventFilter(this);
+
+    connect(m_workpieceParamAction, &QAction::triggered, this, [this](){
+        if (!m_workpieceParamDialog) {
+            m_workpieceParamDialog = new WorkpieceParamDialog(this);
+            m_workpieceParamDialog->setWindowFlags(Qt::Tool); // 非阻塞置顶
+            // 当悬浮窗参数改变时，同步保存到主界面
+            connect(m_workpieceParamDialog, &WorkpieceParamDialog::parametersChanged, this, [this](int index, double thickness){
+                m_workpiecePosIndex = index;
+                m_workpieceThickness = thickness;
+                // 如果运行轨迹界面正好开着，实时同步给它
+                if (m_taskProgramDialog) {
+                    m_taskProgramDialog->updateWorkpieceParams(index, thickness);
+                }
+            });
+        }
+        m_workpieceParamDialog->setValues(m_workpiecePosIndex, m_workpieceThickness);
+        m_workpieceParamDialog->show();
+        m_workpieceParamDialog->raise();
+        m_workpieceParamDialog->activateWindow();
+    });
+
+    connect(m_testAction, &QAction::triggered, this, [this]() {
+        if (m_currentDevId == 0) {
+            QMessageBox::warning(this, "通信断开", "请确保主界面已成功建立机器人通信连接！");
+            return;
+        }
+        if (!m_motionTestDialog) {
+            m_motionTestDialog = new MotionTestDialog(m_currentDevId, this);
+            m_motionTestDialog->setWindowFlags(Qt::Tool);
+        } else {
+            m_motionTestDialog->setDevId(m_currentDevId);
+        }
+        m_motionTestDialog->show();
+        m_motionTestDialog->raise();
+        m_motionTestDialog->activateWindow();
+    });
 
     resize(1200, 700);
 }
@@ -1339,8 +1415,16 @@ void MainWindow::onStartClicked()
     }
 
     UserCoordSystem ucs = renderArea->getUCS();
-    m_taskProgramDialog = new TaskProgramDialog(m_currentDevId, m_displayPaths, ucs, this);
+    m_taskProgramDialog = new TaskProgramDialog(m_currentDevId, m_displayPaths, ucs, m_workpiecePosIndex, m_workpieceThickness, this);
     m_taskProgramDialog->setAttribute(Qt::WA_DeleteOnClose);
+
+    connect(m_taskProgramDialog, &TaskProgramDialog::workpieceParamsChanged, this, [this](int posIndex, double thickness) {
+        m_workpiecePosIndex = posIndex;
+        m_workpieceThickness = thickness;
+        if (m_workpieceParamDialog) {
+            m_workpieceParamDialog->setValues(posIndex, thickness);
+        }
+    });
 
     connect(m_taskProgramDialog, &QObject::destroyed, this, [this]() {
         m_taskProgramDialog = nullptr;
