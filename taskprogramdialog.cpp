@@ -278,6 +278,13 @@ void TaskProgramDialog::onStartClicked() {
     int rowCount = m_table->rowCount();
     if (m_devId == 0 || rowCount == 0) return;
 
+    // 启动前先检查一次是否已经处于报警状态
+    bool hasAlarmInit = false;
+    if (RobotAPI::GetCurrentAlarmStatus(hasAlarmInit, m_devId) == 0 && hasAlarmInit) {
+        QMessageBox::warning(this, "启动失败", "机器人当前存在报警，无法启动程序！\n请先清除报警。");
+        return;
+    }
+
     std::string selTool = m_robotToolCombo->currentText().toStdString();
     std::string selWobj = m_robotUserCombo->currentText().toStdString();
     bool useUcs = (m_coordCombo->currentData().toInt() == 1);
@@ -285,6 +292,7 @@ void TaskProgramDialog::onStartClicked() {
 
     m_startBtn->setEnabled(false);
     m_statusLabel->setText("正在进行离线全量运动学逆解...");
+    m_statusLabel->setStyleSheet("font-weight: bold; color: #1976D2; font-size: 14px;"); // 恢复正常的蓝色显示
     QApplication::processEvents();
 
     // 1. 提取当前物理坐标配置
@@ -307,7 +315,7 @@ void TaskProgramDialog::onStartClicked() {
             RobotAPI::RobotPos localP = currentPos;
             localP.x = p[0]; localP.y = p[1]; localP.z = p[2];
 
-            // 【修改点2】：严格使用表格中读取到的 A, B, C 数据
+            // 严格使用表格中读取到的 A, B, C 数据
             localP.a = p[3]; localP.b = p[4]; localP.c = p[5];
 
             RobotAPI::RobotJoint tJoints; memset(&tJoints, 0, sizeof(tJoints));
@@ -326,7 +334,7 @@ void TaskProgramDialog::onStartClicked() {
         } else {
             // 不转换，直接赋值
             targetMp.cp[arrayIndex].x = p[0]; targetMp.cp[arrayIndex].y = p[1]; targetMp.cp[arrayIndex].z = p[2];
-            // 【修改点3】：严格使用表格中读取到的 A, B, C 数据，不再被 currentPos 覆盖
+            // 严格使用表格中读取到的 A, B, C 数据
             targetMp.cp[arrayIndex].a = p[3]; targetMp.cp[arrayIndex].b = p[4]; targetMp.cp[arrayIndex].c = p[5];
             targetMp.cp[arrayIndex].cfgx = currentPos.cfgx; targetMp.cp[arrayIndex].cfg1 = currentPos.cfg1;
             targetMp.cp[arrayIndex].cfg4 = currentPos.cfg4; targetMp.cp[arrayIndex].cfg6 = currentPos.cfg6;
@@ -417,6 +425,20 @@ void TaskProgramDialog::onStartClicked() {
                 break;
             }
 
+            // 在执行过程中实时监测报警状态，若发现报警立马暂停并重置！
+            bool hasAlarm = false;
+            if (RobotAPI::GetCurrentAlarmStatus(hasAlarm, devId) == 0 && hasAlarm) {
+                RobotAPI::MultiMove2Hold(devId);   // 发送暂停指令
+                RobotAPI::MultiMove2Reset(devId);  // 强制重置清空剩余轨迹队列
+
+                QMetaObject::invokeMethod(this, [this]() {
+                    m_statusLabel->setText("⚠️ 机器人在运行中出现报警，程序已自动暂停并重置！");
+                    m_statusLabel->setStyleSheet("font-weight: bold; color: red; font-size: 14px;");
+                }, Qt::QueuedConnection);
+
+                break; // 跳出滑动窗口，停止一切发送行为
+            }
+
             // 每次只切取 3 个点作为小包发送，细水长流
             int chunkCount = std::min(3, totalPoints - sentIndex);
             std::vector<RobotAPI::MultiMoveInfo2> chunk(mps.begin() + sentIndex, mps.begin() + sentIndex + chunkCount);
@@ -434,6 +456,7 @@ void TaskProgramDialog::onStartClicked() {
                 // 致命通信断开 (-48, -59 等)，强行跳出
                 QMetaObject::invokeMethod(this, [this, ret]() {
                     m_statusLabel->setText(QString("致命错误：控制器通信断开，错误码 %1").arg(ret));
+                    m_statusLabel->setStyleSheet("font-weight: bold; color: red; font-size: 14px;");
                 }, Qt::QueuedConnection);
                 break;
             } else {
