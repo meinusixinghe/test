@@ -31,7 +31,7 @@ private slots:
     void updateRobotState();
 
 private:
-    void addRow(int moveType, int posType, double* pos, double speed, double acc, double dec, double overlap, const QString& remark = "");
+    void addRow(int moveType, int posType, double* pos, double speed, double acc, double dec, double overlap, const QString& remark = "", int insertRowIndex = -1);
 
     unsigned int m_devId;
     QVector<Contour> m_paths;

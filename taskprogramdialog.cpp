@@ -100,6 +100,35 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
         for(int i=0; i<=32; i++) m_robotUserCombo->addItem(QString("wobj%1").arg(i));
     }
 
+    // 1. 当修改“机器人 Wobj (用户坐标系)”时
+    connect(m_robotUserCombo, &QComboBox::currentTextChanged, this, [this](const QString& text) {
+        if (m_devId != 0 && RobotAPI::IsConnected(m_devId) && !text.isEmpty()) {
+            RobotAPI::SetCurrentUframeByName(text.toStdString(), m_devId);
+            if (!m_paths.isEmpty()) {
+                generateProgram();
+            }
+        }
+    });
+
+    // 2. 当修改“机器人 Tool (工具坐标系)”时，同样进行下发和重算
+    connect(m_robotToolCombo, &QComboBox::currentTextChanged, this, [this](const QString& text) {
+        if (m_devId != 0 && RobotAPI::IsConnected(m_devId) && !text.isEmpty()) {
+            // 同步修改底层 Tool
+            RobotAPI::SetCurrentToolByName(text.toStdString(), m_devId);
+
+            if (!m_paths.isEmpty()) {
+                generateProgram();
+            }
+        }
+    });
+
+    // 3. 当修改“加工几何基准 (默认基座 vs 当前用户)”时，重算表格
+    connect(m_coordCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+        if (!m_paths.isEmpty()) {
+            generateProgram();
+        }
+    });
+
     // 增加第 13 列 -> 备注
     m_table = new QTableWidget(0, 13, this);
     m_table->setHorizontalHeaderLabels({"插补模式", "坐标类型", "X", "Y", "Z", "RX", "RY", "RZ", "速度", "加速", "减速", "平滑度", "备注说明"});
@@ -207,11 +236,9 @@ void TaskProgramDialog::setBlockMoveRunning(bool running) {
 // ----------------------------------------------------
 // 辅助添加行 (带备注)
 // ----------------------------------------------------
-void TaskProgramDialog::addRow(int moveType, int posType, double* pos, double speed, double acc, double dec, double overlap, const QString& remark) {
-    int row = m_table->currentRow();
-    if (row < 0) {
-        row = m_table->rowCount();
-    }
+void TaskProgramDialog::addRow(int moveType, int posType, double* pos, double speed, double acc, double dec, double overlap, const QString& remark, int insertRowIndex) {
+    // 如果没有指定插入位置(比如自动生成时)，默认追加到列表末尾
+    int row = (insertRowIndex >= 0) ? insertRowIndex : m_table->rowCount();
 
     m_table->insertRow(row);
     double defaultPos[6] = {0,0,0,0,0,0};
@@ -240,21 +267,28 @@ void TaskProgramDialog::addRow(int moveType, int posType, double* pos, double sp
     QTableWidgetItem* remarkItem = new QTableWidgetItem(remark);
     remarkItem->setForeground(QBrush(QColor("#757575")));
     m_table->setItem(row, 12, remarkItem);
+}
 
-    // 插入后自动选中新行
+void TaskProgramDialog::onAddRowClicked() {
+    int row = m_table->currentRow();
+    if (row < 0) row = m_table->rowCount();
+    addRow(2, 2, nullptr, 100, 50, 50, 0, "", row);
     m_table->selectRow(row);
 }
 
-void TaskProgramDialog::onAddRowClicked() { addRow(2, 2, nullptr, 100, 50, 50, 0); }
 void TaskProgramDialog::onRemoveRowClicked() {
     if (m_table->currentRow() >= 0) m_table->removeRow(m_table->currentRow());
 }
+
 void TaskProgramDialog::onSyncPosClicked() {
     if (m_devId == 0) return;
     RobotAPI::PosData pd;
     if (RobotAPI::GetPositionData(pd, m_devId) == 0) {
         double p[6]; for(int i=0; i<6; i++) p[i] = pd.kcsPos[i];
-        addRow(2, 2, p, 100, 50, 50, 0);
+        int row = m_table->currentRow();
+        if (row < 0) row = m_table->rowCount(); // 没选中就加到末尾
+        addRow(2, 2, p, 100, 50, 50, 0, "抓取当前坐标", row);
+        m_table->selectRow(row);
         m_statusLabel->setText("当前位置已抓取为新动作！");
     }
 }
