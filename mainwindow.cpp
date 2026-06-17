@@ -2619,14 +2619,14 @@ void MainWindow::onReorderStartSelected(int pathIndex, int segIndex) {
 }
 
 // =========================================================================
-// 核心：将散乱图元缝合成回路(Loop)，基于面积推导轮廓层级并重新洗牌重构
+// 核心：将散乱图元缝合成回路(Loop)，区分内外轮廓并按【最短空跑路径(就近)】重构
 // =========================================================================
 void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
     if (m_displayPaths.isEmpty()) return;
 
     saveUndoState();
 
-    // 辅助闭包：计算多边形有符号面积 (在 Qt 屏幕系中，由于 Y 朝下，正面积代表屏幕逆时针，物理模型顺时针)
+    // 辅助闭包：计算多边形有符号面积
     auto polygonArea = [](const QVector<QPointF>& pts) {
         double area = 0.0;
         int n = pts.size();
@@ -2642,10 +2642,10 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
     // 1. 将散装的图元 (Contour) 重新拼接为闭合的轮廓回路 (PathLoop)
     // ==============================================================
     struct PathLoop {
-        QList<int> originalIndices; // 存的在 m_displayPaths 中的下标
-        QVector<QPointF> fullPoly;  // 用于计算面积的完整多边形节点
-        double area = 0.0;          // 面积的绝对值
-        bool isCCW = false;         // 是否逆时针
+        QList<int> originalIndices;
+        QVector<QPointF> fullPoly;
+        double area = 0.0;
+        bool isCCW = false;
         bool isClosed = false;
     };
 
@@ -2662,7 +2662,6 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
                 currentLoop.fullPoly.append(c.points[j]);
             }
         } else {
-            // 判断当前图元是否与 currentLoop 的尾部首尾相连 (容差 1e-3)
             QPointF lastPt = currentLoop.fullPoly.last();
             QPointF firstPt = c.points.first();
             if (std::hypot(lastPt.x() - firstPt.x(), lastPt.y() - firstPt.y()) < 1e-3) {
@@ -2671,7 +2670,6 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
                     currentLoop.fullPoly.append(c.points[j]);
                 }
             } else {
-                // 不相连，说明上一个 Loop 已经结束，将其保存，开启新的 Loop
                 loops.append(currentLoop);
                 currentLoop = PathLoop();
 
@@ -2683,24 +2681,22 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
             }
         }
 
-        // 每加入一个图元，检查当前的 Loop 是否已经闭合首尾
         if (!currentLoop.originalIndices.isEmpty() && currentLoop.fullPoly.size() > 1) {
             QPointF startPt = currentLoop.fullPoly.first();
             QPointF endPt = currentLoop.fullPoly.last();
             if (std::hypot(startPt.x() - endPt.x(), startPt.y() - endPt.y()) < 1e-3) {
                 currentLoop.isClosed = true;
                 loops.append(currentLoop);
-                currentLoop = PathLoop(); // 清空，让下一个图元新开 Loop
+                currentLoop = PathLoop();
             }
         }
     }
-    // 把最后残留的未闭合 Loop 装进去
     if (!currentLoop.originalIndices.isEmpty()) {
         loops.append(currentLoop);
     }
 
     // ==============================================================
-    // 2. 分析每个 Loop 的方向与面积层级，并对 Loop 进行排序
+    // 2. 分析每个 Loop 的方向与面积层级
     // ==============================================================
     int maxAreaLoopIdx = -1;
     double maxArea = -1.0;
@@ -2724,29 +2720,93 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
         }
     }
 
-    // 如果用户点的图纸不闭合或未选中，防呆
     if (startLoopIdx == -1) startLoopIdx = 0;
 
-    // 判断用户选中的那个 Loop 是不是最大的外轮廓
-    bool isOuterSelected = (startLoopIdx == maxAreaLoopIdx);
+    // 区分内外轮廓 (面积 >= 0.95 * 最大面积 的强行判定为外轮廓)
+    bool isOuterSelected = (loops[startLoopIdx].area >= maxArea * 0.95);
 
-    QList<int> sortedLoopIndices;
+    QList<int> groupOuter;
+    QList<int> groupInner;
     for (int i = 0; i < loops.size(); ++i) {
-        sortedLoopIndices.append(i);
+        if (loops[i].area >= maxArea * 0.95) {
+            groupOuter.append(i);
+        } else {
+            groupInner.append(i);
+        }
     }
 
-    // 层级排序逻辑！
-    std::sort(sortedLoopIndices.begin(), sortedLoopIndices.end(), [&](int a, int b) {
-        if (isOuterSelected) return loops[a].area > loops[b].area; // 外向内: 降序
-        else return loops[a].area < loops[b].area;                 // 内向外: 升序
-    });
+    // ==============================================================
+    // 🌟 3. 贪心算法：跨孔洞的最短空跑路径 (就近连线选取下一个封闭图形)
+    // ==============================================================
+    QList<int> sortedLoopIndices;
+    QPointF currentEndPoint;
+    bool hasCurrentEnd = false;
 
-    // 强行把用户选中的起刀 Loop 排在第 1 顺位
-    sortedLoopIndices.removeAll(startLoopIdx);
-    sortedLoopIndices.prepend(startLoopIdx);
+    auto processGroup = [&](QList<int>& group, int firstIdxToPick) {
+        if (group.isEmpty()) return;
+        QList<int> unvisited = group;
+
+        if (firstIdxToPick >= 0 && unvisited.contains(firstIdxToPick)) {
+            sortedLoopIndices.append(firstIdxToPick);
+            unvisited.removeAll(firstIdxToPick);
+            if (!loops[firstIdxToPick].fullPoly.isEmpty()) {
+                currentEndPoint = loops[firstIdxToPick].fullPoly.last();
+                hasCurrentEnd = true;
+            }
+        }
+
+        while (!unvisited.isEmpty()) {
+            int bestIdx = -1;
+            if (!hasCurrentEnd) {
+                bestIdx = unvisited.takeFirst();
+            } else {
+                double minDist = std::numeric_limits<double>::max();
+                int bestUnvisitedIndex = 0;
+                QPointF nextEndPoint;
+
+                // 遍历还没切的轮廓，扫描它们上面的所有点，找离当前收刀点最近的
+                for (int i = 0; i < unvisited.size(); ++i) {
+                    int lIdx = unvisited[i];
+                    double d = std::numeric_limits<double>::max();
+                    QPointF closestPt;
+                    for (const QPointF& pt : loops[lIdx].fullPoly) {
+                        double tDist = std::hypot(pt.x() - currentEndPoint.x(), pt.y() - currentEndPoint.y());
+                        if (tDist < d) {
+                            d = tDist;
+                            closestPt = pt;
+                        }
+                    }
+                    // 找到最近的孔
+                    if (d < minDist) {
+                        minDist = d;
+                        bestUnvisitedIndex = i;
+                        nextEndPoint = closestPt; // 闭合图形下刀点和收刀点是同一点
+                    }
+                }
+                bestIdx = unvisited.takeAt(bestUnvisitedIndex);
+                if (loops[bestIdx].isClosed) {
+                    currentEndPoint = nextEndPoint;
+                } else {
+                    currentEndPoint = loops[bestIdx].fullPoly.last();
+                }
+            }
+            sortedLoopIndices.append(bestIdx);
+            hasCurrentEnd = true;
+        }
+    };
+
+    // 逻辑：如果选了外轮廓，【外轮廓就近 -> 内轮廓就近】
+    if (isOuterSelected) {
+        processGroup(groupOuter, startLoopIdx);
+        processGroup(groupInner, -1);
+    } else {
+        // 逻辑：如果选了内轮廓，【内轮廓就近 -> 外轮廓就近】
+        processGroup(groupInner, startLoopIdx);
+        processGroup(groupOuter, -1);
+    }
 
     // ==============================================================
-    // 3. 对排序好的 Loop 内部的图元进行翻转、起点重构、并展平回列表
+    // 4. 展平并应用顺/逆时针翻转与最优特征点重组
     // ==============================================================
     QVector<Contour> reordered;
 
@@ -2759,14 +2819,12 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
             loopContours.append(m_displayPaths[origIdx]);
         }
 
-        // 检查这个 Loop 是否需要翻转走向
         bool needsReverse = false;
         if (pl.isClosed) {
             if (isCW && pl.isCCW) needsReverse = true;
             if (!isCW && !pl.isCCW) needsReverse = true;
         }
 
-        // 如果需要整体反转，则反转包含的图元顺序，并反转图元内部的点
         if (needsReverse) {
             QList<Contour> reversedContours;
             for (int k = loopContours.size() - 1; k >= 0; --k) {
@@ -2777,9 +2835,8 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
             loopContours = reversedContours;
         }
 
-        // 寻找最优的下刀点
-        int targetStartElementIdx = 0; // Contour 级平移索引
-        int targetStartPtIdx = 0;      // Point 级平移索引 (仅针对单图元 Loop)
+        int targetStartElementIdx = 0;
+        int targetStartPtIdx = 0;
 
         if (lIdx == startLoopIdx) {
             if (needsReverse) {
@@ -2797,13 +2854,11 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
                 }
             }
         } else {
-            // 对于其他的 Loop，智能寻找距离上一个落刀点最近的接缝特征点作为起刀点
             if (!reordered.isEmpty() && pl.isClosed) {
                 QPointF lastEnd = reordered.last().points.last();
                 double minDist = std::numeric_limits<double>::max();
 
                 if (loopContours.size() > 1) {
-                    // 多图元：找离得最近的 Contour 起点下刀（不打断图元）
                     for (int k = 0; k < loopContours.size(); ++k) {
                         QPointF startPt = loopContours[k].points.first();
                         double dist = std::hypot(startPt.x() - lastEnd.x(), startPt.y() - lastEnd.y());
@@ -2813,7 +2868,6 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
                         }
                     }
                 } else {
-                    // 单图元：找图元内离得最近的 Node 点
                     for (int p = 0; p < loopContours[0].points.size() - 1; ++p) {
                         bool isFittedData = loopContours[0].type.contains("拟合") || loopContours[0].type.contains("样条") || loopContours[0].type.contains("Spline", Qt::CaseInsensitive);
                         if (isFittedData && (p % 2 != 0)) continue;
@@ -2829,7 +2883,6 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
             }
         }
 
-        // 环形移位：将找到的最佳下刀点放到数组的开头
         if (pl.isClosed) {
             if (loopContours.size() > 1 && targetStartElementIdx > 0 && targetStartElementIdx < loopContours.size()) {
                 QList<Contour> shiftedContours;
@@ -2847,7 +2900,6 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
             }
         }
 
-        // 展平写入结果列表
         for (const Contour& c : loopContours) {
             reordered.append(c);
         }
@@ -2879,8 +2931,8 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
     renderArea->setDisplayPaths(m_displayPaths);
     renderArea->update();
 
-    QString orderStr = isOuterSelected ? "【从外轮廓到内轮廓】" : "【从内轮廓到外轮廓】";
+    QString orderStr = isOuterSelected ? "【外轮廓 -> 内孔 (最短路径就近连线)】" : "【内孔 -> 外轮廓 (最短路径就近连线)】";
     QString dirStr = isCW ? "【顺时针】" : "【逆时针】";
     if (m_statusLabel) m_statusLabel->setText(QString("轨迹已按 %1 %2 排序完毕！").arg(orderStr).arg(dirStr));
-    QMessageBox::information(this, "排序完成", QString("整张图纸轨迹已按 %1 的顺序以及 %2 方向重构完毕！").arg(orderStr).arg(dirStr));
+    QMessageBox::information(this, "排序完成", QString("整张图纸轨迹已按 %1 顺序以及 %2 方向重构完毕！\n\n所有的孔位切换，系统已自动计算并分配距离当前机械手最近的落刀点！").arg(orderStr).arg(dirStr));
 }
