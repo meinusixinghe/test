@@ -9,6 +9,7 @@
 #include "mainwindow.h"
 #include <QTimer>
 #include <QSpinBox>
+#include <QDoubleSpinBox>
 
 class TaskProgramDialog : public QDialog
 {
@@ -46,6 +47,9 @@ private:
     QComboBox* m_coordCombo;
     QComboBox* m_robotToolCombo;
     QComboBox* m_robotUserCombo;
+
+    QComboBox* m_platePosCombo = nullptr;
+    QDoubleSpinBox* m_thicknessSpin = nullptr;
 
     QPushButton* m_startBtn;
     QPushButton* m_pauseBtn;

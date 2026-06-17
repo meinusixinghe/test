@@ -55,6 +55,21 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
     m_robotUserCombo->setEditable(true);
     m_robotUserCombo->installEventFilter(this);
     coordLayout->addWidget(m_robotUserCombo);
+    coordLayout->addSpacing(15);
+    coordLayout->addWidget(new QLabel("板材位置:", this));
+    m_platePosCombo = new QComboBox(this);
+    m_platePosCombo->addItems({"Z轴上方", "Z轴下方"});
+    m_platePosCombo->installEventFilter(this);
+    coordLayout->addWidget(m_platePosCombo);
+    coordLayout->addSpacing(10);
+    coordLayout->addWidget(new QLabel("板材厚度:", this));
+    m_thicknessSpin = new QDoubleSpinBox(this);
+    m_thicknessSpin->setRange(0, 1000);
+    m_thicknessSpin->setDecimals(2);
+    m_thicknessSpin->setValue(0.0);
+    m_thicknessSpin->setSuffix(" mm");
+    m_thicknessSpin->installEventFilter(this);
+    coordLayout->addWidget(m_thicknessSpin);
     coordLayout->addStretch();
     tableLayout->addLayout(coordLayout);
 
@@ -127,6 +142,12 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
         if (!m_paths.isEmpty()) {
             generateProgram();
         }
+    });
+    connect(m_platePosCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+        if (!m_paths.isEmpty()) generateProgram();
+    });
+    connect(m_thicknessSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double) {
+        if (!m_paths.isEmpty()) generateProgram();
     });
 
     // 增加第 13 列 -> 备注
@@ -554,23 +575,35 @@ void TaskProgramDialog::generateProgram()
     memset(&currentPose, 0, sizeof(currentPose));
 
     if (m_devId != 0 && RobotAPI::IsConnected(m_devId)) {
-        if (useUcs) RobotAPI::GetUserCoordinatePos2(currentPose, m_devId);
-        else RobotAPI::GetBaseCoordinatePos2(currentPose, m_devId);
+        RobotAPI::GetUserCoordinatePos2(currentPose, m_devId);
     }
 
-    const double SAFE_HEIGHT = 50.0;
+    // 🌟【重新修正逻辑】：根据板材相对于 Z=0 平面的位置决定 Z 坐标
+    double plateZ = 0.0;
+    double SAFE_HEIGHT = 50.0;
+
+    if (m_platePosCombo && m_thicknessSpin) {
+        if (m_platePosCombo->currentIndex() == 0) {
+            // 板材在 Z轴上方，意味着 Z 变成正的板厚 (例如 +8mm)
+            plateZ = m_thicknessSpin->value();
+        } else {
+            // 板材在 Z轴下方，意味着 Z 变成负的板厚 (例如 -8mm)
+            plateZ = -m_thicknessSpin->value();
+        }
+        // 智能安全高度：始终确保抬刀位置在板材和原点上方 50mm 处
+        SAFE_HEIGHT = (plateZ > 0) ? (plateZ + 50.0) : 50.0;
+    }
 
     // 全局状态追踪器
-    double globalLastA = currentPose.a; // 记录前一个点的绝对A角，防止乱转
-    QPointF globalLastOffsetPt(-99999.0, -99999.0); // 记录前一个点的物理偏移坐标
-    QPointF globalLastUcsPt(-99999.0, -99999.0);    // 记录前一个点的用户坐标
+    double globalLastA = currentPose.a;
+    QPointF globalLastOffsetPt(-99999.0, -99999.0);
+    QPointF globalLastUcsPt(-99999.0, -99999.0);
     QPointF globalLastOriginalPt(-99999.0, -99999.0);
 
-    // 核心修复：建立【全局唯一】的基准切线角度，杜绝分段图形导致的角度重置
     bool hasGlobalInitialTangent = false;
     double globalInitialTangentAngle = 0.0;
 
-    int closedShapeCount = 0; // 记录封闭图形数量，用于交替反向
+    int closedShapeCount = 0;
 
     // ==========================================
     // 开始遍历所有导入的图元并生成连续轨迹
@@ -591,9 +624,7 @@ void TaskProgramDialog::generateProgram()
             int bestK = 0;
             double minDist = std::numeric_limits<double>::max();
 
-            // 扫描当前图形轮廓上的所有点，找一个离上一刀结束点最近的
             for (int i = 0; i < c.points.size() - 1; ++i) {
-                // 对于样条拟合曲线，必须保证切点在原始端点上（即偶数索引），不能从弧线中间下刀
                 if (isFittedData && (i % 2 != 0)) continue;
 
                 double dist = std::hypot(c.points[i].x() - globalLastOriginalPt.x(), c.points[i].y() - globalLastOriginalPt.y());
@@ -604,11 +635,10 @@ void TaskProgramDialog::generateProgram()
             }
 
             if (bestK > 0) {
-                // 找到了更近的点！对坐标数组进行环形移位，把这个最近点变成新图形的绝对起点！
                 QVector<QPointF> newPts;
                 for (int i = bestK; i < c.points.size() - 1; ++i) newPts.append(c.points[i]);
                 for (int i = 0; i < bestK; ++i) newPts.append(c.points[i]);
-                newPts.append(newPts.first()); // 首尾相连重新闭合
+                newPts.append(newPts.first());
                 c.points = newPts;
             }
         }
@@ -619,7 +649,6 @@ void TaskProgramDialog::generateProgram()
 
         int n = c.points.size();
 
-        // --- 提取核心点位 ---
         if (isCircle && n >= 4) {
             targetPoints << c.points[0];         targetMoveTypes << 2; targetRemarks << "-起点(圆弧开始)";
             targetPoints << c.points[n / 4];     targetMoveTypes << 3; targetRemarks << "-圆弧途经点";
@@ -660,21 +689,19 @@ void TaskProgramDialog::generateProgram()
         bool isReversed = false;
         if (isClosed) {
             closedShapeCount++;
-            if (closedShapeCount % 2 == 0) { // 偶数个封闭图形，整体倒序！
+            if (closedShapeCount % 2 == 0) {
                 isReversed = true;
                 std::reverse(targetPoints.begin(), targetPoints.end());
 
-                // 翻转后修复插补类型映射
                 QVector<int> newMoveTypes(targetPoints.size(), 2);
                 for(int i = 0; i < targetPoints.size(); i++) {
                     if(targetMoveTypes[targetPoints.size() - 1 - i] == 3) newMoveTypes[i] = 3;
                 }
-                newMoveTypes[0] = 2; // 起点必须是直线切入
+                newMoveTypes[0] = 2;
                 targetMoveTypes = newMoveTypes;
             }
         }
 
-        // 判断是否与下个图形无缝相连
         bool isConnectedWithNext = false;
         if (idx + 1 < m_paths.size() && !m_paths[idx + 1].points.isEmpty()) {
             QPointF nextStart = m_paths[idx + 1].points.first();
@@ -699,7 +726,6 @@ void TaskProgramDialog::generateProgram()
             QString remark = targetRemarks[i];
             if (isReversed) remark += "[反转]";
 
-            // --- 1. 计算当前的切向矢量 ---
             QPointF tangent(0, 0);
             if (i == 0) {
                 if (targetPoints.size() > 1) tangent = targetPoints[1] - targetPoints[0];
@@ -711,7 +737,6 @@ void TaskProgramDialog::generateProgram()
                 else tangent = pt - targetPoints[i-1];
             }
 
-            // --- 2. 计算法向（用于坡口偏移） ---
             double len = std::hypot(tangent.x(), tangent.y());
             QPointF normal(0, 0);
             double currentTangentAngle = globalInitialTangentAngle;
@@ -719,14 +744,12 @@ void TaskProgramDialog::generateProgram()
             if (len > 1e-6) {
                 if (isReversed) normal = QPointF(tangent.y() / len, -tangent.x() / len);
                 else normal = QPointF(-tangent.y() / len, tangent.x() / len);
-
                 currentTangentAngle = std::atan2(tangent.y(), tangent.x()) * 180.0 / M_PI;
             }
 
             pt.setX(pt.x() + normal.x() * offsetDist);
             pt.setY(pt.y() + normal.y() * offsetDist);
 
-            // --- 3. 转换到用户坐标系 (UCS) ---
             QPointF ucsPt = pt;
             if (useUcs && m_ucs.valid) {
                 QPointF v = pt - m_ucs.origin;
@@ -735,7 +758,6 @@ void TaskProgramDialog::generateProgram()
                 ucsPt = QPointF(local_x, local_y);
             }
 
-            // --- 4. 纯净计算 A 角 ---
             double deltaA = currentTangentAngle - globalInitialTangentAngle;
             while (deltaA > 180.0) deltaA -= 360.0;
             while (deltaA <= -180.0) deltaA += 360.0;
@@ -744,9 +766,9 @@ void TaskProgramDialog::generateProgram()
             while (finalA > 180.0) finalA -= 360.0;
             while (finalA <= -180.0) finalA += 360.0;
 
-            // --- 5. 无缝与转向判断 ---
             bool isConnectedWithPrev = (std::hypot(ucsPt.x() - globalLastUcsPt.x(), ucsPt.y() - globalLastUcsPt.y()) < 0.001);
 
+            // 🌟 转向点：Z 轴同步为 plateZ
             if (i > 0 || isConnectedWithPrev) {
                 if (moveType == 2 || (i == 0 && isConnectedWithPrev)) {
                     double angDiff = finalA - globalLastA;
@@ -754,32 +776,35 @@ void TaskProgramDialog::generateProgram()
                     while (angDiff <= -180.0) angDiff += 360.0;
 
                     if (std::abs(angDiff) > 0.5) {
-                        double pTurn[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), 0.0, finalA, B, 0.0 };
+                        // Z 坐标使用最新的 plateZ 变量
+                        double pTurn[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), plateZ, finalA, B, 0.0 };
                         addRow(2, 2, pTurn, 50, 50, 50, 2.0, shapeName + remark + " 🔄[直行前转向]");
                         globalLastA = finalA;
                     }
                 }
             }
 
-            // 如果起点重合，直接跳过生成坐标点
             if (i == 0 && isConnectedWithPrev) {
                 globalLastA = finalA;
                 globalLastUcsPt = ucsPt;
-                globalLastOriginalPt = targetPoints[i]; // 记得更新真实原始点
+                globalLastOriginalPt = targetPoints[i];
                 continue;
             }
 
-            // --- 输出到表格 ---
+            // 正常输出到表格：严格代入 SAFE_HEIGHT 和 plateZ
             if (i == 0) {
                 if (!isConnectedWithPrev) {
+                    // 空中安全点，使用 SAFE_HEIGHT
                     double pSafe[6] = { ucsPt.x(), ucsPt.y(), SAFE_HEIGHT, finalA, 0.0, 0.0 };
                     addRow(2, 2, pSafe, 100, 50, 50, 0.0, shapeName + remark + " [跨域: 高空就位]");
                 }
-                double pStart[6] = { ucsPt.x(), ucsPt.y(), 0.0, finalA, B, 0.0 };
+                // 落刀起切点，Z 下降到 plateZ
+                double pStart[6] = { ucsPt.x(), ucsPt.y(), plateZ, finalA, B, 0.0 };
                 addRow(moveType, 2, pStart, 30, 50, 50, 0.0, shapeName + remark + " [起刀]");
             }
             else if (i == targetPoints.size() - 1) {
-                double pEnd[6] = { ucsPt.x(), ucsPt.y(), 0.0, finalA, B, 0.0 };
+                // 结束点，Z 保持在 plateZ
+                double pEnd[6] = { ucsPt.x(), ucsPt.y(), plateZ, finalA, B, 0.0 };
                 if (isConnectedWithNext) {
                     addRow(moveType, 2, pEnd, 50, 50, 50, 2.0, shapeName + remark + " (无缝)");
                 } else {
@@ -789,11 +814,10 @@ void TaskProgramDialog::generateProgram()
                 }
             }
             else {
-                double p[6] = { ucsPt.x(), ucsPt.y(), 0.0, finalA, B, 0.0 };
+                double p[6] = { ucsPt.x(), ucsPt.y(), plateZ, finalA, B, 0.0 };
                 addRow(moveType, 2, p, 50, 50, 50, 2.0, shapeName + remark);
             }
 
-            // 更新所有追踪器状态
             globalLastA = finalA;
             globalLastOffsetPt = pt;
             globalLastUcsPt = ucsPt;
@@ -822,7 +846,6 @@ void TaskProgramDialog::updateRobotState()
             }
             m_robotStateLabel->setText(QString("底层状态: %1").arg(stateStr));
 
-            // 如果出错，可以用红色警示
             if (state == 5) {
                 m_robotStateLabel->setStyleSheet("font-weight: bold; color: red; font-size: 14px;");
             } else if (state == 2) {
