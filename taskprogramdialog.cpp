@@ -480,7 +480,7 @@ void TaskProgramDialog::onStartClicked() {
         int sentIndex = 0;
 
         while (sentIndex < totalPoints) {
-            // 如果用户点击了“停止”按钮 (复用了你头文件里的变量名)
+            // 如果用户点击了“停止”按钮
             if (m_blockMoveStopRequested) {
                 RobotAPI::MultiMove2Reset(devId);
                 break;
@@ -493,7 +493,7 @@ void TaskProgramDialog::onStartClicked() {
                 RobotAPI::MultiMove2Reset(devId);  // 强制重置清空剩余轨迹队列
 
                 QMetaObject::invokeMethod(this, [this]() {
-                    m_statusLabel->setText("⚠️ 机器人在运行中出现报警，程序已自动暂停并重置！");
+                    m_statusLabel->setText("机器人在运行中出现报警，程序已自动暂停并重置！");
                     m_statusLabel->setStyleSheet("font-weight: bold; color: red; font-size: 14px;");
                 }, Qt::QueuedConnection);
 
@@ -512,15 +512,77 @@ void TaskProgramDialog::onStartClicked() {
                     m_statusLabel->setText(QString("滑动窗口持续喂点中: %1 / %2").arg(sentIndex).arg(totalPoints));
                 }, Qt::QueuedConnection);
 
-            } else if (ret < 0) {
-                // 致命通信断开 (-48, -59 等)，强行跳出
-                QMetaObject::invokeMethod(this, [this, ret]() {
-                    m_statusLabel->setText(QString("致命错误：控制器通信断开，错误码 %1").arg(ret));
+            } else if (ret == 40 || ret == 14) {
+                // 状态 40 代表底层缓冲区已满，这是正常的物理消化过程，无需干预，静默等待重传
+            } else {
+                // 发生异常（包括 SDK 报错、超时、离线等），立刻中断发送并翻译错误码！
+                QString errMsg;
+                switch(ret) {
+                case 1: errMsg = "与机器人连接失败"; break;
+                case 2: errMsg = "尚未与机器人连接"; break;
+                case 3: errMsg = "与机器人连接中断"; break;
+                case 4: errMsg = "访问拒绝，机器人设置为不允许"; break;
+                case 5: errMsg = "当前模式不支持该操作"; break;
+                case 6: errMsg = "上电失败"; break;
+                case 7: errMsg = "下电失败"; break;
+                case 8: errMsg = "设置控制模式失败"; break;
+                case 9: errMsg = "设置速度倍率失败，请检查倍率值"; break;
+                case 10: errMsg = "切换通道失败，请检查通道号"; break;
+                case 11: errMsg = "启动程序失败(需无告警、已加载且暂停/停止)"; break;
+                case 12: errMsg = "复位程序失败(需处于暂停/停止状态)"; break;
+                case 13: errMsg = "加载程序失败，请查看告警列表"; break;
+                // case 14: errMsg = "输入参数范围有误"; break;
+                case 15: errMsg = "系统仍处于运行中，无法执行运动指令"; break;
+                case 16: errMsg = "设置变量失败"; break;
+                case 17: errMsg = "查询变量失败"; break;
+                case 18: errMsg = "控制机器人移动失败"; break;
+                case 19: errMsg = "设置外部控制失败"; break;
+                case 10001: errMsg = "操作失败"; break;
+                case 10002: errMsg = "获取客户端失败"; break;
+                case 10003: errMsg = "创建monitor失败"; break;
+                case 10004: errMsg = "启动monitor失败"; break;
+                case 10005: errMsg = "获取文件操作接口失败"; break;
+                case 10006: errMsg = "从控制器下载文件失败"; break;
+                case 10007: errMsg = "往控制器上传XPL文件失败"; break;
+                case 10008: errMsg = "XPL文件存在"; break;
+                case 10009: errMsg = "XPL文件不存在"; break;
+                case 10010: errMsg = "XPL文件查询失败"; break;
+                case 10011: errMsg = "获取机型名失败"; break;
+                case 10012: errMsg = "获取运动数据失败"; break;
+                case 10013: errMsg = "环境未获取"; break;
+                case 10014: errMsg = "写权限设置失败"; break;
+                case 10015: errMsg = "获取monitor中数据失败"; break;
+                case 10016: errMsg = "获取状态信息失败"; break;
+                case 10017: errMsg = "创建文件夹失败"; break;
+                case 10018: errMsg = "删除文件夹失败"; break;
+                case 10019: errMsg = "文件夹路径无效"; break;
+                case 10020: errMsg = "禁止删除系统文件夹"; break;
+                case 10021: errMsg = "设备已存在"; break;
+                case 10022: errMsg = "设备不存在"; break;
+                case 10023: errMsg = "保存到文件失败"; break;
+                case 10024: errMsg = "操作超时"; break;
+                case 10025: errMsg = "正运动学计算失败"; break;
+                case 10026: errMsg = "逆运动学计算失败"; break;
+                case 10027: errMsg = "错误状态启动 (请检查机器是否处于连续运行模式)"; break;
+                case 10028: errMsg = "组合运动数量超限"; break;
+                case 10029: errMsg = "设置参数错误"; break;
+                case 10030: errMsg = "没有数据"; break;
+                case 10031: errMsg = "接受数据丢包"; break;
+                case 10032: errMsg = "机器人不处于指定位置 (检查轨迹起点和姿态)"; break;
+                case 10033: errMsg = "目标点位不可达 (奇异点或超出物理限位)"; break;
+                case 10034: errMsg = "内存不足"; break;
+                default:
+                    if (ret < 0) errMsg = "底层通信断开或严重异常";
+                    else errMsg = "未知 SDK 内部错误";
+                    break;
+                }
+
+                QMetaObject::invokeMethod(this, [this, ret, errMsg]() {
+                    m_statusLabel->setText(QString("下发中止！错误码 %1: %2").arg(ret).arg(errMsg));
                     m_statusLabel->setStyleSheet("font-weight: bold; color: red; font-size: 14px;");
                 }, Qt::QueuedConnection);
-                break;
-            } else {
 
+                break;
             }
 
             // 休眠 30 毫秒：匹配控制器的插补消化节奏
