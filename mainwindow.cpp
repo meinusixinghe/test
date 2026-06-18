@@ -2769,7 +2769,7 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
                     int lIdx = unvisited[i];
                     double d = std::numeric_limits<double>::max();
                     QPointF closestPt;
-                    for (const QPointF& pt : loops[lIdx].fullPoly) {
+                    for (const QPointF& pt : std::as_const(loops[lIdx].fullPoly)) {
                         double tDist = std::hypot(pt.x() - currentEndPoint.x(), pt.y() - currentEndPoint.y());
                         if (tDist < d) {
                             d = tDist;
@@ -2815,7 +2815,7 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
         PathLoop& pl = loops[lIdx];
 
         QList<Contour> loopContours;
-        for (int origIdx : pl.originalIndices) {
+        for (int origIdx : std::as_const(pl.originalIndices)) {
             loopContours.append(m_displayPaths[origIdx]);
         }
 
@@ -2900,7 +2900,7 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
             }
         }
 
-        for (const Contour& c : loopContours) {
+        for (const Contour& c : std::as_const(loopContours)) {
             reordered.append(c);
         }
     }
@@ -2934,5 +2934,4 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
     QString orderStr = isOuterSelected ? "【外轮廓 -> 内孔 (最短路径就近连线)】" : "【内孔 -> 外轮廓 (最短路径就近连线)】";
     QString dirStr = isCW ? "【顺时针】" : "【逆时针】";
     if (m_statusLabel) m_statusLabel->setText(QString("轨迹已按 %1 %2 排序完毕！").arg(orderStr).arg(dirStr));
-    QMessageBox::information(this, "排序完成", QString("整张图纸轨迹已按 %1 顺序以及 %2 方向重构完毕！\n\n所有的孔位切换，系统已自动计算并分配距离当前机械手最近的落刀点！").arg(orderStr).arg(dirStr));
 }

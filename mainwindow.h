@@ -207,7 +207,6 @@ private slots:
     void clearRobotAlarm();
     void onClearAlarmClicked();
     void onReorderStartSelected(int pathIndex, int segIndex);
-    void extracted(QString &orderStr, QString &dirStr);
     void executeReorder(int startPathIdx, int startSegIdx, bool isCW);
 
 private:
