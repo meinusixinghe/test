@@ -2810,6 +2810,8 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
     // ==============================================================
     QVector<Contour> reordered;
 
+    bool currentTargetIsCW = isCW;
+
     for (int i = 0; i < sortedLoopIndices.size(); ++i) {
         int lIdx = sortedLoopIndices[i];
         PathLoop& pl = loops[lIdx];
@@ -2821,8 +2823,9 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
 
         bool needsReverse = false;
         if (pl.isClosed) {
-            if (isCW && pl.isCCW) needsReverse = true;
-            if (!isCW && !pl.isCCW) needsReverse = true;
+            // 根据当前交替到的旋向来判断是否需要反转点集
+            if (currentTargetIsCW && pl.isCCW) needsReverse = true;
+            if (!currentTargetIsCW && !pl.isCCW) needsReverse = true;
         }
 
         if (needsReverse) {
@@ -2898,6 +2901,10 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
                 newPts.append(newPts.first());
                 pts = newPts;
             }
+
+            // 当前封闭图形处理完毕后，直接取反旋向标记。
+            // 使得下一个封闭图形在执行时，会自动采用与当前相反的旋向以释放 J6 轴的线缆扭转应力！
+            currentTargetIsCW = !currentTargetIsCW;
         }
 
         for (const Contour& c : std::as_const(loopContours)) {
@@ -2932,6 +2939,8 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
     renderArea->update();
 
     QString orderStr = isOuterSelected ? "【外轮廓 -> 内孔 (最短路径就近连线)】" : "【内孔 -> 外轮廓 (最短路径就近连线)】";
-    QString dirStr = isCW ? "【顺时针】" : "【逆时针】";
+
+    QString dirStr = isCW ? "【首刀顺时针，后续智能交替防卷绕】" : "【首刀逆时针，后续智能交替防卷绕】";
+
     if (m_statusLabel) m_statusLabel->setText(QString("轨迹已按 %1 %2 排序完毕！").arg(orderStr).arg(dirStr));
 }
