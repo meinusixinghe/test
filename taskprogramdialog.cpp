@@ -276,7 +276,7 @@ void TaskProgramDialog::addRow(int moveType, int posType, double* pos, double sp
     if (!pos) pos = defaultPos;
 
     QComboBox* moveCombo = new QComboBox();
-    moveCombo->addItems({"1: 独立直线(MLIN)", "2: 连续直线(Lin)", "3: 连续圆弧(Circ)", "4: 圆角(CircAng)"});
+    moveCombo->addItems({"1: 关节运动(Joint)", "2: 连续直线(Lin)", "3: 连续圆弧(Circ)", "4: 圆角(CircAng)"});
     if (moveType >= 1 && moveType <= 4) moveCombo->setCurrentIndex(moveType - 1);
     moveCombo->installEventFilter(this);
     m_table->setCellWidget(row, 0, moveCombo);
@@ -410,7 +410,7 @@ void TaskProgramDialog::onStartClicked() {
     // ====================================================================
     for (int r = 0; r < rowCount; ++r) {
         RobotAPI::MultiMoveInfo2 mp;
-        memset(&mp, 0, sizeof(mp)); // 安全清零
+        memset(&mp, 0, sizeof(mp));
 
         QComboBox* moveCombo = qobject_cast<QComboBox*>(m_table->cellWidget(r, 0));
         mp.moveType = moveCombo ? moveCombo->currentText().left(1).toInt() : 2;
@@ -418,34 +418,60 @@ void TaskProgramDialog::onStartClicked() {
         QComboBox* posCombo = qobject_cast<QComboBox*>(m_table->cellWidget(r, 1));
         mp.posType = posCombo ? posCombo->currentText().left(1).toInt() : 2;
 
-        // 强制第一点为关节运动，防止过大跨度导致规划器死锁
         if (r == 0) mp.moveType = 1;
 
         mp.speed = m_table->item(r, 8)->text().toDouble();
         mp.acc = m_table->item(r, 9)->text().toDouble();
         mp.dec = m_table->item(r, 10)->text().toDouble();
-
-        // 强制收尾点平滑度为 0
-        if (r == rowCount - 1) mp.overlapping = 0;
-        else mp.overlapping = m_table->item(r, 11)->text().toDouble();
-
+        mp.jerk = 100.0;
         mp.auxOverlapping = 1e100;
         mp.flags = 0;
+
+        if (r == rowCount - 1) mp.overlapping = 0;
+        else mp.overlapping = m_table->item(r, 11)->text().toDouble();
 
         if (mp.moveType == 3) {
             if (r + 1 >= rowCount) {
                 QMessageBox::warning(this, "轨迹错误", "发现不完整的圆弧指令（缺少终点）！");
-                m_startBtn->setEnabled(true);
-                return;
+                m_startBtn->setEnabled(true); return;
             }
             if (!solveRow(r, mp, 0) || !solveRow(r + 1, mp, 1)) {
                 QMessageBox::warning(this, "严重错误", QString("第 %1 行圆弧点逆解不可达！").arg(r+1));
                 m_startBtn->setEnabled(true); return;
             }
             r++; // 跳过已消耗的终点行
-        } else {
+        }
+        // 处理专属的整圆指令
+        else if (mp.moveType == 4) {
+            if (r + 3 >= rowCount) {
+                QMessageBox::warning(this, "轨迹错误", "发现不完整的整圆指令（缺少参数点）！");
+                m_startBtn->setEnabled(true); return;
+            }
+            // 整圆指令需要一口气吃下连续的4行点位
+            if (!solveRow(r, mp, 0) || !solveRow(r + 1, mp, 1) || !solveRow(r + 2, mp, 2) || !solveRow(r + 3, mp, 3)) {
+                QMessageBox::warning(this, "严重错误", QString("第 %1 行整圆特征点逆解不可达！").arg(r+1));
+                m_startBtn->setEnabled(true); return;
+            }
+
+            // 利用叉积全自动计算画圆的方向 (flags 位1)
+            double x0 = mp.cp[0].x, y0 = mp.cp[0].y;
+            double x1 = mp.cp[1].x, y1 = mp.cp[1].y;
+            double x2 = mp.cp[2].x, y2 = mp.cp[2].y;
+            // 数学二维向量叉积判断旋向
+            double cross = (x1 - x0) * (y2 - y1) - (y1 - y0) * (x2 - x1);
+
+            if (cross < 0) {
+                mp.flags = 2;
+            } else {
+                mp.flags = 0;
+            }
+
+            mp.overlapping = 0.0;
+            r += 3;
+        }
+        else {
             if (!solveRow(r, mp, 0)) {
-                QMessageBox::warning(this, "严重错误", QString("第 %1 行直线点位逆解不可达！").arg(r+1));
+                QMessageBox::warning(this, "严重错误", QString("第 %1 行点位逆解不可达！").arg(r+1));
                 m_startBtn->setEnabled(true); return;
             }
         }
@@ -636,7 +662,6 @@ void TaskProgramDialog::onResetClicked() {
 
 void TaskProgramDialog::generateProgram()
 {
-    // 1. 清空旧的表格数据与选中状态
     m_table->setRowCount(0);
     m_table->clearSelection();
     m_table->setCurrentCell(-1, -1);
@@ -650,36 +675,23 @@ void TaskProgramDialog::generateProgram()
         RobotAPI::GetUserCoordinatePos2(currentPose, m_devId);
     }
 
-    // 🌟【重新修正逻辑】：根据板材相对于 Z=0 平面的位置决定 Z 坐标
     double plateZ = 0.0;
     double SAFE_HEIGHT = 50.0;
 
     if (m_platePosCombo && m_thicknessSpin) {
-        if (m_platePosCombo->currentIndex() == 0) {
-            // 板材在 Z轴上方，意味着 Z 变成正的板厚 (例如 +8mm)
-            plateZ = m_thicknessSpin->value();
-        } else {
-            // 板材在 Z轴下方，意味着 Z 变成负的板厚 (例如 -8mm)
-            plateZ = -m_thicknessSpin->value();
-        }
-        // 智能安全高度：始终确保抬刀位置在板材和原点上方 50mm 处
+        if (m_platePosCombo->currentIndex() == 0) plateZ = m_thicknessSpin->value();
+        else plateZ = -m_thicknessSpin->value();
         SAFE_HEIGHT = (plateZ > 0) ? (plateZ + 50.0) : 50.0;
     }
 
-    // 全局状态追踪器
     double globalLastA = currentPose.a;
+    double globalLastTangentAngle = 0.0;
+    bool isFirstTangent = true;
+
     QPointF globalLastOffsetPt(-99999.0, -99999.0);
     QPointF globalLastUcsPt(-99999.0, -99999.0);
     QPointF globalLastOriginalPt(-99999.0, -99999.0);
 
-    bool hasGlobalInitialTangent = false;
-    double globalInitialTangentAngle = 0.0;
-
-    int closedShapeCount = 0;
-
-    // ==========================================
-    // 开始遍历所有导入的图元并生成连续轨迹
-    // ==========================================
     for (int idx = 0; idx < m_paths.size(); ++idx) {
         Contour c = m_paths[idx];
         if (c.points.isEmpty()) continue;
@@ -692,93 +704,71 @@ void TaskProgramDialog::generateProgram()
         bool isArc = typeStr.contains("弧") || typeStr.contains("Arc", Qt::CaseInsensitive);
 
         bool isClosedRaw = (std::hypot(c.points.first().x() - c.points.last().x(), c.points.first().y() - c.points.last().y()) < 0.001);
-        if (isClosedRaw && idx > 0 && globalLastOriginalPt.x() > -90000) {
-            int bestK = 0;
-            double minDist = std::numeric_limits<double>::max();
+        bool isReversed = false;
 
-            for (int i = 0; i < c.points.size() - 1; ++i) {
-                if (isFittedData && (i % 2 != 0)) continue;
+        static int closedShapeCount = 0;
+        if (idx == 0) closedShapeCount = 0;
 
-                double dist = std::hypot(c.points[i].x() - globalLastOriginalPt.x(), c.points[i].y() - globalLastOriginalPt.y());
-                if (dist < minDist) {
-                    minDist = dist;
-                    bestK = i;
-                }
-            }
-
-            if (bestK > 0) {
-                QVector<QPointF> newPts;
-                for (int i = bestK; i < c.points.size() - 1; ++i) newPts.append(c.points[i]);
-                for (int i = 0; i < bestK; ++i) newPts.append(c.points[i]);
-                newPts.append(newPts.first());
-                c.points = newPts;
+        if (isClosedRaw) {
+            closedShapeCount++;
+            if (closedShapeCount % 2 == 0) {
+                isReversed = true;
+                std::reverse(c.points.begin(), c.points.end());
             }
         }
+
+        int n = c.points.size();
 
         QVector<QPointF> targetPoints;
         QVector<int> targetMoveTypes;
         QVector<QString> targetRemarks;
-
-        int n = c.points.size();
+        QVector<int> targetOrigIdx;
 
         if (isCircle && n >= 4) {
-            targetPoints << c.points[0];         targetMoveTypes << 2; targetRemarks << "-起点(圆弧开始)";
-            targetPoints << c.points[n / 4];     targetMoveTypes << 3; targetRemarks << "-圆弧途经点";
-            targetPoints << c.points[n / 2];     targetMoveTypes << 3; targetRemarks << "-圆弧交接点";
-            targetPoints << c.points[3 * n / 4]; targetMoveTypes << 3; targetRemarks << "-圆弧途经点";
-            targetPoints << c.points[n - 1];     targetMoveTypes << 3; targetRemarks << "-圆弧终点";
+            targetPoints << c.points[0];         targetMoveTypes << 2; targetOrigIdx << 0;       targetRemarks << "-整圆逼近点";
+            targetPoints << c.points[0];         targetMoveTypes << 4; targetOrigIdx << 0;       targetRemarks << "-整圆起刀点(P1)";
+            targetPoints << c.points[n / 4];     targetMoveTypes << 4; targetOrigIdx << n / 4;   targetRemarks << "-整圆途经点(P2)";
+            targetPoints << c.points[n / 2];     targetMoveTypes << 4; targetOrigIdx << n / 2;   targetRemarks << "-整圆交接点(P3)";
+            targetPoints << c.points[3 * n / 4]; targetMoveTypes << 4; targetOrigIdx << 3*n / 4; targetRemarks << "-整圆收刀点(P4)";
         }
         else if (isFittedData && n >= 3) {
-            targetPoints << c.points[0]; targetMoveTypes << 2; targetRemarks << "-样条起点";
+            targetPoints << c.points[0]; targetMoveTypes << 2; targetOrigIdx << 0; targetRemarks << "-样条起点";
             for (int i = 1; i < n - 1; i += 2) {
                 int segIdx = (i + 1) / 2;
                 QPointF p1 = c.points[i-1], p2 = c.points[i], p3 = c.points[i+1];
                 double D = 2 * (p1.x()*(p2.y() - p3.y()) + p2.x()*(p3.y() - p1.y()) + p3.x()*(p1.y() - p2.y()));
                 if (std::abs(D) < 1e-6) {
-                    targetPoints << p3; targetMoveTypes << 2; targetRemarks << QString("-段%1[直线] 终点").arg(segIdx);
+                    targetPoints << p3; targetMoveTypes << 2; targetOrigIdx << i+1; targetRemarks << QString("-段%1[直线] 终点").arg(segIdx);
                 } else {
-                    targetPoints << p2; targetMoveTypes << 3; targetRemarks << QString("-段%1[圆弧] 途经点").arg(segIdx);
-                    targetPoints << p3; targetMoveTypes << 3; targetRemarks << QString("-段%1[圆弧] 终点").arg(segIdx);
+                    targetPoints << p2; targetMoveTypes << 3; targetOrigIdx << i;   targetRemarks << QString("-段%1[圆弧] 途经点").arg(segIdx);
+                    targetPoints << p3; targetMoveTypes << 3; targetOrigIdx << i+1; targetRemarks << QString("-段%1[圆弧] 终点").arg(segIdx);
                 }
             }
-            if (n % 2 == 0) { targetPoints << c.points[n - 1]; targetMoveTypes << 2; targetRemarks << "-尾部收尾"; }
+            if (n % 2 == 0) {
+                targetPoints << c.points[n - 1]; targetMoveTypes << 2; targetOrigIdx << n - 1; targetRemarks << "-尾部收尾";
+            }
         }
         else if (isArc && n >= 3) {
-            targetPoints << c.points[0];         targetMoveTypes << 2; targetRemarks << "-圆弧起点";
-            targetPoints << c.points[n / 2];     targetMoveTypes << 3; targetRemarks << "-圆弧途经点";
-            targetPoints << c.points[n - 1];     targetMoveTypes << 3; targetRemarks << "-圆弧终点";
+            targetPoints << c.points[0];         targetMoveTypes << 2; targetOrigIdx << 0;     targetRemarks << "-圆弧起点";
+            targetPoints << c.points[n / 2];     targetMoveTypes << 3; targetOrigIdx << n / 2; targetRemarks << "-圆弧途经点";
+            targetPoints << c.points[n - 1];     targetMoveTypes << 3; targetOrigIdx << n - 1; targetRemarks << "-圆弧终点";
         }
         else {
             for (int i = 0; i < n; ++i) {
-                targetPoints << c.points[i]; targetMoveTypes << 2;
+                targetPoints << c.points[i]; targetMoveTypes << 2; targetOrigIdx << i;
                 if (i == 0) targetRemarks << "-起点";
                 else if (i == n - 1) targetRemarks << "-终点";
                 else targetRemarks << QString("-直线途点%1").arg(i);
             }
         }
 
-        bool isClosed = (std::hypot(targetPoints.first().x() - targetPoints.last().x(), targetPoints.first().y() - targetPoints.last().y()) < 0.001);
-        bool isReversed = false;
-        if (isClosed) {
-            closedShapeCount++;
-            if (closedShapeCount % 2 == 0) {
-                isReversed = true;
-                std::reverse(targetPoints.begin(), targetPoints.end());
-
-                QVector<int> newMoveTypes(targetPoints.size(), 2);
-                for(int i = 0; i < targetPoints.size(); i++) {
-                    if(targetMoveTypes[targetPoints.size() - 1 - i] == 3) newMoveTypes[i] = 3;
-                }
-                newMoveTypes[0] = 2;
-                targetMoveTypes = newMoveTypes;
-            }
-        }
-
         bool isConnectedWithNext = false;
         if (idx + 1 < m_paths.size() && !m_paths[idx + 1].points.isEmpty()) {
             QPointF nextStart = m_paths[idx + 1].points.first();
+            QPointF nextEnd = m_paths[idx + 1].points.last();
             QPointF myEnd = targetPoints.last();
-            if (std::hypot(myEnd.x() - nextStart.x(), myEnd.y() - nextStart.y()) < 0.001) {
+            if (std::hypot(myEnd.x() - nextStart.x(), myEnd.y() - nextStart.y()) < 0.001 ||
+                std::hypot(myEnd.x() - nextEnd.x(), myEnd.y() - nextEnd.y()) < 0.001) {
                 isConnectedWithNext = true;
             }
         }
@@ -786,36 +776,29 @@ void TaskProgramDialog::generateProgram()
         double B = c.bevelAngle;
         double offsetDist = c.rootFace * std::tan(B * M_PI / 180.0);
 
-        if (!hasGlobalInitialTangent && targetPoints.size() > 1) {
-            QPointF t0 = targetPoints[1] - targetPoints[0];
-            globalInitialTangentAngle = std::atan2(t0.y(), t0.x()) * 180.0 / M_PI;
-            hasGlobalInitialTangent = true;
-        }
-
         for (int i = 0; i < targetPoints.size(); ++i) {
             QPointF pt = targetPoints[i];
             int moveType = targetMoveTypes[i];
+            int origIdx = targetOrigIdx[i];
             QString remark = targetRemarks[i];
             if (isReversed) remark += "[反转]";
 
             QPointF tangent(0, 0);
-            if (i == 0) {
-                if (targetPoints.size() > 1) tangent = targetPoints[1] - targetPoints[0];
+            if (origIdx == 0) {
+                if (c.points.size() > 1) tangent = c.points[1] - c.points[0];
                 else tangent = QPointF(1, 0);
-            } else if (moveType == 2) {
-                tangent = pt - targetPoints[i-1];
+            } else if (origIdx == c.points.size() - 1) {
+                tangent = c.points[origIdx] - c.points[origIdx - 1];
             } else {
-                if (i < targetPoints.size() - 1) tangent = targetPoints[i+1] - targetPoints[i-1];
-                else tangent = pt - targetPoints[i-1];
+                tangent = c.points[origIdx + 1] - c.points[origIdx - 1];
             }
 
             double len = std::hypot(tangent.x(), tangent.y());
             QPointF normal(0, 0);
-            double currentTangentAngle = globalInitialTangentAngle;
+            double currentTangentAngle = 0.0;
 
             if (len > 1e-6) {
-                if (isReversed) normal = QPointF(tangent.y() / len, -tangent.x() / len);
-                else normal = QPointF(-tangent.y() / len, tangent.x() / len);
+                normal = QPointF(-tangent.y() / len, tangent.x() / len);
                 currentTangentAngle = std::atan2(tangent.y(), tangent.x()) * 180.0 / M_PI;
             }
 
@@ -830,27 +813,33 @@ void TaskProgramDialog::generateProgram()
                 ucsPt = QPointF(local_x, local_y);
             }
 
-            double deltaA = currentTangentAngle - globalInitialTangentAngle;
+            if (isFirstTangent) {
+                globalLastTangentAngle = currentTangentAngle;
+                isFirstTangent = false;
+            }
+
+            double deltaA = currentTangentAngle - globalLastTangentAngle;
             while (deltaA > 180.0) deltaA -= 360.0;
             while (deltaA <= -180.0) deltaA += 360.0;
+            globalLastTangentAngle = currentTangentAngle;
 
-            double finalA = currentPose.a + deltaA;
+            double finalA = globalLastA + deltaA;
             while (finalA > 180.0) finalA -= 360.0;
             while (finalA <= -180.0) finalA += 360.0;
 
             bool isConnectedWithPrev = (std::hypot(ucsPt.x() - globalLastUcsPt.x(), ucsPt.y() - globalLastUcsPt.y()) < 0.001);
 
-            // 转向点：Z 轴同步为 plateZ
+            double overlapVal = (moveType == 3 || moveType == 4) ? 0.0 : 2.0;
+
             if (i > 0 || isConnectedWithPrev) {
                 if (moveType == 2 || (i == 0 && isConnectedWithPrev)) {
                     double angDiff = finalA - globalLastA;
                     while (angDiff > 180.0) angDiff -= 360.0;
                     while (angDiff <= -180.0) angDiff += 360.0;
-
                     if (std::abs(angDiff) > 0.5) {
-                        // Z 坐标使用最新的 plateZ 变量
                         double pTurn[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), plateZ, finalA, B, 0.0 };
-                        addRow(2, 2, pTurn, 50, 50, 50, 2.0, shapeName + remark + " 🔄[直行前转向]");
+                        // 连续直线 (Lin)
+                        addRow(2, 2, pTurn, 50, 50, 50, 0.0, shapeName + remark);
                         globalLastA = finalA;
                     }
                 }
@@ -863,37 +852,65 @@ void TaskProgramDialog::generateProgram()
                 continue;
             }
 
-            // 正常输出到表格：严格代入 SAFE_HEIGHT 和 plateZ
             if (i == 0) {
                 if (!isConnectedWithPrev) {
-                    // 空中安全点，使用 SAFE_HEIGHT
                     double pSafe[6] = { ucsPt.x(), ucsPt.y(), SAFE_HEIGHT, finalA, 0.0, 0.0 };
                     addRow(2, 2, pSafe, 100, 50, 50, 0.0, shapeName + remark + " [跨域: 高空就位]");
                 }
-                // 落刀起切点，Z 下降到 plateZ
                 double pStart[6] = { ucsPt.x(), ucsPt.y(), plateZ, finalA, B, 0.0 };
                 addRow(moveType, 2, pStart, 30, 50, 50, 0.0, shapeName + remark + " [起刀]");
             }
             else if (i == targetPoints.size() - 1) {
-                // 结束点，Z 保持在 plateZ
                 double pEnd[6] = { ucsPt.x(), ucsPt.y(), plateZ, finalA, B, 0.0 };
                 if (isConnectedWithNext) {
-                    addRow(moveType, 2, pEnd, 50, 50, 50, 2.0, shapeName + remark + " (无缝)");
+                    addRow(moveType, 2, pEnd, 50, 50, 50, overlapVal, shapeName + remark);
                 } else {
                     addRow(moveType, 2, pEnd, 50, 50, 50, 0.0, shapeName + remark + " (切割结束)");
                     double pRetract[6] = { ucsPt.x(), ucsPt.y(), SAFE_HEIGHT, finalA, 0.0, 0.0 };
-                    addRow(2, 2, pRetract, 100, 50, 50, 0.0, shapeName + " [跨域: 抬刀]");
+                    addRow(2, 2, pRetract, 100, 50, 50, 0.0, shapeName + " [跨域 抬刀]");
                 }
             }
             else {
                 double p[6] = { ucsPt.x(), ucsPt.y(), plateZ, finalA, B, 0.0 };
-                addRow(moveType, 2, p, 50, 50, 50, 2.0, shapeName + remark);
+                addRow(moveType, 2, p, 50, 50, 50, overlapVal, shapeName + remark);
             }
 
             globalLastA = finalA;
             globalLastOffsetPt = pt;
             globalLastUcsPt = ucsPt;
             globalLastOriginalPt = targetPoints[i];
+        }
+    }
+
+    int rowCount = m_table->rowCount();
+    for (int r = 0; r < rowCount; ++r) {
+        QComboBox* moveCombo = qobject_cast<QComboBox*>(m_table->cellWidget(r, 0));
+        int moveType = moveCombo ? moveCombo->currentText().left(1).toInt() : 2;
+        if (moveType == 3 || moveType == 4) {
+            m_table->item(r, 11)->setText("0.0");
+        }
+
+        if (r < rowCount - 1 && moveType != 3 && moveType != 4) {
+            double x1 = m_table->item(r, 2)->text().toDouble();
+            double y1 = m_table->item(r, 3)->text().toDouble();
+            double z1 = m_table->item(r, 4)->text().toDouble();
+            double x2 = m_table->item(r+1, 2)->text().toDouble();
+            double y2 = m_table->item(r+1, 3)->text().toDouble();
+            double z2 = m_table->item(r+1, 4)->text().toDouble();
+
+            double dist = std::hypot(x1 - x2, y1 - y2);
+            dist = std::hypot(dist, z1 - z2);
+            double currentOverlap = m_table->item(r, 11)->text().toDouble();
+            double maxSafeOverlap = dist * 0.45;
+
+            if (dist < 0.001) {
+                m_table->item(r, 11)->setText("0.0");
+                QComboBox* nextCombo = qobject_cast<QComboBox*>(m_table->cellWidget(r+1, 0));
+                int nextMove = nextCombo ? nextCombo->currentText().left(1).toInt() : 2;
+                if (nextMove != 4) m_table->item(r+1, 11)->setText("0.0");
+            } else if (currentOverlap > maxSafeOverlap) {
+                m_table->item(r, 11)->setText(QString::number(maxSafeOverlap, 'f', 2));
+            }
         }
     }
 }
