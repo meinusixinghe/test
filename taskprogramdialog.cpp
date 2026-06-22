@@ -73,6 +73,32 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
     coordLayout->addWidget(m_thicknessSpin);
     coordLayout->addStretch();
     tableLayout->addLayout(coordLayout);
+    QHBoxLayout* advConfigLayout = new QHBoxLayout();
+    m_useRetractTurnCheck = new QCheckBox("开启大角度退刀避障", this);
+    m_useRetractTurnCheck->setChecked(true); // 默认开启
+    m_useRetractTurnCheck->setStyleSheet("font-weight: bold; color: #D84315;");
+    m_useRetractTurnCheck->installEventFilter(this);
+    advConfigLayout->addWidget(m_useRetractTurnCheck);
+    advConfigLayout->addSpacing(10);
+    QLabel* thresholdLbl = new QLabel("触发阈值(度):", this);
+    advConfigLayout->addWidget(thresholdLbl);
+    m_retractAngleThresholdSpin = new QDoubleSpinBox(this);
+    m_retractAngleThresholdSpin->setRange(5.0, 180.0);
+    m_retractAngleThresholdSpin->setValue(45.0); // 默认超过 45 度触发抬刀翻转
+    m_retractAngleThresholdSpin->setDecimals(1);
+    m_retractAngleThresholdSpin->installEventFilter(this);
+    advConfigLayout->addWidget(m_retractAngleThresholdSpin);
+    advConfigLayout->addStretch();
+
+    tableLayout->addLayout(advConfigLayout);
+
+    connect(m_useRetractTurnCheck, &QCheckBox::stateChanged, this, [this](int state) {
+        m_retractAngleThresholdSpin->setEnabled(state == Qt::Checked);
+        if (!m_paths.isEmpty()) generateProgram();
+    });
+    connect(m_retractAngleThresholdSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double) {
+        if (!m_paths.isEmpty()) generateProgram();
+    });
 
     // 安全获取机器人当前的 Tool 和 Wobj
     if (m_devId != 0 && RobotAPI::IsConnected(m_devId)) {
@@ -453,6 +479,13 @@ void TaskProgramDialog::onStartClicked() {
                 m_startBtn->setEnabled(true); return;
             }
 
+            for (int i = 0; i < 4; ++i) {
+                mp.cp[i].cfgx = 0;
+                mp.cp[i].cfg1 = 0;
+                mp.cp[i].cfg4 = 0;
+                mp.cp[i].cfg6 = 0;
+            }
+
             // 利用叉积全自动计算画圆的方向 (flags 位1)
             double x0 = mp.cp[0].x, y0 = mp.cp[0].y;
             double x1 = mp.cp[1].x, y1 = mp.cp[1].y;
@@ -506,24 +539,22 @@ void TaskProgramDialog::onStartClicked() {
         int sentIndex = 0;
 
         while (sentIndex < totalPoints) {
-            // 如果用户点击了“停止”按钮
             if (m_blockMoveStopRequested) {
                 RobotAPI::MultiMove2Reset(devId);
                 break;
             }
 
-            // 在执行过程中实时监测报警状态，若发现报警立马暂停并重置！
             bool hasAlarm = false;
             if (RobotAPI::GetCurrentAlarmStatus(hasAlarm, devId) == 0 && hasAlarm) {
-                RobotAPI::MultiMove2Hold(devId);   // 发送暂停指令
-                RobotAPI::MultiMove2Reset(devId);  // 强制重置清空剩余轨迹队列
+                RobotAPI::MultiMove2Hold(devId);
+                RobotAPI::MultiMove2Reset(devId);
 
                 QMetaObject::invokeMethod(this, [this]() {
                     m_statusLabel->setText("机器人在运行中出现报警，程序已自动暂停并重置！");
                     m_statusLabel->setStyleSheet("font-weight: bold; color: red; font-size: 14px;");
                 }, Qt::QueuedConnection);
 
-                break; // 跳出滑动窗口，停止一切发送行为
+                break;
             }
 
             int chunkCount = std::min(3, totalPoints - sentIndex);
@@ -532,16 +563,14 @@ void TaskProgramDialog::onStartClicked() {
             int ret = RobotAPI::MultiMove2Start(chunk, devId);
 
             if (ret == 0) {
-                // 只有底层明确返回 0 (成功吃进缓冲区)，我们才允许推进索引
                 sentIndex += chunkCount;
                 QMetaObject::invokeMethod(this, [this, sentIndex, totalPoints]() {
                     m_statusLabel->setText(QString("滑动窗口持续喂点中: %1 / %2").arg(sentIndex).arg(totalPoints));
                 }, Qt::QueuedConnection);
 
             } else if (ret == 40 || ret == 14) {
-                // 状态 40 代表底层缓冲区已满，这是正常的物理消化过程，无需干预，静默等待重传
             } else {
-                // 发生异常（包括 SDK 报错、超时、离线等），立刻中断发送并翻译错误码！
+                // 发生异常
                 QString errMsg;
                 switch(ret) {
                 case 1: errMsg = "与机器人连接失败"; break;
@@ -611,7 +640,6 @@ void TaskProgramDialog::onStartClicked() {
                 break;
             }
 
-            // 休眠 30 毫秒：匹配控制器的插补消化节奏
             QThread::msleep(30);
         }
 
@@ -726,10 +754,10 @@ void TaskProgramDialog::generateProgram()
 
         if (isCircle && n >= 4) {
             targetPoints << c.points[0];         targetMoveTypes << 2; targetOrigIdx << 0;       targetRemarks << "-整圆逼近点";
-            targetPoints << c.points[0];         targetMoveTypes << 4; targetOrigIdx << 0;       targetRemarks << "-整圆起刀点(P1)";
             targetPoints << c.points[n / 4];     targetMoveTypes << 4; targetOrigIdx << n / 4;   targetRemarks << "-整圆途经点(P2)";
             targetPoints << c.points[n / 2];     targetMoveTypes << 4; targetOrigIdx << n / 2;   targetRemarks << "-整圆交接点(P3)";
-            targetPoints << c.points[3 * n / 4]; targetMoveTypes << 4; targetOrigIdx << 3*n / 4; targetRemarks << "-整圆收刀点(P4)";
+            targetPoints << c.points[3 * n / 4]; targetMoveTypes << 4; targetOrigIdx << 3*n / 4; targetRemarks << "-整圆途经点(P4)";
+            targetPoints << c.points[0];         targetMoveTypes << 4; targetOrigIdx << 0;       targetRemarks << "-整圆收刀点(P1)";
         }
         else if (isFittedData && n >= 3) {
             targetPoints << c.points[0]; targetMoveTypes << 2; targetOrigIdx << 0; targetRemarks << "-样条起点";
@@ -837,9 +865,27 @@ void TaskProgramDialog::generateProgram()
                     while (angDiff > 180.0) angDiff -= 360.0;
                     while (angDiff <= -180.0) angDiff += 360.0;
                     if (std::abs(angDiff) > 0.5) {
-                        double pTurn[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), plateZ, finalA, B, 0.0 };
-                        // 连续直线 (Lin)
-                        addRow(2, 2, pTurn, 50, 50, 50, 0.0, shapeName + remark);
+                        // 读取 UI 上的设置，判断是否需要启动安全退刀
+                        bool useRetract = m_useRetractTurnCheck && m_useRetractTurnCheck->isChecked()
+                                          && (std::abs(angDiff) >= m_retractAngleThresholdSpin->value());
+
+                        if (useRetract) {
+                            // 1. 避障抬刀 (Lin)
+                            double pRetract[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), SAFE_HEIGHT, globalLastA, B, 0.0 };
+                            addRow(2, 2, pRetract, 100, 50, 50, 0.0, shapeName + remark + " ⬆️[避障抬刀]");
+
+                            // 2. 空中重姿态 (Joint, 防止奇异点报错)
+                            double pTurn[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), SAFE_HEIGHT, finalA, B, 0.0 };
+                            addRow(1, 2, pTurn, 50, 50, 50, 0.0, shapeName + remark + " 🔄[空中重姿态]");
+
+                            // 3. 重新落刀 (Lin)
+                            double pPlunge[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), plateZ, finalA, B, 0.0 };
+                            addRow(2, 2, pPlunge, 50, 50, 50, 0.0, shapeName + remark + " ⬇️[重新落刀]");
+                        } else {
+                            // 角度比较小，或者用户关闭了安全退刀，直接原地硬转 (Lin)
+                            double pTurn[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), plateZ, finalA, B, 0.0 };
+                            addRow(2, 2, pTurn, 50, 50, 50, 0.0, shapeName + remark + " 🔄[直行前转向]");
+                        }
                         globalLastA = finalA;
                     }
                 }

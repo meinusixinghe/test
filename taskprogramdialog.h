@@ -10,6 +10,7 @@
 #include <QTimer>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
+#include <QCheckBox>
 
 class TaskProgramDialog : public QDialog
 {
@@ -54,6 +55,9 @@ private:
 
     QComboBox* m_platePosCombo = nullptr;
     QDoubleSpinBox* m_thicknessSpin = nullptr;
+
+    QCheckBox* m_useRetractTurnCheck = nullptr;
+    QDoubleSpinBox* m_retractAngleThresholdSpin = nullptr;
 
     QPushButton* m_startBtn;
     QPushButton* m_pauseBtn;
