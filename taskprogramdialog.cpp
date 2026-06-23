@@ -550,13 +550,6 @@ void TaskProgramDialog::onStartClicked() {
                 m_startBtn->setEnabled(true); return;
             }
 
-            for (int i = 0; i < 4; ++i) {
-                mp.cp[i].cfgx = 0;
-                mp.cp[i].cfg1 = 0;
-                mp.cp[i].cfg4 = 0;
-                mp.cp[i].cfg6 = 0;
-            }
-
             // 利用叉积全自动计算画圆的方向 (flags 位1)
             double x0 = mp.cp[0].x, y0 = mp.cp[0].y;
             double x1 = mp.cp[1].x, y1 = mp.cp[1].y;
@@ -792,13 +785,11 @@ void TaskProgramDialog::generateProgram()
 
     // 基于翻转角度(angDiff)的线性高度插值函数
     auto calculateDynamicHeight = [&](double angDiff) {
-        if (!m_useDynamicHeightCheck || !m_useDynamicHeightCheck->isChecked()) {
-            return SAFE_HEIGHT;
-        }
-        double ratio = std::abs(angDiff) / 180.0;
+        if (!m_useDynamicHeightCheck || !m_useDynamicHeightCheck->isChecked()) return SAFE_HEIGHT;
+        double ratio = std::min(1.0, std::abs(angDiff) / 180.0);
         return SAFE_HEIGHT + (m_maxHeightAddSpin->value() * ratio);
     };
-
+    
     double globalLastA = currentPose.a;
     double accumulatedA = currentPose.a;
     double globalLastTangentAngle = 0.0;
@@ -811,7 +802,6 @@ void TaskProgramDialog::generateProgram()
     for (int idx = 0; idx < m_paths.size(); ++idx) {
         Contour c = m_paths[idx];
         if (c.points.isEmpty()) continue;
-
         QString typeStr = c.type;
         QString shapeName = QString("图元%1[%2]").arg(idx + 1).arg(typeStr);
 
@@ -824,7 +814,6 @@ void TaskProgramDialog::generateProgram()
 
         static int closedShapeCount = 0;
         if (idx == 0) closedShapeCount = 0;
-
         if (isClosedRaw) {
             closedShapeCount++;
             if (closedShapeCount % 2 == 0) {
@@ -834,7 +823,6 @@ void TaskProgramDialog::generateProgram()
         }
 
         int n = c.points.size();
-
         QVector<QPointF> targetPoints;
         QVector<int> targetMoveTypes;
         QVector<QString> targetRemarks;
@@ -860,9 +848,7 @@ void TaskProgramDialog::generateProgram()
                     targetPoints << p3; targetMoveTypes << 3; targetOrigIdx << i+1; targetRemarks << QString("-段%1[圆弧] 终点").arg(segIdx);
                 }
             }
-            if (n % 2 == 0) {
-                targetPoints << c.points[n - 1]; targetMoveTypes << 2; targetOrigIdx << n - 1; targetRemarks << "-尾部收尾";
-            }
+            if (n % 2 == 0) { targetPoints << c.points[n - 1]; targetMoveTypes << 2; targetOrigIdx << n - 1; targetRemarks << "-尾部收尾"; }
         }
         else if (isArc && n >= 3) {
             targetPoints << c.points[0];         targetMoveTypes << 2; targetOrigIdx << 0;     targetRemarks << "-圆弧起点";
@@ -937,10 +923,12 @@ void TaskProgramDialog::generateProgram()
             double deltaA = currentTangentAngle - globalLastTangentAngle;
             while (deltaA > 180.0) deltaA -= 360.0;
             while (deltaA <= -180.0) deltaA += 360.0;
+
+            // 破除 180 度翻转歧义
             if (std::abs(deltaA - 180.0) < 0.05) deltaA = 179.9;
             else if (std::abs(deltaA + 180.0) < 0.05) deltaA = -179.9;
-            globalLastTangentAngle = currentTangentAngle;
 
+            globalLastTangentAngle = currentTangentAngle;
             accumulatedA += deltaA;
 
             double finalA = globalLastA + deltaA;
@@ -948,28 +936,28 @@ void TaskProgramDialog::generateProgram()
             while (finalA <= -180.0) finalA += 360.0;
 
             bool isConnectedWithPrev = (std::hypot(ucsPt.x() - globalLastUcsPt.x(), ucsPt.y() - globalLastUcsPt.y()) < 0.001);
-
             double overlapVal = (moveType == 3 || moveType == 4) ? 0.0 : 2.0;
 
+            // ---------------- 图形内部原地退刀/转向 ----------------
             if (i > 0 || isConnectedWithPrev) {
                 if (moveType == 2 || (i == 0 && isConnectedWithPrev)) {
                     double angDiff = finalA - globalLastA;
                     while (angDiff > 180.0) angDiff -= 360.0;
                     while (angDiff <= -180.0) angDiff += 360.0;
+
                     if (std::abs(angDiff - 180.0) < 0.05) angDiff = 179.9;
                     else if (std::abs(angDiff + 180.0) < 0.05) angDiff = -179.9;
+
                     if (std::abs(angDiff) > 0.5) {
-                        // 读取 UI 上的设置，判断是否需要启动安全退刀
                         bool useRetract = m_useRetractTurnCheck && m_useRetractTurnCheck->isChecked()
-                                          && (std::abs(angDiff) >= m_retractAngleThresholdSpin->value());
+                        && (std::abs(angDiff) >= m_retractAngleThresholdSpin->value());
 
                         if (useRetract) {
-                            // 应用动态高度算法
                             double currentSafeHeight = calculateDynamicHeight(angDiff);
 
+                            // 【退刀】必须是 Lin 直线！
                             double pRetract[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), currentSafeHeight, globalLastA, B, 0.0 };
-                            // 将计算出的高度显示在备注里
-                            addRow(2, 2, pRetract, 100, 50, 50, 0.0, shapeName + remark + QString(" ⬆️[避障抬刀: Z=%1]").arg(currentSafeHeight, 0, 'f', 1));
+                            addRow(2, 2, pRetract, 100, 50, 50, 0.0, shapeName + remark + QString(" ⬆️[避障抬刀 Z=%1]").arg(currentSafeHeight,0,'f',1));
 
                             double testAccumulatedA = accumulatedA + angDiff;
                             double compensatedFinalA = finalA;
@@ -987,9 +975,11 @@ void TaskProgramDialog::generateProgram()
                                 accumulatedA = testAccumulatedA;
                             }
 
+                            // 【空中翻腕】唯一允许使用 Joint 的地方
                             double pTurn[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), currentSafeHeight, compensatedFinalA, B, 0.0 };
                             addRow(1, 2, pTurn, 50, 50, 50, 0.0, turnRemark);
 
+                            // 【落刀】必须回到 Lin 直线！
                             double pPlunge[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), plateZ, finalA, B, 0.0 };
                             addRow(2, 2, pPlunge, 50, 50, 50, 0.0, shapeName + remark + " ⬇️[重新落刀]");
                         } else {
@@ -1009,20 +999,38 @@ void TaskProgramDialog::generateProgram()
                 continue;
             }
 
+            // ---------------- 跨域 / 正常走线 ----------------
             if (i == 0) {
                 if (!isConnectedWithPrev) {
-                    // 计算跨域孔与孔之间的姿态跳变
                     double crossAngDiff = finalA - globalLastA;
                     while (crossAngDiff > 180.0) crossAngDiff -= 360.0;
                     while (crossAngDiff <= -180.0) crossAngDiff += 360.0;
                     if (std::abs(crossAngDiff - 180.0) < 0.05) crossAngDiff = 179.9;
                     else if (std::abs(crossAngDiff + 180.0) < 0.05) crossAngDiff = -179.9;
 
-                    // 应用动态高度算法
                     double currentSafeHeight = calculateDynamicHeight(crossAngDiff);
-                    double pSafe[6] = { ucsPt.x(), ucsPt.y(), currentSafeHeight, finalA, 0.0, 0.0 };
-                    addRow(1, 2, pSafe, 100, 50, 50, 0.0, shapeName + remark + QString(" [跨域: 高空就位 Z=%1]").arg(currentSafeHeight, 0, 'f', 1));
+                    double testAccumulatedA = accumulatedA + crossAngDiff;
+                    double compensatedFinalA = finalA;
+                    QString turnRemark = shapeName + remark + QString(" [跨域: 高空就位 Z=%1]").arg(currentSafeHeight,0,'f',1);
+
+                    if (testAccumulatedA > 150.0) {
+                        compensatedFinalA = finalA - 360.0;
+                        accumulatedA = testAccumulatedA - 360.0;
+                        turnRemark += " (退绕 -360°)";
+                    } else if (testAccumulatedA < -150.0) {
+                        compensatedFinalA = finalA + 360.0;
+                        accumulatedA = testAccumulatedA + 360.0;
+                        turnRemark += " (退绕 +360°)";
+                    } else {
+                        accumulatedA = testAccumulatedA;
+                    }
+
+                    // 【跨孔就位】使用 Joint，融合平移与姿态重构
+                    double pSafe[6] = { ucsPt.x(), ucsPt.y(), currentSafeHeight, compensatedFinalA, 0.0, 0.0 };
+                    addRow(1, 2, pSafe, 100, 50, 50, 0.0, turnRemark);
                 }
+
+                // 【跨孔起刀】Lin 下落
                 double pStart[6] = { ucsPt.x(), ucsPt.y(), plateZ, finalA, B, 0.0 };
                 addRow(moveType, 2, pStart, 30, 50, 50, 0.0, shapeName + remark + " [起刀]");
             }
@@ -1032,8 +1040,10 @@ void TaskProgramDialog::generateProgram()
                     addRow(moveType, 2, pEnd, 50, 50, 50, overlapVal, shapeName + remark);
                 } else {
                     addRow(moveType, 2, pEnd, 50, 50, 50, 0.0, shapeName + remark + " (切割结束)");
+
+                    // 【切割结束】Lin 垂直拔枪，防止磕碰！
                     double pRetract[6] = { ucsPt.x(), ucsPt.y(), SAFE_HEIGHT, finalA, 0.0, 0.0 };
-                    addRow(2, 2, pRetract, 100, 50, 50, 0.0, shapeName + " [跨域 抬刀]");
+                    addRow(2, 2, pRetract, 100, 50, 50, 0.0, shapeName + " [跨域: 抬刀]");
                 }
             }
             else {
@@ -1053,11 +1063,11 @@ void TaskProgramDialog::generateProgram()
         QComboBox* moveCombo = qobject_cast<QComboBox*>(m_table->cellWidget(r, 0));
         int moveType = moveCombo ? moveCombo->currentText().left(1).toInt() : 2;
 
-        // 1. 圆弧点绝对不允许有平滑度，直接锁死
         if (moveType == 3 || moveType == 4) {
             m_table->item(r, 11)->setText("0.0");
             continue;
         }
+
         if (r < rowCount - 1) {
             double cx = m_table->item(r, 2)->text().toDouble();
             double cy = m_table->item(r, 3)->text().toDouble();
@@ -1069,7 +1079,6 @@ void TaskProgramDialog::generateProgram()
 
             double distToNext = std::hypot(std::hypot(nx - cx, ny - cy), nz - cz);
 
-            // 如果当前点跟下个点重合，强制清零当前倒角
             if (distToNext < 0.001) {
                 m_table->item(r, 11)->setText("0.0");
                 QComboBox* nextCombo = qobject_cast<QComboBox*>(m_table->cellWidget(r+1, 0));
@@ -1078,17 +1087,14 @@ void TaskProgramDialog::generateProgram()
                 continue;
             }
 
-            // 基础默认平滑度
             double targetOverlap = 2.0;
-
-            // 检查当前点是否属于连贯切割的中间点（非抬落刀、非避障转向）
             bool isContinuous = !m_table->item(r, 12)->text().contains("跨域") &&
                                 !m_table->item(r, 12)->text().contains("避障") &&
                                 !m_table->item(r, 12)->text().contains("起刀");
 
             double maxSafeOverlap = distToNext * 0.45;
 
-            // 2. 核心算法：提取前后线段，通过向量点积计算夹角，动态分配倒角半径
+            // 智能夹角判定
             if (r > 0 && isContinuous) {
                 double px = m_table->item(r-1, 2)->text().toDouble();
                 double py = m_table->item(r-1, 3)->text().toDouble();
@@ -1097,26 +1103,19 @@ void TaskProgramDialog::generateProgram()
                 double distToPrev = std::hypot(std::hypot(cx - px, cy - py), cz - pz);
 
                 if (distToPrev > 0.001) {
-                    // 更新安全上限：不能超过相邻两条线段中最短那条的 45%
                     maxSafeOverlap = std::min(distToNext, distToPrev) * 0.45;
 
                     double vx1 = cx - px, vy1 = cy - py, vz1 = cz - pz;
                     double vx2 = nx - cx, vy2 = ny - cy, vz2 = nz - cz;
-                    // 点积算出夹角的 Cos 值
                     double dot = vx1*vx2 + vy1*vy2 + vz1*vz2;
                     double cosTheta = dot / (distToPrev * distToNext);
 
-                    if (cosTheta > 0.8) {
-                        targetOverlap = 5.0; // 夹角极小(接近直线)，放大平滑度让速度不掉
-                    } else if (cosTheta < 0) {
-                        targetOverlap = 0.5; // 急弯或锐角拐角，极小化平滑度以保住尖角
-                    }
+                    if (cosTheta > 0.8) targetOverlap = 5.0;      // 直线或缓弧，放大平滑
+                    else if (cosTheta < 0.2) targetOverlap = 0.5; // 锐角或直角急转，压低平滑保外形
                 }
             }
 
             double finalOverlap = std::min(targetOverlap, maxSafeOverlap);
-
-            // 3. 赋值回表格 (保留用户手工清零 0.0 的权利，例如切割终点)
             double currentOverlap = m_table->item(r, 11)->text().toDouble();
             if (currentOverlap > 0.0) {
                 m_table->item(r, 11)->setText(QString::number(finalOverlap, 'f', 2));
