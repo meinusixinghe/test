@@ -92,11 +92,52 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
 
     tableLayout->addLayout(advConfigLayout);
 
+    QHBoxLayout* advConfigLayout2 = new QHBoxLayout();
+    m_useDynamicHeightCheck = new QCheckBox("开启智能动态抬刀", this);
+    m_useDynamicHeightCheck->setChecked(true); // 默认开启
+    m_useDynamicHeightCheck->setStyleSheet("font-weight: bold; color: #2E7D32;"); // 绿色显眼
+    m_useDynamicHeightCheck->installEventFilter(this);
+
+    QLabel* baseHeightLbl = new QLabel("基础安全高度(mm):", this);
+    m_baseHeightSpin = new QDoubleSpinBox(this);
+    m_baseHeightSpin->setRange(10.0, 500.0);
+    m_baseHeightSpin->setValue(50.0); // 默认离板材 50mm
+    m_baseHeightSpin->installEventFilter(this);
+
+    QLabel* maxHeightLbl = new QLabel("180度附加增量(mm):", this);
+    m_maxHeightAddSpin = new QDoubleSpinBox(this);
+    m_maxHeightAddSpin->setRange(0.0, 500.0);
+    m_maxHeightAddSpin->setValue(100.0); // 默认 180 度大回旋时多抬高 100mm
+    m_maxHeightAddSpin->installEventFilter(this);
+
+    advConfigLayout2->addWidget(m_useDynamicHeightCheck);
+    advConfigLayout2->addSpacing(10);
+    advConfigLayout2->addWidget(baseHeightLbl);
+    advConfigLayout2->addWidget(m_baseHeightSpin);
+    advConfigLayout2->addSpacing(10);
+    advConfigLayout2->addWidget(maxHeightLbl);
+    advConfigLayout2->addWidget(m_maxHeightAddSpin);
+    advConfigLayout2->addStretch();
+
+    tableLayout->addLayout(advConfigLayout2);
+
     connect(m_useRetractTurnCheck, &QCheckBox::stateChanged, this, [this](int state) {
         m_retractAngleThresholdSpin->setEnabled(state == Qt::Checked);
         if (!m_paths.isEmpty()) generateProgram();
     });
     connect(m_retractAngleThresholdSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double) {
+        if (!m_paths.isEmpty()) generateProgram();
+    });
+
+    connect(m_useDynamicHeightCheck, &QCheckBox::stateChanged, this, [this](int state) {
+        m_baseHeightSpin->setEnabled(state == Qt::Checked);
+        m_maxHeightAddSpin->setEnabled(state == Qt::Checked);
+        if (!m_paths.isEmpty()) generateProgram();
+    });
+    connect(m_baseHeightSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double) {
+        if (!m_paths.isEmpty()) generateProgram();
+    });
+    connect(m_maxHeightAddSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double) {
         if (!m_paths.isEmpty()) generateProgram();
     });
 
@@ -734,13 +775,29 @@ void TaskProgramDialog::generateProgram()
     }
 
     double plateZ = 0.0;
-    double SAFE_HEIGHT = 50.0;
+    double baseHeight = 50.0;
+
+    // 获取基础安全高度设置
+    if (m_baseHeightSpin) {
+        baseHeight = m_baseHeightSpin->value();
+    }
 
     if (m_platePosCombo && m_thicknessSpin) {
         if (m_platePosCombo->currentIndex() == 0) plateZ = m_thicknessSpin->value();
         else plateZ = -m_thicknessSpin->value();
-        SAFE_HEIGHT = (plateZ > 0) ? (plateZ + 50.0) : 50.0;
     }
+
+    // Z > 0 意味着坐标系在板材底部，所以安全高度要在板材上面叠加
+    double SAFE_HEIGHT = (plateZ > 0) ? (plateZ + baseHeight) : baseHeight;
+
+    // 基于翻转角度(angDiff)的线性高度插值函数
+    auto calculateDynamicHeight = [&](double angDiff) {
+        if (!m_useDynamicHeightCheck || !m_useDynamicHeightCheck->isChecked()) {
+            return SAFE_HEIGHT;
+        }
+        double ratio = std::abs(angDiff) / 180.0;
+        return SAFE_HEIGHT + (m_maxHeightAddSpin->value() * ratio);
+    };
 
     double globalLastA = currentPose.a;
     double accumulatedA = currentPose.a;
@@ -907,31 +964,32 @@ void TaskProgramDialog::generateProgram()
                                           && (std::abs(angDiff) >= m_retractAngleThresholdSpin->value());
 
                         if (useRetract) {
-                            double pRetract[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), SAFE_HEIGHT, globalLastA, B, 0.0 };
-                            addRow(2, 2, pRetract, 100, 50, 50, 0.0, shapeName + remark + " ⬆️[避障抬刀]");
+                            // 应用动态高度算法
+                            double currentSafeHeight = calculateDynamicHeight(angDiff);
+
+                            double pRetract[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), currentSafeHeight, globalLastA, B, 0.0 };
+                            // 将计算出的高度显示在备注里
+                            addRow(2, 2, pRetract, 100, 50, 50, 0.0, shapeName + remark + QString(" ⬆️[避障抬刀: Z=%1]").arg(currentSafeHeight, 0, 'f', 1));
 
                             double testAccumulatedA = accumulatedA + angDiff;
                             double compensatedFinalA = finalA;
                             QString turnRemark = shapeName + remark + " 🔄[空中重姿态]";
 
-                            // 当累加姿态超过 ±150度(逼近物理极限) 时，触发反向 360度 退绕补偿
                             if (testAccumulatedA > 150.0) {
-                                compensatedFinalA = finalA - 360.0; // 强行补偿
-                                accumulatedA = testAccumulatedA - 360.0; // 同步重置累加器
+                                compensatedFinalA = finalA - 360.0;
+                                accumulatedA = testAccumulatedA - 360.0;
                                 turnRemark += " (退绕 -360°)";
                             } else if (testAccumulatedA < -150.0) {
-                                compensatedFinalA = finalA + 360.0; // 强行补偿
-                                accumulatedA = testAccumulatedA + 360.0; // 同步重置累加器
+                                compensatedFinalA = finalA + 360.0;
+                                accumulatedA = testAccumulatedA + 360.0;
                                 turnRemark += " (退绕 +360°)";
                             } else {
                                 accumulatedA = testAccumulatedA;
                             }
 
-                            // 下发带有补偿退绕欧拉角的 Joint 运动
-                            double pTurn[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), SAFE_HEIGHT, compensatedFinalA, B, 0.0 };
+                            double pTurn[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), currentSafeHeight, compensatedFinalA, B, 0.0 };
                             addRow(1, 2, pTurn, 50, 50, 50, 0.0, turnRemark);
 
-                            // 落刀时恢复为规范的 [-180, 180] 区间数值
                             double pPlunge[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), plateZ, finalA, B, 0.0 };
                             addRow(2, 2, pPlunge, 50, 50, 50, 0.0, shapeName + remark + " ⬇️[重新落刀]");
                         } else {
@@ -953,8 +1011,17 @@ void TaskProgramDialog::generateProgram()
 
             if (i == 0) {
                 if (!isConnectedWithPrev) {
-                    double pSafe[6] = { ucsPt.x(), ucsPt.y(), SAFE_HEIGHT, finalA, 0.0, 0.0 };
-                    addRow(1, 2, pSafe, 100, 50, 50, 0.0, shapeName + remark + " [跨域: 高空就位]");
+                    // 计算跨域孔与孔之间的姿态跳变
+                    double crossAngDiff = finalA - globalLastA;
+                    while (crossAngDiff > 180.0) crossAngDiff -= 360.0;
+                    while (crossAngDiff <= -180.0) crossAngDiff += 360.0;
+                    if (std::abs(crossAngDiff - 180.0) < 0.05) crossAngDiff = 179.9;
+                    else if (std::abs(crossAngDiff + 180.0) < 0.05) crossAngDiff = -179.9;
+
+                    // 应用动态高度算法
+                    double currentSafeHeight = calculateDynamicHeight(crossAngDiff);
+                    double pSafe[6] = { ucsPt.x(), ucsPt.y(), currentSafeHeight, finalA, 0.0, 0.0 };
+                    addRow(1, 2, pSafe, 100, 50, 50, 0.0, shapeName + remark + QString(" [跨域: 高空就位 Z=%1]").arg(currentSafeHeight, 0, 'f', 1));
                 }
                 double pStart[6] = { ucsPt.x(), ucsPt.y(), plateZ, finalA, B, 0.0 };
                 addRow(moveType, 2, pStart, 30, 50, 50, 0.0, shapeName + remark + " [起刀]");
