@@ -2857,16 +2857,39 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
                 }
             }
         } else {
+            // 基于【物理距离 + 姿态跳变】的综合代价函数，寻找最柔顺的落刀点
             if (!reordered.isEmpty() && pl.isClosed) {
                 QPointF lastEnd = reordered.last().points.last();
-                double minDist = std::numeric_limits<double>::max();
+                double lastAngle = 0.0;
+
+                // 提取上一刀收刀时的切线姿态
+                if (reordered.last().points.size() >= 2) {
+                    QPointF prevPt = reordered.last().points[reordered.last().points.size() - 2];
+                    lastAngle = std::atan2(lastEnd.y() - prevPt.y(), lastEnd.x() - prevPt.x());
+                }
+
+                double minCost = std::numeric_limits<double>::max();
 
                 if (loopContours.size() > 1) {
                     for (int k = 0; k < loopContours.size(); ++k) {
                         QPointF startPt = loopContours[k].points.first();
                         double dist = std::hypot(startPt.x() - lastEnd.x(), startPt.y() - lastEnd.y());
-                        if (dist < minDist) {
-                            minDist = dist;
+
+                        double cost = dist; // 基础代价为物理距离
+                        if (loopContours[k].points.size() >= 2) {
+                            QPointF nextPt = loopContours[k].points[1];
+                            double candAngle = std::atan2(nextPt.y() - startPt.y(), nextPt.x() - startPt.x());
+
+                            double angDiff = (candAngle - lastAngle) * 180.0 / M_PI;
+                            while (angDiff > 180.0) angDiff -= 360.0;
+                            while (angDiff <= -180.0) angDiff += 360.0;
+
+                            // 姿态惩罚权重：每跳变 1 度，等价于额外增加了 1.5mm 的距离
+                            cost += std::abs(angDiff) * 1.5;
+                        }
+
+                        if (cost < minCost) {
+                            minCost = cost;
                             targetStartElementIdx = k;
                         }
                     }
@@ -2877,8 +2900,19 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
 
                         QPointF pt = loopContours[0].points[p];
                         double dist = std::hypot(pt.x() - lastEnd.x(), pt.y() - lastEnd.y());
-                        if (dist < minDist) {
-                            minDist = dist;
+
+                        double cost = dist;
+                        QPointF nextPt = loopContours[0].points[p+1];
+                        double candAngle = std::atan2(nextPt.y() - pt.y(), nextPt.x() - pt.x());
+
+                        double angDiff = (candAngle - lastAngle) * 180.0 / M_PI;
+                        while (angDiff > 180.0) angDiff -= 360.0;
+                        while (angDiff <= -180.0) angDiff += 360.0;
+
+                        cost += std::abs(angDiff) * 1.5;
+
+                        if (cost < minCost) {
+                            minCost = cost;
                             targetStartPtIdx = p;
                         }
                     }

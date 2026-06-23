@@ -849,6 +849,8 @@ void TaskProgramDialog::generateProgram()
             double deltaA = currentTangentAngle - globalLastTangentAngle;
             while (deltaA > 180.0) deltaA -= 360.0;
             while (deltaA <= -180.0) deltaA += 360.0;
+            if (std::abs(deltaA - 180.0) < 0.05) deltaA = 179.9;
+            else if (std::abs(deltaA + 180.0) < 0.05) deltaA = -179.9;
             globalLastTangentAngle = currentTangentAngle;
 
             double finalA = globalLastA + deltaA;
@@ -864,6 +866,8 @@ void TaskProgramDialog::generateProgram()
                     double angDiff = finalA - globalLastA;
                     while (angDiff > 180.0) angDiff -= 360.0;
                     while (angDiff <= -180.0) angDiff += 360.0;
+                    if (std::abs(angDiff - 180.0) < 0.05) angDiff = 179.9;
+                    else if (std::abs(angDiff + 180.0) < 0.05) angDiff = -179.9;
                     if (std::abs(angDiff) > 0.5) {
                         // 读取 UI 上的设置，判断是否需要启动安全退刀
                         bool useRetract = m_useRetractTurnCheck && m_useRetractTurnCheck->isChecked()
@@ -913,7 +917,7 @@ void TaskProgramDialog::generateProgram()
                 } else {
                     addRow(moveType, 2, pEnd, 50, 50, 50, 0.0, shapeName + remark + " (切割结束)");
                     double pRetract[6] = { ucsPt.x(), ucsPt.y(), SAFE_HEIGHT, finalA, 0.0, 0.0 };
-                    addRow(2, 2, pRetract, 100, 50, 50, 0.0, shapeName + " [跨域 抬刀]");
+                    addRow(1, 2, pRetract, 100, 50, 50, 0.0, shapeName + " [跨域 抬刀]");
                 }
             }
             else {
