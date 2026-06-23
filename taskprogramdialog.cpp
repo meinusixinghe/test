@@ -282,6 +282,7 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
     m_statusTimer = new QTimer(this);
     connect(m_statusTimer, &QTimer::timeout, this, &TaskProgramDialog::updateRobotState);
     m_statusTimer->start(500);
+    this->installEventFilter(this);
 }
 
 void TaskProgramDialog::setBlockMoveRunning(bool running) {
@@ -965,7 +966,7 @@ void TaskProgramDialog::generateProgram()
                 } else {
                     addRow(moveType, 2, pEnd, 50, 50, 50, 0.0, shapeName + remark + " (切割结束)");
                     double pRetract[6] = { ucsPt.x(), ucsPt.y(), SAFE_HEIGHT, finalA, 0.0, 0.0 };
-                    addRow(1, 2, pRetract, 100, 50, 50, 0.0, shapeName + " [跨域 抬刀]");
+                    addRow(2, 2, pRetract, 100, 50, 50, 0.0, shapeName + " [跨域 抬刀]");
                 }
             }
             else {
@@ -984,30 +985,74 @@ void TaskProgramDialog::generateProgram()
     for (int r = 0; r < rowCount; ++r) {
         QComboBox* moveCombo = qobject_cast<QComboBox*>(m_table->cellWidget(r, 0));
         int moveType = moveCombo ? moveCombo->currentText().left(1).toInt() : 2;
+
+        // 1. 圆弧点绝对不允许有平滑度，直接锁死
         if (moveType == 3 || moveType == 4) {
             m_table->item(r, 11)->setText("0.0");
+            continue;
         }
+        if (r < rowCount - 1) {
+            double cx = m_table->item(r, 2)->text().toDouble();
+            double cy = m_table->item(r, 3)->text().toDouble();
+            double cz = m_table->item(r, 4)->text().toDouble();
 
-        if (r < rowCount - 1 && moveType != 3 && moveType != 4) {
-            double x1 = m_table->item(r, 2)->text().toDouble();
-            double y1 = m_table->item(r, 3)->text().toDouble();
-            double z1 = m_table->item(r, 4)->text().toDouble();
-            double x2 = m_table->item(r+1, 2)->text().toDouble();
-            double y2 = m_table->item(r+1, 3)->text().toDouble();
-            double z2 = m_table->item(r+1, 4)->text().toDouble();
+            double nx = m_table->item(r+1, 2)->text().toDouble();
+            double ny = m_table->item(r+1, 3)->text().toDouble();
+            double nz = m_table->item(r+1, 4)->text().toDouble();
 
-            double dist = std::hypot(x1 - x2, y1 - y2);
-            dist = std::hypot(dist, z1 - z2);
-            double currentOverlap = m_table->item(r, 11)->text().toDouble();
-            double maxSafeOverlap = dist * 0.45;
+            double distToNext = std::hypot(std::hypot(nx - cx, ny - cy), nz - cz);
 
-            if (dist < 0.001) {
+            // 如果当前点跟下个点重合，强制清零当前倒角
+            if (distToNext < 0.001) {
                 m_table->item(r, 11)->setText("0.0");
                 QComboBox* nextCombo = qobject_cast<QComboBox*>(m_table->cellWidget(r+1, 0));
                 int nextMove = nextCombo ? nextCombo->currentText().left(1).toInt() : 2;
                 if (nextMove != 4) m_table->item(r+1, 11)->setText("0.0");
-            } else if (currentOverlap > maxSafeOverlap) {
-                m_table->item(r, 11)->setText(QString::number(maxSafeOverlap, 'f', 2));
+                continue;
+            }
+
+            // 基础默认平滑度
+            double targetOverlap = 2.0;
+
+            // 检查当前点是否属于连贯切割的中间点（非抬落刀、非避障转向）
+            bool isContinuous = !m_table->item(r, 12)->text().contains("跨域") &&
+                                !m_table->item(r, 12)->text().contains("避障") &&
+                                !m_table->item(r, 12)->text().contains("起刀");
+
+            double maxSafeOverlap = distToNext * 0.45;
+
+            // 2. 核心算法：提取前后线段，通过向量点积计算夹角，动态分配倒角半径
+            if (r > 0 && isContinuous) {
+                double px = m_table->item(r-1, 2)->text().toDouble();
+                double py = m_table->item(r-1, 3)->text().toDouble();
+                double pz = m_table->item(r-1, 4)->text().toDouble();
+
+                double distToPrev = std::hypot(std::hypot(cx - px, cy - py), cz - pz);
+
+                if (distToPrev > 0.001) {
+                    // 更新安全上限：不能超过相邻两条线段中最短那条的 45%
+                    maxSafeOverlap = std::min(distToNext, distToPrev) * 0.45;
+
+                    double vx1 = cx - px, vy1 = cy - py, vz1 = cz - pz;
+                    double vx2 = nx - cx, vy2 = ny - cy, vz2 = nz - cz;
+                    // 点积算出夹角的 Cos 值
+                    double dot = vx1*vx2 + vy1*vy2 + vz1*vz2;
+                    double cosTheta = dot / (distToPrev * distToNext);
+
+                    if (cosTheta > 0.8) {
+                        targetOverlap = 5.0; // 夹角极小(接近直线)，放大平滑度让速度不掉
+                    } else if (cosTheta < 0) {
+                        targetOverlap = 0.5; // 急弯或锐角拐角，极小化平滑度以保住尖角
+                    }
+                }
+            }
+
+            double finalOverlap = std::min(targetOverlap, maxSafeOverlap);
+
+            // 3. 赋值回表格 (保留用户手工清零 0.0 的权利，例如切割终点)
+            double currentOverlap = m_table->item(r, 11)->text().toDouble();
+            if (currentOverlap > 0.0) {
+                m_table->item(r, 11)->setText(QString::number(finalOverlap, 'f', 2));
             }
         }
     }
@@ -1054,6 +1099,12 @@ bool TaskProgramDialog::eventFilter(QObject *obj, QEvent *event)
     if (event->type() == QEvent::Wheel) {
         if (qobject_cast<QComboBox*>(obj)) {
             event->ignore();
+            return true;
+        }
+    }
+    if (event->type() == QEvent::KeyPress) {
+        QKeyEvent *keyEvent = static_cast<QKeyEvent*>(event);
+        if (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) {
             return true;
         }
     }
