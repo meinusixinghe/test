@@ -388,10 +388,15 @@ void TaskProgramDialog::onStartClicked() {
     if (useUcs) RobotAPI::GetUserCoordinatePos2(currentPos, m_devId);
     else RobotAPI::GetBaseCoordinatePos2(currentPos, m_devId);
 
+    RobotAPI::RobotPos activeCfgPos = currentPos;
+
     // ====================================================================
     // 辅助工具：提取表格指定行的数据，并完成安全的逆解/正解
     // ====================================================================
     auto solveRow = [&](int row, RobotAPI::MultiMoveInfo2& targetMp, int arrayIndex) -> bool {
+        QComboBox* moveCombo = qobject_cast<QComboBox*>(m_table->cellWidget(row, 0));
+        int moveType = moveCombo ? moveCombo->currentText().left(1).toInt() : 2;
+
         QComboBox* posCombo = qobject_cast<QComboBox*>(m_table->cellWidget(row, 1));
         int posType = posCombo ? posCombo->currentText().left(1).toInt() : 2;
 
@@ -401,9 +406,21 @@ void TaskProgramDialog::onStartClicked() {
         if (posType == 2 && useUcs) {
             RobotAPI::RobotPos localP = currentPos;
             localP.x = p[0]; localP.y = p[1]; localP.z = p[2];
-
-            // 严格使用表格中读取到的 A, B, C 数据
             localP.a = p[3]; localP.b = p[4]; localP.c = p[5];
+
+            // 如果是 Joint 运动（如空中退绕），解除 CFG 象限锁死，允许底层重新解算手腕位置
+            if (moveType == 1) {
+                localP.cfgx = 0;
+                localP.cfg1 = 0;
+                localP.cfg4 = 0;
+                localP.cfg6 = 0;
+            } else {
+                // 如果是 Lin 运动，严格跟随最新的 activeCfgPos 象限，防止直线过程中甩腕
+                localP.cfgx = activeCfgPos.cfgx;
+                localP.cfg1 = activeCfgPos.cfg1;
+                localP.cfg4 = activeCfgPos.cfg4;
+                localP.cfg6 = activeCfgPos.cfg6;
+            }
 
             RobotAPI::RobotJoint tJoints; memset(&tJoints, 0, sizeof(tJoints));
 
@@ -414,6 +431,13 @@ void TaskProgramDialog::onStartClicked() {
                     targetMp.cp[arrayIndex].a = baseP.a; targetMp.cp[arrayIndex].b = baseP.b; targetMp.cp[arrayIndex].c = baseP.c;
                     targetMp.cp[arrayIndex].cfgx = baseP.cfgx; targetMp.cp[arrayIndex].cfg1 = baseP.cfg1;
                     targetMp.cp[arrayIndex].cfg4 = baseP.cfg4; targetMp.cp[arrayIndex].cfg6 = baseP.cfg6;
+
+                    // 将正解出来的最新物理象限，更新给动态 CFG 追踪器！
+                    activeCfgPos.cfgx = baseP.cfgx;
+                    activeCfgPos.cfg1 = baseP.cfg1;
+                    activeCfgPos.cfg4 = baseP.cfg4;
+                    activeCfgPos.cfg6 = baseP.cfg6;
+
                     return true;
                 }
             }
@@ -421,10 +445,15 @@ void TaskProgramDialog::onStartClicked() {
         } else {
             // 不转换，直接赋值
             targetMp.cp[arrayIndex].x = p[0]; targetMp.cp[arrayIndex].y = p[1]; targetMp.cp[arrayIndex].z = p[2];
-            // 严格使用表格中读取到的 A, B, C 数据
             targetMp.cp[arrayIndex].a = p[3]; targetMp.cp[arrayIndex].b = p[4]; targetMp.cp[arrayIndex].c = p[5];
-            targetMp.cp[arrayIndex].cfgx = currentPos.cfgx; targetMp.cp[arrayIndex].cfg1 = currentPos.cfg1;
-            targetMp.cp[arrayIndex].cfg4 = currentPos.cfg4; targetMp.cp[arrayIndex].cfg6 = currentPos.cfg6;
+
+            if (moveType == 1) {
+                targetMp.cp[arrayIndex].cfgx = 0; targetMp.cp[arrayIndex].cfg1 = 0;
+                targetMp.cp[arrayIndex].cfg4 = 0; targetMp.cp[arrayIndex].cfg6 = 0;
+            } else {
+                targetMp.cp[arrayIndex].cfgx = activeCfgPos.cfgx; targetMp.cp[arrayIndex].cfg1 = activeCfgPos.cfg1;
+                targetMp.cp[arrayIndex].cfg4 = activeCfgPos.cfg4; targetMp.cp[arrayIndex].cfg6 = activeCfgPos.cfg6;
+            }
             return true;
         }
     };
@@ -713,6 +742,7 @@ void TaskProgramDialog::generateProgram()
     }
 
     double globalLastA = currentPose.a;
+    double accumulatedA = currentPose.a;
     double globalLastTangentAngle = 0.0;
     bool isFirstTangent = true;
 
@@ -853,6 +883,8 @@ void TaskProgramDialog::generateProgram()
             else if (std::abs(deltaA + 180.0) < 0.05) deltaA = -179.9;
             globalLastTangentAngle = currentTangentAngle;
 
+            accumulatedA += deltaA;
+
             double finalA = globalLastA + deltaA;
             while (finalA > 180.0) finalA -= 360.0;
             while (finalA <= -180.0) finalA += 360.0;
@@ -874,19 +906,35 @@ void TaskProgramDialog::generateProgram()
                                           && (std::abs(angDiff) >= m_retractAngleThresholdSpin->value());
 
                         if (useRetract) {
-                            // 1. 避障抬刀 (Lin)
                             double pRetract[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), SAFE_HEIGHT, globalLastA, B, 0.0 };
                             addRow(2, 2, pRetract, 100, 50, 50, 0.0, shapeName + remark + " ⬆️[避障抬刀]");
 
-                            // 2. 空中重姿态 (Joint, 防止奇异点报错)
-                            double pTurn[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), SAFE_HEIGHT, finalA, B, 0.0 };
-                            addRow(1, 2, pTurn, 50, 50, 50, 0.0, shapeName + remark + " 🔄[空中重姿态]");
+                            double testAccumulatedA = accumulatedA + angDiff;
+                            double compensatedFinalA = finalA;
+                            QString turnRemark = shapeName + remark + " 🔄[空中重姿态]";
 
-                            // 3. 重新落刀 (Lin)
+                            // 当累加姿态超过 ±150度(逼近物理极限) 时，触发反向 360度 退绕补偿
+                            if (testAccumulatedA > 150.0) {
+                                compensatedFinalA = finalA - 360.0; // 强行补偿
+                                accumulatedA = testAccumulatedA - 360.0; // 同步重置累加器
+                                turnRemark += " (退绕 -360°)";
+                            } else if (testAccumulatedA < -150.0) {
+                                compensatedFinalA = finalA + 360.0; // 强行补偿
+                                accumulatedA = testAccumulatedA + 360.0; // 同步重置累加器
+                                turnRemark += " (退绕 +360°)";
+                            } else {
+                                accumulatedA = testAccumulatedA;
+                            }
+
+                            // 下发带有补偿退绕欧拉角的 Joint 运动
+                            double pTurn[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), SAFE_HEIGHT, compensatedFinalA, B, 0.0 };
+                            addRow(1, 2, pTurn, 50, 50, 50, 0.0, turnRemark);
+
+                            // 落刀时恢复为规范的 [-180, 180] 区间数值
                             double pPlunge[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), plateZ, finalA, B, 0.0 };
                             addRow(2, 2, pPlunge, 50, 50, 50, 0.0, shapeName + remark + " ⬇️[重新落刀]");
                         } else {
-                            // 角度比较小，或者用户关闭了安全退刀，直接原地硬转 (Lin)
+                            accumulatedA += angDiff;
                             double pTurn[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), plateZ, finalA, B, 0.0 };
                             addRow(2, 2, pTurn, 50, 50, 50, 0.0, shapeName + remark + " 🔄[直行前转向]");
                         }
