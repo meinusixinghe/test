@@ -58,9 +58,6 @@ private:
 
     QCheckBox* m_useRetractTurnCheck = nullptr;
     QDoubleSpinBox* m_retractAngleThresholdSpin = nullptr;
-    QCheckBox* m_useDynamicHeightCheck = nullptr;
-    QDoubleSpinBox* m_baseHeightSpin = nullptr;
-    QDoubleSpinBox* m_maxHeightAddSpin = nullptr;
 
     QPushButton* m_startBtn;
     QPushButton* m_pauseBtn;

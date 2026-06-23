@@ -2862,6 +2862,7 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
                 QPointF lastEnd = reordered.last().points.last();
                 double lastAngle = 0.0;
 
+                // 提取上一刀收刀时的切线姿态
                 if (reordered.last().points.size() >= 2) {
                     QPointF prevPt = reordered.last().points[reordered.last().points.size() - 2];
                     lastAngle = std::atan2(lastEnd.y() - prevPt.y(), lastEnd.x() - prevPt.x());
@@ -2874,7 +2875,7 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
                         QPointF startPt = loopContours[k].points.first();
                         double dist = std::hypot(startPt.x() - lastEnd.x(), startPt.y() - lastEnd.y());
 
-                        double cost = dist;
+                        double cost = dist; // 基础代价为物理距离
                         if (loopContours[k].points.size() >= 2) {
                             QPointF nextPt = loopContours[k].points[1];
                             double candAngle = std::atan2(nextPt.y() - startPt.y(), nextPt.x() - startPt.x());
@@ -2883,14 +2884,19 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
                             while (angDiff > 180.0) angDiff -= 360.0;
                             while (angDiff <= -180.0) angDiff += 360.0;
 
-                            cost += std::abs(angDiff) * 1.5; // 每跳变1度等价于多走1.5mm
+                            // 姿态惩罚权重：每跳变 1 度，等价于额外增加了 1.5mm 的距离
+                            cost += std::abs(angDiff) * 1.5;
                         }
-                        if (cost < minCost) { minCost = cost; targetStartElementIdx = k; }
+
+                        if (cost < minCost) {
+                            minCost = cost;
+                            targetStartElementIdx = k;
+                        }
                     }
                 } else {
                     for (int p = 0; p < loopContours[0].points.size() - 1; ++p) {
-                        bool isFitted = loopContours[0].type.contains("拟合") || loopContours[0].type.contains("样条") || loopContours[0].type.contains("Spline", Qt::CaseInsensitive);
-                        if (isFitted && (p % 2 != 0)) continue;
+                        bool isFittedData = loopContours[0].type.contains("拟合") || loopContours[0].type.contains("样条") || loopContours[0].type.contains("Spline", Qt::CaseInsensitive);
+                        if (isFittedData && (p % 2 != 0)) continue;
 
                         QPointF pt = loopContours[0].points[p];
                         double dist = std::hypot(pt.x() - lastEnd.x(), pt.y() - lastEnd.y());
@@ -2904,7 +2910,11 @@ void MainWindow::executeReorder(int startPathIdx, int startSegIdx, bool isCW) {
                         while (angDiff <= -180.0) angDiff += 360.0;
 
                         cost += std::abs(angDiff) * 1.5;
-                        if (cost < minCost) { minCost = cost; targetStartPtIdx = p; }
+
+                        if (cost < minCost) {
+                            minCost = cost;
+                            targetStartPtIdx = p;
+                        }
                     }
                 }
             }
