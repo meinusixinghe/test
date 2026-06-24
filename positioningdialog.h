@@ -10,6 +10,9 @@
 #include <QStackedWidget>
 #include <QDoubleSpinBox>
 #include <QLabel>
+#include <QComboBox>
+#include <QPushButton>
+#include <QMap>
 
 // 定义定位块类型
 enum class PosBlockType { Line, Point, Arc, Circle };
@@ -77,6 +80,9 @@ public:
     QList<PositioningBlock> getBlocks() const { return m_previewArea->getBlocks(); }
     void setInitialBlocks(const QList<PositioningBlock>& blocks);
 
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private slots:
     void onAddClicked();
 
@@ -84,6 +90,17 @@ private:
     PreviewArea *m_previewArea;
     QStackedWidget *m_stackedWidget;
     PosBlockType m_currentType = PosBlockType::Line;
+
+    // 定位块模板管理
+    QMap<QString, QList<PositioningBlock>> m_templates;
+    QComboBox *m_templateCombo;
+    QPushButton *m_btnSaveTemplate;
+    QPushButton *m_btnDeleteTemplate;
+    bool m_isUpdatingCombo = false;
+    void loadTemplatesFromSettings();
+    void saveTemplatesToSettings();
+    void reloadTemplateCombo();
+    void renameTemplate(const QString& oldName, const QString& newName);
 
     // 参数输入框
     QDoubleSpinBox *m_lineLen, *m_lineWidth, *m_lineX, *m_lineY, *m_lineAngle;

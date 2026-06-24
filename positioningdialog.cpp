@@ -15,6 +15,13 @@
 #include <QMessageBox>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
+#include <QSettings>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QJsonDocument>
+#include <QCoreApplication>
+#include <QEvent>
+#include <QGroupBox>
 
 // ========================================================
 // 1. 数据模型与轮廓生成 (保持不变)
@@ -135,10 +142,17 @@ void PreviewArea::paintEvent(QPaintEvent *event) {
         if (m_blocks[i].type == PosBlockType::Line) {
             fontSize = std::min(m_blocks[i].width, m_blocks[i].length) * 0.3;
             if (m_blocks[i].length > m_blocks[i].width) rotateVertical = true;
-        } else if (m_blocks[i].type == PosBlockType::Circle || m_blocks[i].type == PosBlockType::Arc) {
+        } else if (m_blocks[i].type == PosBlockType::Circle) {
+            fontSize = m_blocks[i].radius * 0.25;
+        } else if (m_blocks[i].type == PosBlockType::Arc) {
+            fontSize = m_blocks[i].radius * 0.25;
+        } else if (m_blocks[i].type == PosBlockType::Point) {
             fontSize = m_blocks[i].radius * 0.25;
         }
-        if (fontSize < 1.0) fontSize = 1.0;
+        double minVisualSize = 10.0 / m_scaleFactor;
+        double maxVisualSize = 25.0 / m_scaleFactor;
+        if (fontSize < minVisualSize) fontSize = minVisualSize;
+        if (fontSize > maxVisualSize) fontSize = maxVisualSize;
         QFont f = painter.font();
         f.setPointSizeF(fontSize);
         painter.setFont(f);
@@ -335,14 +349,17 @@ void PreviewArea::setInitialBlocks(const QList<PositioningBlock>& blocks) {
 QDoubleSpinBox* PositioningDialog::createSpinBox(double min, double max, double val) {
     QDoubleSpinBox* sb = new QDoubleSpinBox(this);
     sb->setRange(min, max); sb->setValue(val); sb->setDecimals(2);
-    sb->setMaximumWidth(70);
+    sb->setMinimumWidth(75);
+    sb->setMaximumWidth(95);
     sb->setStyleSheet("font-size: 10px; min-height: 18px; padding: 1px;");
     return sb;
 }
 
 PositioningDialog::PositioningDialog(QWidget *parent) : QDialog(parent) {
     setWindowTitle("建立定位");
-    setMinimumSize(600, 380);
+    setMinimumSize(700, 450);
+
+    loadTemplatesFromSettings();
 
     QHBoxLayout *mainLayout = new QHBoxLayout(this);
     mainLayout->setSpacing(0);
@@ -364,6 +381,75 @@ PositioningDialog::PositioningDialog(QWidget *parent) : QDialog(parent) {
     QVBoxLayout *rightLayout = new QVBoxLayout(rightFrame);
     rightLayout->setContentsMargins(10, 10, 10, 10);
     rightLayout->setSpacing(6);
+
+    QGroupBox *templateGroup = new QGroupBox("定位模板管理");
+    templateGroup->setStyleSheet("QGroupBox { font-size: 11px; font-weight: bold; color: #333; border: 1px solid #ccc; border-radius: 4px; margin-top: 6px; padding-top: 10px; }"
+                                 "QGroupBox::title { subcontrol-origin: margin; left: 7px; top: -6px; }");
+    QVBoxLayout *templateLayout = new QVBoxLayout(templateGroup);
+    templateLayout->setContentsMargins(6, 4, 6, 6);
+    templateLayout->setSpacing(4);
+
+    QHBoxLayout *comboLayout = new QHBoxLayout();
+    m_templateCombo = new QComboBox();
+    m_templateCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_templateCombo->setMinimumHeight(22);
+    m_templateCombo->setToolTip("双击修改模板名称");
+    m_templateCombo->installEventFilter(this); // 拦截双击事件
+
+    comboLayout->addWidget(new QLabel("选择模板:"));
+    comboLayout->addWidget(m_templateCombo);
+
+    QHBoxLayout *btnLayout = new QHBoxLayout();
+    m_btnSaveTemplate = new QPushButton("保存当前");
+    m_btnDeleteTemplate = new QPushButton("删除模板");
+    m_btnSaveTemplate->setCursor(Qt::PointingHandCursor);
+    m_btnDeleteTemplate->setCursor(Qt::PointingHandCursor);
+    m_btnSaveTemplate->setStyleSheet("background-color: #4CAF50; color: white; border-radius: 3px; padding: 4px 8px; font-size: 10px; font-weight: bold;");
+    m_btnDeleteTemplate->setStyleSheet("background-color: #F44336; color: white; border-radius: 3px; padding: 4px 8px; font-size: 10px; font-weight: bold;");
+
+    btnLayout->addWidget(m_btnSaveTemplate);
+    btnLayout->addWidget(m_btnDeleteTemplate);
+
+    templateLayout->addLayout(comboLayout);
+    templateLayout->addLayout(btnLayout);
+
+    rightLayout->addWidget(templateGroup); // 放置在右侧最上方
+
+    // 模板联动与按钮逻辑
+    reloadTemplateCombo();
+
+    connect(m_templateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (m_isUpdatingCombo || index < 0) return;
+        QString name = m_templateCombo->itemText(index);
+        if (m_templates.contains(name)) {
+            m_previewArea->setInitialBlocks(m_templates[name]);
+        }
+    });
+
+    connect(m_btnSaveTemplate, &QPushButton::clicked, this, [this]() {
+        QString currentName = m_templateCombo->currentText();
+        if (currentName.isEmpty()) currentName = "新模板1";
+        bool ok;
+        QString name = QInputDialog::getText(this, "保存定位模板", "请输入模板名称:", QLineEdit::Normal, currentName, &ok);
+        if (ok && !name.isEmpty()) {
+            m_templates[name] = m_previewArea->getBlocks();
+            saveTemplatesToSettings();
+            reloadTemplateCombo();
+            m_templateCombo->setCurrentText(name);
+        }
+    });
+
+    connect(m_btnDeleteTemplate, &QPushButton::clicked, this, [this]() {
+        QString currentName = m_templateCombo->currentText();
+        if (currentName.isEmpty()) return;
+        if (QMessageBox::question(this, "确认删除", QString("确定要删除定位模板 '%1' 吗？").arg(currentName)) == QMessageBox::Yes) {
+            m_templates.remove(currentName);
+            saveTemplatesToSettings();
+            reloadTemplateCombo();
+            if (m_templates.isEmpty()) m_previewArea->setInitialBlocks(QList<PositioningBlock>());
+            else m_previewArea->setInitialBlocks(m_templates.first());
+        }
+    });
 
     QLabel *typeTitle = new QLabel("选择添加定位块类型");
     typeTitle->setStyleSheet("font-weight: bold; font-size: 11px; color: #333;");
@@ -603,4 +689,85 @@ void PositioningDialog::onAddClicked() {
 
 void PositioningDialog::setInitialBlocks(const QList<PositioningBlock>& blocks) {
     m_previewArea->setInitialBlocks(blocks);
+}
+
+bool PositioningDialog::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == m_templateCombo && event->type() == QEvent::MouseButtonDblClick) {
+        if (m_templateCombo->count() > 0) {
+            QString currentName = m_templateCombo->currentText();
+            bool ok;
+            QString newName = QInputDialog::getText(this, "修改模板名称", "请输入新的模板名称:", QLineEdit::Normal, currentName, &ok);
+            if (ok && !newName.isEmpty() && newName != currentName) {
+                renameTemplate(currentName, newName);
+            }
+        }
+        return true;
+    }
+    return QDialog::eventFilter(watched, event);
+}
+
+void PositioningDialog::renameTemplate(const QString& oldName, const QString& newName) {
+    if (m_templates.contains(newName)) {
+        QMessageBox::warning(this, "重名", "该模板名称已存在！");
+        return;
+    }
+    QList<PositioningBlock> blocks = m_templates.take(oldName);
+    m_templates[newName] = blocks;
+    saveTemplatesToSettings();
+    reloadTemplateCombo();
+    m_templateCombo->setCurrentText(newName);
+}
+
+void PositioningDialog::reloadTemplateCombo() {
+    m_isUpdatingCombo = true;
+    QString current = m_templateCombo->currentText();
+    m_templateCombo->clear();
+    m_templateCombo->addItems(m_templates.keys());
+    if (!current.isEmpty() && m_templates.contains(current)) {
+        m_templateCombo->setCurrentText(current);
+    }
+    m_isUpdatingCombo = false;
+}
+
+void PositioningDialog::saveTemplatesToSettings() {
+    QSettings settings(QCoreApplication::applicationDirPath() + "/config.ini", QSettings::IniFormat);
+    QJsonObject root;
+    for (auto it = m_templates.begin(); it != m_templates.end(); ++it) {
+        QJsonArray blocksArr;
+        for (const auto& b : it.value()) {
+            QJsonObject bObj;
+            bObj["type"] = static_cast<int>(b.type);
+            bObj["x"] = b.x; bObj["y"] = b.y;
+            bObj["length"] = b.length; bObj["width"] = b.width;
+            bObj["radius"] = b.radius; bObj["angle"] = b.angle;
+            bObj["name"] = b.name;
+            blocksArr.append(bObj);
+        }
+        root[it.key()] = blocksArr;
+    }
+    settings.setValue("PositioningTemplates", QJsonDocument(root).toJson(QJsonDocument::Compact));
+}
+
+void PositioningDialog::loadTemplatesFromSettings() {
+    QSettings settings(QCoreApplication::applicationDirPath() + "/config.ini", QSettings::IniFormat);
+    QByteArray data = settings.value("PositioningTemplates").toByteArray();
+    m_templates.clear();
+    if (!data.isEmpty()) {
+        QJsonObject root = QJsonDocument::fromJson(data).object();
+        for (const QString& key : root.keys()) {
+            QList<PositioningBlock> blocks;
+            QJsonArray blocksArr = root[key].toArray();
+            for (int i = 0; i < blocksArr.size(); ++i) {
+                QJsonObject bObj = blocksArr[i].toObject();
+                PositioningBlock b;
+                b.type = static_cast<PosBlockType>(bObj["type"].toInt());
+                b.x = bObj["x"].toDouble(); b.y = bObj["y"].toDouble();
+                b.length = bObj["length"].toDouble(); b.width = bObj["width"].toDouble();
+                b.radius = bObj["radius"].toDouble(); b.angle = bObj["angle"].toDouble();
+                b.name = bObj["name"].toString();
+                blocks.append(b);
+            }
+            m_templates[key] = blocks;
+        }
+    }
 }
