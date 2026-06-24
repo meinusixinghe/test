@@ -282,7 +282,6 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
     m_statusTimer = new QTimer(this);
     connect(m_statusTimer, &QTimer::timeout, this, &TaskProgramDialog::updateRobotState);
     m_statusTimer->start(500);
-    this->installEventFilter(this);
 }
 
 void TaskProgramDialog::setBlockMoveRunning(bool running) {
@@ -389,15 +388,10 @@ void TaskProgramDialog::onStartClicked() {
     if (useUcs) RobotAPI::GetUserCoordinatePos2(currentPos, m_devId);
     else RobotAPI::GetBaseCoordinatePos2(currentPos, m_devId);
 
-    RobotAPI::RobotPos activeCfgPos = currentPos;
-
     // ====================================================================
     // 辅助工具：提取表格指定行的数据，并完成安全的逆解/正解
     // ====================================================================
     auto solveRow = [&](int row, RobotAPI::MultiMoveInfo2& targetMp, int arrayIndex) -> bool {
-        QComboBox* moveCombo = qobject_cast<QComboBox*>(m_table->cellWidget(row, 0));
-        int moveType = moveCombo ? moveCombo->currentText().left(1).toInt() : 2;
-
         QComboBox* posCombo = qobject_cast<QComboBox*>(m_table->cellWidget(row, 1));
         int posType = posCombo ? posCombo->currentText().left(1).toInt() : 2;
 
@@ -407,21 +401,9 @@ void TaskProgramDialog::onStartClicked() {
         if (posType == 2 && useUcs) {
             RobotAPI::RobotPos localP = currentPos;
             localP.x = p[0]; localP.y = p[1]; localP.z = p[2];
-            localP.a = p[3]; localP.b = p[4]; localP.c = p[5];
 
-            // 如果是 Joint 运动（如空中退绕），解除 CFG 象限锁死，允许底层重新解算手腕位置
-            if (moveType == 1) {
-                localP.cfgx = 0;
-                localP.cfg1 = 0;
-                localP.cfg4 = 0;
-                localP.cfg6 = 0;
-            } else {
-                // 如果是 Lin 运动，严格跟随最新的 activeCfgPos 象限，防止直线过程中甩腕
-                localP.cfgx = activeCfgPos.cfgx;
-                localP.cfg1 = activeCfgPos.cfg1;
-                localP.cfg4 = activeCfgPos.cfg4;
-                localP.cfg6 = activeCfgPos.cfg6;
-            }
+            // 严格使用表格中读取到的 A, B, C 数据
+            localP.a = p[3]; localP.b = p[4]; localP.c = p[5];
 
             RobotAPI::RobotJoint tJoints; memset(&tJoints, 0, sizeof(tJoints));
 
@@ -432,13 +414,6 @@ void TaskProgramDialog::onStartClicked() {
                     targetMp.cp[arrayIndex].a = baseP.a; targetMp.cp[arrayIndex].b = baseP.b; targetMp.cp[arrayIndex].c = baseP.c;
                     targetMp.cp[arrayIndex].cfgx = baseP.cfgx; targetMp.cp[arrayIndex].cfg1 = baseP.cfg1;
                     targetMp.cp[arrayIndex].cfg4 = baseP.cfg4; targetMp.cp[arrayIndex].cfg6 = baseP.cfg6;
-
-                    // 将正解出来的最新物理象限，更新给动态 CFG 追踪器！
-                    activeCfgPos.cfgx = baseP.cfgx;
-                    activeCfgPos.cfg1 = baseP.cfg1;
-                    activeCfgPos.cfg4 = baseP.cfg4;
-                    activeCfgPos.cfg6 = baseP.cfg6;
-
                     return true;
                 }
             }
@@ -446,15 +421,10 @@ void TaskProgramDialog::onStartClicked() {
         } else {
             // 不转换，直接赋值
             targetMp.cp[arrayIndex].x = p[0]; targetMp.cp[arrayIndex].y = p[1]; targetMp.cp[arrayIndex].z = p[2];
+            // 严格使用表格中读取到的 A, B, C 数据
             targetMp.cp[arrayIndex].a = p[3]; targetMp.cp[arrayIndex].b = p[4]; targetMp.cp[arrayIndex].c = p[5];
-
-            if (moveType == 1) {
-                targetMp.cp[arrayIndex].cfgx = 0; targetMp.cp[arrayIndex].cfg1 = 0;
-                targetMp.cp[arrayIndex].cfg4 = 0; targetMp.cp[arrayIndex].cfg6 = 0;
-            } else {
-                targetMp.cp[arrayIndex].cfgx = activeCfgPos.cfgx; targetMp.cp[arrayIndex].cfg1 = activeCfgPos.cfg1;
-                targetMp.cp[arrayIndex].cfg4 = activeCfgPos.cfg4; targetMp.cp[arrayIndex].cfg6 = activeCfgPos.cfg6;
-            }
+            targetMp.cp[arrayIndex].cfgx = currentPos.cfgx; targetMp.cp[arrayIndex].cfg1 = currentPos.cfg1;
+            targetMp.cp[arrayIndex].cfg4 = currentPos.cfg4; targetMp.cp[arrayIndex].cfg6 = currentPos.cfg6;
             return true;
         }
     };
@@ -743,7 +713,6 @@ void TaskProgramDialog::generateProgram()
     }
 
     double globalLastA = currentPose.a;
-    double accumulatedA = currentPose.a;
     double globalLastTangentAngle = 0.0;
     bool isFirstTangent = true;
 
@@ -884,8 +853,6 @@ void TaskProgramDialog::generateProgram()
             else if (std::abs(deltaA + 180.0) < 0.05) deltaA = -179.9;
             globalLastTangentAngle = currentTangentAngle;
 
-            accumulatedA += deltaA;
-
             double finalA = globalLastA + deltaA;
             while (finalA > 180.0) finalA -= 360.0;
             while (finalA <= -180.0) finalA += 360.0;
@@ -907,35 +874,19 @@ void TaskProgramDialog::generateProgram()
                                           && (std::abs(angDiff) >= m_retractAngleThresholdSpin->value());
 
                         if (useRetract) {
+                            // 1. 避障抬刀 (Lin)
                             double pRetract[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), SAFE_HEIGHT, globalLastA, B, 0.0 };
                             addRow(2, 2, pRetract, 100, 50, 50, 0.0, shapeName + remark + " ⬆️[避障抬刀]");
 
-                            double testAccumulatedA = accumulatedA + angDiff;
-                            double compensatedFinalA = finalA;
-                            QString turnRemark = shapeName + remark + " 🔄[空中重姿态]";
+                            // 2. 空中重姿态 (Joint, 防止奇异点报错)
+                            double pTurn[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), SAFE_HEIGHT, finalA, B, 0.0 };
+                            addRow(1, 2, pTurn, 50, 50, 50, 0.0, shapeName + remark + " 🔄[空中重姿态]");
 
-                            // 当累加姿态超过 ±150度(逼近物理极限) 时，触发反向 360度 退绕补偿
-                            if (testAccumulatedA > 150.0) {
-                                compensatedFinalA = finalA - 360.0; // 强行补偿
-                                accumulatedA = testAccumulatedA - 360.0; // 同步重置累加器
-                                turnRemark += " (退绕 -360°)";
-                            } else if (testAccumulatedA < -150.0) {
-                                compensatedFinalA = finalA + 360.0; // 强行补偿
-                                accumulatedA = testAccumulatedA + 360.0; // 同步重置累加器
-                                turnRemark += " (退绕 +360°)";
-                            } else {
-                                accumulatedA = testAccumulatedA;
-                            }
-
-                            // 下发带有补偿退绕欧拉角的 Joint 运动
-                            double pTurn[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), SAFE_HEIGHT, compensatedFinalA, B, 0.0 };
-                            addRow(1, 2, pTurn, 50, 50, 50, 0.0, turnRemark);
-
-                            // 落刀时恢复为规范的 [-180, 180] 区间数值
+                            // 3. 重新落刀 (Lin)
                             double pPlunge[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), plateZ, finalA, B, 0.0 };
                             addRow(2, 2, pPlunge, 50, 50, 50, 0.0, shapeName + remark + " ⬇️[重新落刀]");
                         } else {
-                            accumulatedA += angDiff;
+                            // 角度比较小，或者用户关闭了安全退刀，直接原地硬转 (Lin)
                             double pTurn[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), plateZ, finalA, B, 0.0 };
                             addRow(2, 2, pTurn, 50, 50, 50, 0.0, shapeName + remark + " 🔄[直行前转向]");
                         }
@@ -966,7 +917,7 @@ void TaskProgramDialog::generateProgram()
                 } else {
                     addRow(moveType, 2, pEnd, 50, 50, 50, 0.0, shapeName + remark + " (切割结束)");
                     double pRetract[6] = { ucsPt.x(), ucsPt.y(), SAFE_HEIGHT, finalA, 0.0, 0.0 };
-                    addRow(2, 2, pRetract, 100, 50, 50, 0.0, shapeName + " [跨域 抬刀]");
+                    addRow(1, 2, pRetract, 100, 50, 50, 0.0, shapeName + " [跨域 抬刀]");
                 }
             }
             else {
@@ -985,74 +936,30 @@ void TaskProgramDialog::generateProgram()
     for (int r = 0; r < rowCount; ++r) {
         QComboBox* moveCombo = qobject_cast<QComboBox*>(m_table->cellWidget(r, 0));
         int moveType = moveCombo ? moveCombo->currentText().left(1).toInt() : 2;
-
-        // 1. 圆弧点绝对不允许有平滑度，直接锁死
         if (moveType == 3 || moveType == 4) {
             m_table->item(r, 11)->setText("0.0");
-            continue;
         }
-        if (r < rowCount - 1) {
-            double cx = m_table->item(r, 2)->text().toDouble();
-            double cy = m_table->item(r, 3)->text().toDouble();
-            double cz = m_table->item(r, 4)->text().toDouble();
 
-            double nx = m_table->item(r+1, 2)->text().toDouble();
-            double ny = m_table->item(r+1, 3)->text().toDouble();
-            double nz = m_table->item(r+1, 4)->text().toDouble();
+        if (r < rowCount - 1 && moveType != 3 && moveType != 4) {
+            double x1 = m_table->item(r, 2)->text().toDouble();
+            double y1 = m_table->item(r, 3)->text().toDouble();
+            double z1 = m_table->item(r, 4)->text().toDouble();
+            double x2 = m_table->item(r+1, 2)->text().toDouble();
+            double y2 = m_table->item(r+1, 3)->text().toDouble();
+            double z2 = m_table->item(r+1, 4)->text().toDouble();
 
-            double distToNext = std::hypot(std::hypot(nx - cx, ny - cy), nz - cz);
+            double dist = std::hypot(x1 - x2, y1 - y2);
+            dist = std::hypot(dist, z1 - z2);
+            double currentOverlap = m_table->item(r, 11)->text().toDouble();
+            double maxSafeOverlap = dist * 0.45;
 
-            // 如果当前点跟下个点重合，强制清零当前倒角
-            if (distToNext < 0.001) {
+            if (dist < 0.001) {
                 m_table->item(r, 11)->setText("0.0");
                 QComboBox* nextCombo = qobject_cast<QComboBox*>(m_table->cellWidget(r+1, 0));
                 int nextMove = nextCombo ? nextCombo->currentText().left(1).toInt() : 2;
                 if (nextMove != 4) m_table->item(r+1, 11)->setText("0.0");
-                continue;
-            }
-
-            // 基础默认平滑度
-            double targetOverlap = 2.0;
-
-            // 检查当前点是否属于连贯切割的中间点（非抬落刀、非避障转向）
-            bool isContinuous = !m_table->item(r, 12)->text().contains("跨域") &&
-                                !m_table->item(r, 12)->text().contains("避障") &&
-                                !m_table->item(r, 12)->text().contains("起刀");
-
-            double maxSafeOverlap = distToNext * 0.45;
-
-            // 2. 核心算法：提取前后线段，通过向量点积计算夹角，动态分配倒角半径
-            if (r > 0 && isContinuous) {
-                double px = m_table->item(r-1, 2)->text().toDouble();
-                double py = m_table->item(r-1, 3)->text().toDouble();
-                double pz = m_table->item(r-1, 4)->text().toDouble();
-
-                double distToPrev = std::hypot(std::hypot(cx - px, cy - py), cz - pz);
-
-                if (distToPrev > 0.001) {
-                    // 更新安全上限：不能超过相邻两条线段中最短那条的 45%
-                    maxSafeOverlap = std::min(distToNext, distToPrev) * 0.45;
-
-                    double vx1 = cx - px, vy1 = cy - py, vz1 = cz - pz;
-                    double vx2 = nx - cx, vy2 = ny - cy, vz2 = nz - cz;
-                    // 点积算出夹角的 Cos 值
-                    double dot = vx1*vx2 + vy1*vy2 + vz1*vz2;
-                    double cosTheta = dot / (distToPrev * distToNext);
-
-                    if (cosTheta > 0.8) {
-                        targetOverlap = 5.0; // 夹角极小(接近直线)，放大平滑度让速度不掉
-                    } else if (cosTheta < 0) {
-                        targetOverlap = 0.5; // 急弯或锐角拐角，极小化平滑度以保住尖角
-                    }
-                }
-            }
-
-            double finalOverlap = std::min(targetOverlap, maxSafeOverlap);
-
-            // 3. 赋值回表格 (保留用户手工清零 0.0 的权利，例如切割终点)
-            double currentOverlap = m_table->item(r, 11)->text().toDouble();
-            if (currentOverlap > 0.0) {
-                m_table->item(r, 11)->setText(QString::number(finalOverlap, 'f', 2));
+            } else if (currentOverlap > maxSafeOverlap) {
+                m_table->item(r, 11)->setText(QString::number(maxSafeOverlap, 'f', 2));
             }
         }
     }
@@ -1099,12 +1006,6 @@ bool TaskProgramDialog::eventFilter(QObject *obj, QEvent *event)
     if (event->type() == QEvent::Wheel) {
         if (qobject_cast<QComboBox*>(obj)) {
             event->ignore();
-            return true;
-        }
-    }
-    if (event->type() == QEvent::KeyPress) {
-        QKeyEvent *keyEvent = static_cast<QKeyEvent*>(event);
-        if (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) {
             return true;
         }
     }
