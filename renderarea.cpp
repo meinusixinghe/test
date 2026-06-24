@@ -209,9 +209,15 @@ void RenderArea::paintEvent(QPaintEvent *event)
             }
         } else if (block.type == PosBlockType::Circle || block.type == PosBlockType::Arc) {
             fontSize = block.radius * 0.25;
+        } else if (block.type == PosBlockType::Point) {
+            fontSize = block.radius * 0.25;
         }
-        if (fontSize < 1.0) fontSize = 1.0;
-        if (fontSize > 50.0) fontSize = 50.0;
+        double safeScale = (m_scaleFactor > 0.001) ? m_scaleFactor : 1.0;
+        double minVisualSize = 10.0 / safeScale;
+        double maxVisualSize = 25.0 / safeScale;
+        if (fontSize < minVisualSize) fontSize = minVisualSize;
+        if (fontSize > maxVisualSize) fontSize = maxVisualSize;
+
         QFont f = painter.font();
         f.setPointSizeF(fontSize);
         painter.setFont(f);

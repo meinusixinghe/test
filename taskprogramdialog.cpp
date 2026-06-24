@@ -410,159 +410,162 @@ void TaskProgramDialog::onStartClicked() {
         return;
     }
 
+    // =========================================================
+    // 第一步：在主线程(UI)提取所有表格数据，防止子线程跨线程崩溃
+    // =========================================================
+    QVector<PathPointData> tableData(rowCount);
+    for (int r = 0; r < rowCount; ++r) {
+        QComboBox* moveCombo = qobject_cast<QComboBox*>(m_table->cellWidget(r, 0));
+        tableData[r].moveType = moveCombo ? moveCombo->currentText().left(1).toInt() : 2;
+
+        QComboBox* posCombo = qobject_cast<QComboBox*>(m_table->cellWidget(r, 1));
+        tableData[r].posType = posCombo ? posCombo->currentText().left(1).toInt() : 2;
+
+        for (int i = 0; i < 6; ++i) {
+            tableData[r].p[i] = m_table->item(r, i + 2)->text().toDouble();
+        }
+        tableData[r].speed = m_table->item(r, 8)->text().toDouble();
+        tableData[r].acc = m_table->item(r, 9)->text().toDouble();
+        tableData[r].dec = m_table->item(r, 10)->text().toDouble();
+        tableData[r].overlapping = (r == rowCount - 1) ? 0.0 : m_table->item(r, 11)->text().toDouble();
+    }
+
     std::string selTool = m_robotToolCombo->currentText().toStdString();
     std::string selWobj = m_robotUserCombo->currentText().toStdString();
     bool useUcs = (m_coordCombo->currentData().toInt() == 1);
-    const std::string motionWobj = useUcs ? selWobj : std::string("wobj0");
+    unsigned int startSpeedRatio = m_speedRatioSpinBox->value();
+    unsigned int devId = m_devId;
 
     m_startBtn->setEnabled(false);
-    m_statusLabel->setText("正在进行离线全量运动学逆解...");
-    m_statusLabel->setStyleSheet("font-weight: bold; color: #1976D2; font-size: 14px;"); // 恢复正常的蓝色显示
-    QApplication::processEvents();
+    // 界面显示提示，后台开始狂奔，但软件依然顺滑！
+    m_statusLabel->setText("正在进行离线全量运动学逆解 (后台多线程计算中)...");
+    m_statusLabel->setStyleSheet("font-weight: bold; color: #1976D2; font-size: 14px;");
 
-    // 1. 提取当前物理坐标配置
-    RobotAPI::RobotPos currentPos;
-    memset(&currentPos, 0, sizeof(currentPos));
-    if (useUcs) RobotAPI::GetUserCoordinatePos2(currentPos, m_devId);
-    else RobotAPI::GetBaseCoordinatePos2(currentPos, m_devId);
+    // =========================================================
+    // 第二步：开启后台独立子线程，全权负责 IK 解算与网络推送
+    // =========================================================
+    m_blockMoveThread = QThread::create([this, tableData, devId, selTool, selWobj, useUcs, startSpeedRatio]() mutable {
 
-    // ====================================================================
-    // 辅助工具：提取表格指定行的数据，并完成安全的逆解/正解
-    // ====================================================================
-    auto solveRow = [&](int row, RobotAPI::MultiMoveInfo2& targetMp, int arrayIndex) -> bool {
-        QComboBox* posCombo = qobject_cast<QComboBox*>(m_table->cellWidget(row, 1));
-        int posType = posCombo ? posCombo->currentText().left(1).toInt() : 2;
+        std::string motionWobj = useUcs ? selWobj : std::string("wobj0");
 
-        double p[6];
-        for (int i = 0; i < 6; ++i) p[i] = m_table->item(row, i + 2)->text().toDouble();
+        RobotAPI::RobotPos currentPos;
+        memset(&currentPos, 0, sizeof(currentPos));
+        if (useUcs) RobotAPI::GetUserCoordinatePos2(currentPos, devId);
+        else RobotAPI::GetBaseCoordinatePos2(currentPos, devId);
 
-        if (posType == 2 && useUcs) {
-            RobotAPI::RobotPos localP = currentPos;
-            localP.x = p[0]; localP.y = p[1]; localP.z = p[2];
+        // 线程内安全的局部求解器 (不涉及任何 UI 指针)
+        auto solveRow = [&](int row, RobotAPI::MultiMoveInfo2& targetMp, int arrayIndex) -> bool {
+            int posType = tableData[row].posType;
+            double* p = tableData[row].p;
 
-            // 严格使用表格中读取到的 A, B, C 数据
-            localP.a = p[3]; localP.b = p[4]; localP.c = p[5];
+            if (posType == 2 && useUcs) {
+                RobotAPI::RobotPos localP = currentPos;
+                localP.x = p[0]; localP.y = p[1]; localP.z = p[2];
+                localP.a = p[3]; localP.b = p[4]; localP.c = p[5];
 
-            RobotAPI::RobotJoint tJoints; memset(&tJoints, 0, sizeof(tJoints));
+                RobotAPI::RobotJoint tJoints; memset(&tJoints, 0, sizeof(tJoints));
 
-            if (RobotAPI::IkSolver(localP, tJoints, selTool, motionWobj, m_devId) == 0) {
-                RobotAPI::RobotPos baseP; memset(&baseP, 0, sizeof(baseP));
-                if (RobotAPI::FkSolver(tJoints, baseP, selTool, "wobj0", m_devId) == 0) {
-                    targetMp.cp[arrayIndex].x = baseP.x; targetMp.cp[arrayIndex].y = baseP.y; targetMp.cp[arrayIndex].z = baseP.z;
-                    targetMp.cp[arrayIndex].a = baseP.a; targetMp.cp[arrayIndex].b = baseP.b; targetMp.cp[arrayIndex].c = baseP.c;
-                    targetMp.cp[arrayIndex].cfgx = baseP.cfgx; targetMp.cp[arrayIndex].cfg1 = baseP.cfg1;
-                    targetMp.cp[arrayIndex].cfg4 = baseP.cfg4; targetMp.cp[arrayIndex].cfg6 = baseP.cfg6;
-                    return true;
+                if (RobotAPI::IkSolver(localP, tJoints, selTool, motionWobj, devId) == 0) {
+                    RobotAPI::RobotPos baseP; memset(&baseP, 0, sizeof(baseP));
+                    if (RobotAPI::FkSolver(tJoints, baseP, selTool, "wobj0", devId) == 0) {
+                        targetMp.cp[arrayIndex].x = baseP.x; targetMp.cp[arrayIndex].y = baseP.y; targetMp.cp[arrayIndex].z = baseP.z;
+                        targetMp.cp[arrayIndex].a = baseP.a; targetMp.cp[arrayIndex].b = baseP.b; targetMp.cp[arrayIndex].c = baseP.c;
+                        targetMp.cp[arrayIndex].cfgx = baseP.cfgx; targetMp.cp[arrayIndex].cfg1 = baseP.cfg1;
+                        targetMp.cp[arrayIndex].cfg4 = baseP.cfg4; targetMp.cp[arrayIndex].cfg6 = baseP.cfg6;
+                        return true;
+                    }
+                }
+                return false;
+            } else {
+                targetMp.cp[arrayIndex].x = p[0]; targetMp.cp[arrayIndex].y = p[1]; targetMp.cp[arrayIndex].z = p[2];
+                targetMp.cp[arrayIndex].a = p[3]; targetMp.cp[arrayIndex].b = p[4]; targetMp.cp[arrayIndex].c = p[5];
+                targetMp.cp[arrayIndex].cfgx = currentPos.cfgx; targetMp.cp[arrayIndex].cfg1 = currentPos.cfg1;
+                targetMp.cp[arrayIndex].cfg4 = currentPos.cfg4; targetMp.cp[arrayIndex].cfg6 = currentPos.cfg6;
+                return true;
+            }
+        };
+
+        std::vector<RobotAPI::MultiMoveInfo2> mps;
+        QString errorMsg;
+        int rows = tableData.size();
+
+        // 后台大批量囤货：解算阶段
+        for (int r = 0; r < rows; ++r) {
+            if (m_blockMoveStopRequested) { errorMsg = "用户已中止后台解算"; break; } // 中断拦截
+
+            RobotAPI::MultiMoveInfo2 mp;
+            memset(&mp, 0, sizeof(mp));
+
+            mp.moveType = tableData[r].moveType;
+            mp.posType = tableData[r].posType;
+            if (r == 0) mp.moveType = 1;
+
+            mp.speed = tableData[r].speed;
+            mp.acc = tableData[r].acc;
+            mp.dec = tableData[r].dec;
+            mp.jerk = 100.0;
+            mp.auxOverlapping = 1e100;
+            mp.flags = 0;
+            mp.overlapping = tableData[r].overlapping;
+
+            if (mp.moveType == 3) {
+                if (r + 1 >= rows) { errorMsg = "发现不完整的圆弧指令（缺少终点）！"; break; }
+                if (!solveRow(r, mp, 0) || !solveRow(r + 1, mp, 1)) {
+                    errorMsg = QString("第 %1 行圆弧点逆解不可达！").arg(r+1); break;
+                }
+                r++;
+            } else if (mp.moveType == 4) {
+                if (r + 3 >= rows) { errorMsg = "发现不完整的整圆指令（缺少参数点）！"; break; }
+                if (!solveRow(r, mp, 0) || !solveRow(r + 1, mp, 1) || !solveRow(r + 2, mp, 2) || !solveRow(r + 3, mp, 3)) {
+                    errorMsg = QString("第 %1 行整圆特征点逆解不可达！").arg(r+1); break;
+                }
+                for (int i = 0; i < 4; ++i) {
+                    mp.cp[i].cfgx = 0; mp.cp[i].cfg1 = 0; mp.cp[i].cfg4 = 0; mp.cp[i].cfg6 = 0;
+                }
+                double x0 = mp.cp[0].x, y0 = mp.cp[0].y;
+                double x1 = mp.cp[1].x, y1 = mp.cp[1].y;
+                double x2 = mp.cp[2].x, y2 = mp.cp[2].y;
+                double cross = (x1 - x0) * (y2 - y1) - (y1 - y0) * (x2 - x1);
+                mp.flags = (cross < 0) ? 2 : 0;
+                mp.overlapping = 0.0;
+                r += 3;
+            } else {
+                if (!solveRow(r, mp, 0)) {
+                    errorMsg = QString("第 %1 行点位逆解不可达！").arg(r+1); break;
                 }
             }
-            return false; // 解算失败
-        } else {
-            // 不转换，直接赋值
-            targetMp.cp[arrayIndex].x = p[0]; targetMp.cp[arrayIndex].y = p[1]; targetMp.cp[arrayIndex].z = p[2];
-            // 严格使用表格中读取到的 A, B, C 数据
-            targetMp.cp[arrayIndex].a = p[3]; targetMp.cp[arrayIndex].b = p[4]; targetMp.cp[arrayIndex].c = p[5];
-            targetMp.cp[arrayIndex].cfgx = currentPos.cfgx; targetMp.cp[arrayIndex].cfg1 = currentPos.cfg1;
-            targetMp.cp[arrayIndex].cfg4 = currentPos.cfg4; targetMp.cp[arrayIndex].cfg6 = currentPos.cfg6;
-            return true;
+            mps.push_back(mp);
         }
-    };
 
-    std::vector<RobotAPI::MultiMoveInfo2> mps;
-
-    // ====================================================================
-    // 第一阶段：全量预计算（内存囤货），发现任何不可达点立刻阻断
-    // ====================================================================
-    for (int r = 0; r < rowCount; ++r) {
-        RobotAPI::MultiMoveInfo2 mp;
-        memset(&mp, 0, sizeof(mp));
-
-        QComboBox* moveCombo = qobject_cast<QComboBox*>(m_table->cellWidget(r, 0));
-        mp.moveType = moveCombo ? moveCombo->currentText().left(1).toInt() : 2;
-
-        QComboBox* posCombo = qobject_cast<QComboBox*>(m_table->cellWidget(r, 1));
-        mp.posType = posCombo ? posCombo->currentText().left(1).toInt() : 2;
-
-        if (r == 0) mp.moveType = 1;
-
-        mp.speed = m_table->item(r, 8)->text().toDouble();
-        mp.acc = m_table->item(r, 9)->text().toDouble();
-        mp.dec = m_table->item(r, 10)->text().toDouble();
-        mp.jerk = 100.0;
-        mp.auxOverlapping = 1e100;
-        mp.flags = 0;
-
-        if (r == rowCount - 1) mp.overlapping = 0;
-        else mp.overlapping = m_table->item(r, 11)->text().toDouble();
-
-        if (mp.moveType == 3) {
-            if (r + 1 >= rowCount) {
-                QMessageBox::warning(this, "轨迹错误", "发现不完整的圆弧指令（缺少终点）！");
-                m_startBtn->setEnabled(true); return;
-            }
-            if (!solveRow(r, mp, 0) || !solveRow(r + 1, mp, 1)) {
-                QMessageBox::warning(this, "严重错误", QString("第 %1 行圆弧点逆解不可达！").arg(r+1));
-                m_startBtn->setEnabled(true); return;
-            }
-            r++; // 跳过已消耗的终点行
+        // 报错拦截：切回主线程进行弹窗 UI 交互
+        if (!errorMsg.isEmpty()) {
+            QMetaObject::invokeMethod(this, [this, errorMsg]() {
+                if (errorMsg != "用户已中止后台解算") QMessageBox::warning(this, "轨迹错误", errorMsg);
+                m_startBtn->setEnabled(true);
+                m_statusLabel->setText("就绪");
+            }, Qt::QueuedConnection);
+            return;
         }
-        // 处理专属的整圆指令
-        else if (mp.moveType == 4) {
-            if (r + 3 >= rowCount) {
-                QMessageBox::warning(this, "轨迹错误", "发现不完整的整圆指令（缺少参数点）！");
-                m_startBtn->setEnabled(true); return;
-            }
-            // 整圆指令需要一口气吃下连续的4行点位
-            if (!solveRow(r, mp, 0) || !solveRow(r + 1, mp, 1) || !solveRow(r + 2, mp, 2) || !solveRow(r + 3, mp, 3)) {
-                QMessageBox::warning(this, "严重错误", QString("第 %1 行整圆特征点逆解不可达！").arg(r+1));
-                m_startBtn->setEnabled(true); return;
-            }
 
-            for (int i = 0; i < 4; ++i) {
-                mp.cp[i].cfgx = 0;
-                mp.cp[i].cfg1 = 0;
-                mp.cp[i].cfg4 = 0;
-                mp.cp[i].cfg6 = 0;
-            }
-
-            // 利用叉积全自动计算画圆的方向 (flags 位1)
-            double x0 = mp.cp[0].x, y0 = mp.cp[0].y;
-            double x1 = mp.cp[1].x, y1 = mp.cp[1].y;
-            double x2 = mp.cp[2].x, y2 = mp.cp[2].y;
-            // 数学二维向量叉积判断旋向
-            double cross = (x1 - x0) * (y2 - y1) - (y1 - y0) * (x2 - x1);
-
-            if (cross < 0) {
-                mp.flags = 2;
-            } else {
-                mp.flags = 0;
-            }
-
-            mp.overlapping = 0.0;
-            r += 3;
+        if (mps.empty()) {
+            QMetaObject::invokeMethod(this, [this]() {
+                m_startBtn->setEnabled(true);
+                m_statusLabel->setText("轨迹为空！");
+            }, Qt::QueuedConnection);
+            return;
         }
-        else {
-            if (!solveRow(r, mp, 0)) {
-                QMessageBox::warning(this, "严重错误", QString("第 %1 行点位逆解不可达！").arg(r+1));
-                m_startBtn->setEnabled(true); return;
-            }
-        }
-        mps.push_back(mp);
-    }
 
-    if (mps.empty()) {
-        m_startBtn->setEnabled(true);
-        m_statusLabel->setText("轨迹为空！");
-        return;
-    }
+        // 解算成功：通知主界面并开始实际的运动推送
+        QMetaObject::invokeMethod(this, [this, total = mps.size()]() {
+            setBlockMoveRunning(true);
+            m_blockMoveStopRequested = false;
+            m_resetAfterBlockStop = false;
+            m_statusLabel->setText(QString("后台解算完毕，共 %1 个动作，开启动态滑动窗口...").arg(total));
+        }, Qt::QueuedConnection);
 
-    setBlockMoveRunning(true);
-    m_blockMoveStopRequested = false;
-    m_resetAfterBlockStop = false;
-    m_statusLabel->setText(QString("解算完毕，共 %1 个动作，开启动态滑动窗口...").arg(mps.size()));
-
-    unsigned int startSpeedRatio = m_speedRatioSpinBox->value();
-    m_blockMoveThread = QThread::create([this, mps, devId = m_devId, selTool, motionWobj, startSpeedRatio]() mutable {
-
+        // =========================================================
+        // 运动执行阶段
+        // =========================================================
         RobotAPI::MultiMove2Reset(devId);
         QThread::msleep(50);
 
@@ -591,7 +594,6 @@ void TaskProgramDialog::onStartClicked() {
                     m_statusLabel->setText("机器人在运行中出现报警，程序已自动暂停并重置！");
                     m_statusLabel->setStyleSheet("font-weight: bold; color: red; font-size: 14px;");
                 }, Qt::QueuedConnection);
-
                 break;
             }
 
@@ -607,8 +609,8 @@ void TaskProgramDialog::onStartClicked() {
                 }, Qt::QueuedConnection);
 
             } else if (ret == 40 || ret == 14) {
+                // 缓存打满，下次重试，不报错
             } else {
-                // 发生异常
                 QString errMsg;
                 switch(ret) {
                 case 1: errMsg = "与机器人连接失败"; break;
@@ -624,7 +626,6 @@ void TaskProgramDialog::onStartClicked() {
                 case 11: errMsg = "启动程序失败(需无告警、已加载且暂停/停止)"; break;
                 case 12: errMsg = "复位程序失败(需处于暂停/停止状态)"; break;
                 case 13: errMsg = "加载程序失败，请查看告警列表"; break;
-                // case 14: errMsg = "输入参数范围有误"; break;
                 case 15: errMsg = "系统仍处于运行中，无法执行运动指令"; break;
                 case 16: errMsg = "设置变量失败"; break;
                 case 17: errMsg = "查询变量失败"; break;
@@ -674,20 +675,18 @@ void TaskProgramDialog::onStartClicked() {
                     m_statusLabel->setText(QString("下发中止！错误码 %1: %2").arg(ret).arg(errMsg));
                     m_statusLabel->setStyleSheet("font-weight: bold; color: red; font-size: 14px;");
                 }, Qt::QueuedConnection);
-
                 break;
             }
-
             QThread::msleep(30);
         }
 
-        QMetaObject::invokeMethod(this, [this, sentIndex, totalPoints]() {
+        QMetaObject::invokeMethod(this, [this, sentIndex, totalPoints, devId]() {
             setBlockMoveRunning(false);
             m_startBtn->setEnabled(true);
             m_blockMoveThread = nullptr;
 
-            if (m_resetAfterBlockStop && m_devId != 0) {
-                RobotAPI::MultiMove2Reset(m_devId);
+            if (m_resetAfterBlockStop && devId != 0) {
+                RobotAPI::MultiMove2Reset(devId);
             }
 
             if (m_blockMoveStopRequested) {
@@ -698,6 +697,7 @@ void TaskProgramDialog::onStartClicked() {
         }, Qt::QueuedConnection);
     });
 
+    // 绑定线程结束后销毁对象，启动后台大解算
     connect(m_blockMoveThread, &QThread::finished, m_blockMoveThread, &QObject::deleteLater);
     m_blockMoveThread->start();
 }
