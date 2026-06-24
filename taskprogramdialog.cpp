@@ -89,14 +89,52 @@ TaskProgramDialog::TaskProgramDialog(unsigned int devId, const QVector<Contour>&
     m_retractAngleThresholdSpin->installEventFilter(this);
     advConfigLayout->addWidget(m_retractAngleThresholdSpin);
     advConfigLayout->addStretch();
+    QHBoxLayout* advConfigLayout2 = new QHBoxLayout();
+    m_useDynamicHeightCheck = new QCheckBox("开启智能动态抬刀", this);
+    m_useDynamicHeightCheck->setChecked(true); // 默认开启
+    m_useDynamicHeightCheck->setStyleSheet("font-weight: bold; color: #2E7D32;"); // 绿色
+    m_useDynamicHeightCheck->installEventFilter(this);
+
+    QLabel* baseHeightLbl = new QLabel("基础安全高度(mm):", this);
+    m_baseHeightSpin = new QDoubleSpinBox(this);
+    m_baseHeightSpin->setRange(10.0, 500.0);
+    m_baseHeightSpin->setValue(50.0); // 默认离板材 50mm
+    m_baseHeightSpin->installEventFilter(this);
+
+    QLabel* maxHeightLbl = new QLabel("180度附加增量(mm):", this);
+    m_maxHeightAddSpin = new QDoubleSpinBox(this);
+    m_maxHeightAddSpin->setRange(0.0, 500.0);
+    m_maxHeightAddSpin->setValue(100.0); // 默认 180度时多抬高 100mm
+    m_maxHeightAddSpin->installEventFilter(this);
+
+    advConfigLayout2->addWidget(m_useDynamicHeightCheck);
+    advConfigLayout2->addSpacing(10);
+    advConfigLayout2->addWidget(baseHeightLbl);
+    advConfigLayout2->addWidget(m_baseHeightSpin);
+    advConfigLayout2->addSpacing(10);
+    advConfigLayout2->addWidget(maxHeightLbl);
+    advConfigLayout2->addWidget(m_maxHeightAddSpin);
+    advConfigLayout2->addStretch();
 
     tableLayout->addLayout(advConfigLayout);
+    tableLayout->addLayout(advConfigLayout2);
 
     connect(m_useRetractTurnCheck, &QCheckBox::stateChanged, this, [this](int state) {
         m_retractAngleThresholdSpin->setEnabled(state == Qt::Checked);
         if (!m_paths.isEmpty()) generateProgram();
     });
     connect(m_retractAngleThresholdSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double) {
+        if (!m_paths.isEmpty()) generateProgram();
+    });
+    connect(m_useDynamicHeightCheck, &QCheckBox::stateChanged, this, [this](int state) {
+        m_baseHeightSpin->setEnabled(state == Qt::Checked);
+        m_maxHeightAddSpin->setEnabled(state == Qt::Checked);
+        if (!m_paths.isEmpty()) generateProgram();
+    });
+    connect(m_baseHeightSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double) {
+        if (!m_paths.isEmpty()) generateProgram();
+    });
+    connect(m_maxHeightAddSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double) {
         if (!m_paths.isEmpty()) generateProgram();
     });
 
@@ -704,13 +742,25 @@ void TaskProgramDialog::generateProgram()
     }
 
     double plateZ = 0.0;
-    double SAFE_HEIGHT = 50.0;
+    double baseHeight = 50.0;
+
+    if (m_baseHeightSpin) {
+        baseHeight = m_baseHeightSpin->value();
+    }
 
     if (m_platePosCombo && m_thicknessSpin) {
         if (m_platePosCombo->currentIndex() == 0) plateZ = m_thicknessSpin->value();
         else plateZ = -m_thicknessSpin->value();
-        SAFE_HEIGHT = (plateZ > 0) ? (plateZ + 50.0) : 50.0;
     }
+    double SAFE_HEIGHT = (plateZ > 0) ? (plateZ + baseHeight) : baseHeight;
+    auto calculateDynamicHeight = [&](double angDiff) {
+        if (!m_useDynamicHeightCheck || !m_useDynamicHeightCheck->isChecked()) {
+            return SAFE_HEIGHT;
+        }
+        // 角度占比：最大计算到 180 度 (ratio = 1.0)
+        double ratio = std::min(1.0, std::abs(angDiff) / 180.0);
+        return SAFE_HEIGHT + (m_maxHeightAddSpin->value() * ratio);
+    };
 
     double globalLastA = currentPose.a;
     double globalLastTangentAngle = 0.0;
@@ -874,12 +924,14 @@ void TaskProgramDialog::generateProgram()
                                           && (std::abs(angDiff) >= m_retractAngleThresholdSpin->value());
 
                         if (useRetract) {
+                            double currentSafeHeight = calculateDynamicHeight(angDiff);
+
                             // 1. 避障抬刀 (Lin)
-                            double pRetract[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), SAFE_HEIGHT, globalLastA, B, 0.0 };
-                            addRow(2, 2, pRetract, 100, 50, 50, 0.0, shapeName + remark + " ⬆️[避障抬刀]");
+                            double pRetract[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), currentSafeHeight, globalLastA, B, 0.0 };
+                            addRow(2, 2, pRetract, 100, 50, 50, 0.0, shapeName + remark + QString(" ⬆️[避障抬刀 Z=%1]").arg(currentSafeHeight, 0, 'f', 1));
 
                             // 2. 空中重姿态 (Joint, 防止奇异点报错)
-                            double pTurn[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), SAFE_HEIGHT, finalA, B, 0.0 };
+                            double pTurn[6] = { globalLastUcsPt.x(), globalLastUcsPt.y(), currentSafeHeight, finalA, B, 0.0 };
                             addRow(1, 2, pTurn, 50, 50, 50, 0.0, shapeName + remark + " 🔄[空中重姿态]");
 
                             // 3. 重新落刀 (Lin)
@@ -904,8 +956,13 @@ void TaskProgramDialog::generateProgram()
 
             if (i == 0) {
                 if (!isConnectedWithPrev) {
-                    double pSafe[6] = { ucsPt.x(), ucsPt.y(), SAFE_HEIGHT, finalA, 0.0, 0.0 };
-                    addRow(1, 2, pSafe, 100, 50, 50, 0.0, shapeName + remark + " [跨域: 高空就位]");
+                    double crossAngDiff = finalA - globalLastA;
+                    while (crossAngDiff > 180.0) crossAngDiff -= 360.0;
+                    while (crossAngDiff <= -180.0) crossAngDiff += 360.0;
+                    double currentSafeHeight = calculateDynamicHeight(crossAngDiff);
+
+                    double pSafe[6] = { ucsPt.x(), ucsPt.y(), currentSafeHeight, finalA, 0.0, 0.0 };
+                    addRow(1, 2, pSafe, 100, 50, 50, 0.0, shapeName + remark + QString(" [跨域: 高空就位 Z=%1]").arg(currentSafeHeight, 0, 'f', 1));
                 }
                 double pStart[6] = { ucsPt.x(), ucsPt.y(), plateZ, finalA, B, 0.0 };
                 addRow(moveType, 2, pStart, 30, 50, 50, 0.0, shapeName + remark + " [起刀]");
@@ -1009,19 +1066,15 @@ bool TaskProgramDialog::eventFilter(QObject *obj, QEvent *event)
             return true;
         }
     }
-
     return QDialog::eventFilter(obj, event);
 }
 
 void TaskProgramDialog::updateWorkpieceParams(int posIndex, double thickness) {
     m_platePosCombo->blockSignals(true);
     m_thicknessSpin->blockSignals(true);
-
     m_platePosCombo->setCurrentIndex(posIndex);
     m_thicknessSpin->setValue(thickness);
-
     m_platePosCombo->blockSignals(false);
     m_thicknessSpin->blockSignals(false);
-
     generateProgram();
 }
