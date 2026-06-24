@@ -339,6 +339,11 @@ void PreviewArea::setInitialBlocks(const QList<PositioningBlock>& blocks) {
         m_selectedPos = getReferencePoints(m_blocks.last()).first();
         emit refPointSelected(m_selectedBlockIdx, m_selectedPtIdx, m_selectedPos);
         autoFit();
+    }else {
+        // 如果模板是空的，彻底清除画布的吸附与选中状态
+        m_selectedBlockIdx = -1;
+        m_selectedPtIdx = -1;
+        emit backgroundClicked();
     }
     update();
 }
@@ -383,8 +388,8 @@ PositioningDialog::PositioningDialog(QWidget *parent) : QDialog(parent) {
     rightLayout->setSpacing(6);
 
     QGroupBox *templateGroup = new QGroupBox("定位模板管理");
-    templateGroup->setStyleSheet("QGroupBox { font-size: 11px; font-weight: bold; color: #333; border: 1px solid #ccc; border-radius: 4px; margin-top: 6px; padding-top: 10px; }"
-                                 "QGroupBox::title { subcontrol-origin: margin; left: 7px; top: -6px; }");
+    templateGroup->setStyleSheet("QGroupBox { font-size: 12px; font-weight: bold; color: #333; border: 1px solid #ccc; border-radius: 4px; margin-top: 14px; padding-top: 12px; }"
+                                 "QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; left: 10px; top: 0px; }");
     QVBoxLayout *templateLayout = new QVBoxLayout(templateGroup);
     templateLayout->setContentsMargins(6, 4, 6, 6);
     templateLayout->setSpacing(4);
@@ -418,11 +423,17 @@ PositioningDialog::PositioningDialog(QWidget *parent) : QDialog(parent) {
     // 模板联动与按钮逻辑
     reloadTemplateCombo();
 
-    connect(m_templateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+    connect(m_templateCombo, QOverload<int>::of(&QComboBox::activated), this, [this](int index) {
         if (m_isUpdatingCombo || index < 0) return;
         QString name = m_templateCombo->itemText(index);
         if (m_templates.contains(name)) {
             m_previewArea->setInitialBlocks(m_templates[name]);
+        }
+    });
+    connect(m_templateCombo, &QComboBox::currentTextChanged, this, [this](const QString& text) {
+        if (m_isUpdatingCombo || text.isEmpty()) return;
+        if (m_templates.contains(text)) {
+            m_previewArea->setInitialBlocks(m_templates[text]);
         }
     });
 
@@ -688,6 +699,7 @@ void PositioningDialog::onAddClicked() {
 }
 
 void PositioningDialog::setInitialBlocks(const QList<PositioningBlock>& blocks) {
+    if (blocks.isEmpty()) return;
     m_previewArea->setInitialBlocks(blocks);
 }
 
@@ -722,11 +734,25 @@ void PositioningDialog::reloadTemplateCombo() {
     m_isUpdatingCombo = true;
     QString current = m_templateCombo->currentText();
     m_templateCombo->clear();
-    m_templateCombo->addItems(m_templates.keys());
-    if (!current.isEmpty() && m_templates.contains(current)) {
+    QStringList keys = m_templates.keys();
+    m_templateCombo->addItems(keys);
+
+    // 智能选取记忆的条目
+    if (!current.isEmpty() && keys.contains(current)) {
         m_templateCombo->setCurrentText(current);
+    } else if (!keys.isEmpty()) {
+        m_templateCombo->setCurrentIndex(0);
+        current = m_templateCombo->currentText();
+    } else {
+        current = "";
     }
     m_isUpdatingCombo = false;
+
+    if (!current.isEmpty() && m_templates.contains(current)) {
+        m_previewArea->setInitialBlocks(m_templates[current]);
+    } else {
+        m_previewArea->setInitialBlocks(QList<PositioningBlock>());
+    }
 }
 
 void PositioningDialog::saveTemplatesToSettings() {
@@ -745,12 +771,16 @@ void PositioningDialog::saveTemplatesToSettings() {
         }
         root[it.key()] = blocksArr;
     }
-    settings.setValue("PositioningTemplates", QJsonDocument(root).toJson(QJsonDocument::Compact));
+    QString jsonString = QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+    settings.setValue("PositioningTemplates", jsonString);
 }
 
 void PositioningDialog::loadTemplatesFromSettings() {
     QSettings settings(QCoreApplication::applicationDirPath() + "/config.ini", QSettings::IniFormat);
-    QByteArray data = settings.value("PositioningTemplates").toByteArray();
+
+    QString jsonString = settings.value("PositioningTemplates").toString();
+    QByteArray data = jsonString.toUtf8();
+
     m_templates.clear();
     if (!data.isEmpty()) {
         QJsonObject root = QJsonDocument::fromJson(data).object();
