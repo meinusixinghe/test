@@ -453,8 +453,17 @@ void TaskProgramDialog::onStartClicked() {
         if (useUcs) RobotAPI::GetUserCoordinatePos2(currentPos, devId);
         else RobotAPI::GetBaseCoordinatePos2(currentPos, devId);
 
+        // ====================================================================
+        // 🌟 专家级状态机：动态追踪物理象限和关节角，贯穿整个轨迹
+        // ====================================================================
+        RobotAPI::RobotPos activeCfgPos = currentPos;
+        RobotAPI::RobotJoint activeJoints;
+        memset(&activeJoints, 0, sizeof(activeJoints));
+        RobotAPI::IkSolver(currentPos, activeJoints, selTool, motionWobj, devId);
+
         // 线程内安全的局部求解器 (不涉及任何 UI 指针)
         auto solveRow = [&](int row, RobotAPI::MultiMoveInfo2& targetMp, int arrayIndex) -> bool {
+            int moveType = tableData[row].moveType;
             int posType = tableData[row].posType;
             double* p = tableData[row].p;
 
@@ -463,15 +472,64 @@ void TaskProgramDialog::onStartClicked() {
                 localP.x = p[0]; localP.y = p[1]; localP.z = p[2];
                 localP.a = p[3]; localP.b = p[4]; localP.c = p[5];
 
+                // 继承上一刀的物理象限，保持空间轨迹的 cfg 连续性
+                if (moveType == 1) { // 关节运动，解除象限锁定以便系统自由退绕
+                    localP.cfgx = 0; localP.cfg1 = 0; localP.cfg4 = 0; localP.cfg6 = 0;
+                } else {
+                    localP.cfgx = activeCfgPos.cfgx;
+                    localP.cfg1 = activeCfgPos.cfg1;
+                    localP.cfg4 = activeCfgPos.cfg4;
+                    localP.cfg6 = activeCfgPos.cfg6;
+                }
+
                 RobotAPI::RobotJoint tJoints; memset(&tJoints, 0, sizeof(tJoints));
 
                 if (RobotAPI::IkSolver(localP, tJoints, selTool, motionWobj, devId) == 0) {
+
+                    // =========================================================
+                    // 🌟 1. 奇异点前瞻预判与规避 (Singularity Avoidance)
+                    // =========================================================
+                    if (std::abs(tJoints.j[4]) < 3.0) { // J5 趋近 0 度，面临手腕奇异点
+                        // 叠加 3 度的工艺倾角补偿 (改变 B 角)，从物理上掰弯 J5 轴，完美规避奇异点
+                        localP.b += 3.0;
+                        RobotAPI::IkSolver(localP, tJoints, selTool, motionWobj, devId);
+                    }
+
+                    // =========================================================
+                    // 🌟 2. 关节多圈 CFG 追踪与越界平滑化 (CFG Wrap-around Fix)
+                    // =========================================================
+                    if (moveType != 1) { // 仅对连续插补运动生效 (Lin / Circ)
+                        double deltaJ6 = tJoints.j[5] - activeJoints.j[5];
+
+                        // 检查底层求解器是否依据边界(-180, 180]发生了 >180 度的截断跳变
+                        if (deltaJ6 < -180.0) {
+                            localP.cfg6 += 1; // 物理轨迹已进入正向下一象限 (180°, 540°]
+                            RobotAPI::IkSolver(localP, tJoints, selTool, motionWobj, devId);
+                        } else if (deltaJ6 > 180.0) {
+                            localP.cfg6 -= 1; // 物理轨迹已进入负向上一象限 (-540°, -180°]
+                            RobotAPI::IkSolver(localP, tJoints, selTool, motionWobj, devId);
+                        }
+
+                        // 如果修正象限后依旧存在巨大跳变 (超出 160 度限值)
+                        // 则利用欧拉角多解性，通过改变工具 Z 轴旋转 (A角) 360 度强制退绕
+                        deltaJ6 = tJoints.j[5] - activeJoints.j[5];
+                        if (std::abs(deltaJ6) > 160.0) {
+                            if (deltaJ6 > 0) localP.a -= 360.0;
+                            else localP.a += 360.0;
+                            RobotAPI::IkSolver(localP, tJoints, selTool, motionWobj, devId);
+                        }
+                    }
+
                     RobotAPI::RobotPos baseP; memset(&baseP, 0, sizeof(baseP));
                     if (RobotAPI::FkSolver(tJoints, baseP, selTool, "wobj0", devId) == 0) {
                         targetMp.cp[arrayIndex].x = baseP.x; targetMp.cp[arrayIndex].y = baseP.y; targetMp.cp[arrayIndex].z = baseP.z;
                         targetMp.cp[arrayIndex].a = baseP.a; targetMp.cp[arrayIndex].b = baseP.b; targetMp.cp[arrayIndex].c = baseP.c;
                         targetMp.cp[arrayIndex].cfgx = baseP.cfgx; targetMp.cp[arrayIndex].cfg1 = baseP.cfg1;
                         targetMp.cp[arrayIndex].cfg4 = baseP.cfg4; targetMp.cp[arrayIndex].cfg6 = baseP.cfg6;
+
+                        // 步进推进状态机 (更新下一次计算的参考基准)
+                        activeCfgPos = baseP;
+                        activeJoints = tJoints;
                         return true;
                     }
                 }
@@ -479,8 +537,21 @@ void TaskProgramDialog::onStartClicked() {
             } else {
                 targetMp.cp[arrayIndex].x = p[0]; targetMp.cp[arrayIndex].y = p[1]; targetMp.cp[arrayIndex].z = p[2];
                 targetMp.cp[arrayIndex].a = p[3]; targetMp.cp[arrayIndex].b = p[4]; targetMp.cp[arrayIndex].c = p[5];
-                targetMp.cp[arrayIndex].cfgx = currentPos.cfgx; targetMp.cp[arrayIndex].cfg1 = currentPos.cfg1;
-                targetMp.cp[arrayIndex].cfg4 = currentPos.cfg4; targetMp.cp[arrayIndex].cfg6 = currentPos.cfg6;
+
+                if (moveType == 1) {
+                    targetMp.cp[arrayIndex].cfgx = 0; targetMp.cp[arrayIndex].cfg1 = 0;
+                    targetMp.cp[arrayIndex].cfg4 = 0; targetMp.cp[arrayIndex].cfg6 = 0;
+                } else {
+                    targetMp.cp[arrayIndex].cfgx = activeCfgPos.cfgx; targetMp.cp[arrayIndex].cfg1 = activeCfgPos.cfg1;
+                    targetMp.cp[arrayIndex].cfg4 = activeCfgPos.cfg4; targetMp.cp[arrayIndex].cfg6 = activeCfgPos.cfg6;
+                }
+
+                // 正向更新状态机
+                RobotAPI::RobotPos baseP = targetMp.cp[arrayIndex];
+                RobotAPI::RobotJoint tJoints; memset(&tJoints, 0, sizeof(tJoints));
+                RobotAPI::IkSolver(baseP, tJoints, selTool, "wobj0", devId);
+                activeCfgPos = baseP;
+                activeJoints = tJoints;
                 return true;
             }
         };
@@ -491,7 +562,7 @@ void TaskProgramDialog::onStartClicked() {
 
         // 后台大批量囤货：解算阶段
         for (int r = 0; r < rows; ++r) {
-            if (m_blockMoveStopRequested) { errorMsg = "用户已中止后台解算"; break; } // 中断拦截
+            if (m_blockMoveStopRequested) { errorMsg = "用户已中止后台解算"; break; }
 
             RobotAPI::MultiMoveInfo2 mp;
             memset(&mp, 0, sizeof(mp));
@@ -519,9 +590,8 @@ void TaskProgramDialog::onStartClicked() {
                 if (!solveRow(r, mp, 0) || !solveRow(r + 1, mp, 1) || !solveRow(r + 2, mp, 2) || !solveRow(r + 3, mp, 3)) {
                     errorMsg = QString("第 %1 行整圆特征点逆解不可达！").arg(r+1); break;
                 }
-                for (int i = 0; i < 4; ++i) {
-                    mp.cp[i].cfgx = 0; mp.cp[i].cfg1 = 0; mp.cp[i].cfg4 = 0; mp.cp[i].cfg6 = 0;
-                }
+
+
                 double x0 = mp.cp[0].x, y0 = mp.cp[0].y;
                 double x1 = mp.cp[1].x, y1 = mp.cp[1].y;
                 double x2 = mp.cp[2].x, y2 = mp.cp[2].y;
