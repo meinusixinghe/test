@@ -13,48 +13,6 @@
 #include <QtConcurrentRun>
 #include <QApplication>
 #include <QEvent>
-#include <QDebug>
-#include <algorithm>
-#include <cmath>
-#include <cstring>
-#include <limits>
-
-namespace {
-constexpr double kMaxContinuousJ6Delta = 175.0;
-constexpr double kHardWristSingularityDeg = 1.0;
-constexpr double kSoftWristSingularityDeg = 8.0;
-constexpr int kMinMultiTurnCfg = -8;
-constexpr int kMaxMultiTurnCfg = 7;
-
-double normalizeAngle180(double angle)
-{
-    while (angle > 180.0) angle -= 360.0;
-    while (angle <= -180.0) angle += 360.0;
-    return angle;
-}
-
-int calcMultiTurnCfg(double angle)
-{
-    if (angle > 180.0) return static_cast<int>(std::ceil((angle - 180.0) / 360.0));
-    if (angle <= -180.0) return static_cast<int>(std::floor((angle + 180.0) / 360.0));
-    return 0;
-}
-
-int clampMultiTurnCfg(int cfg)
-{
-    return std::clamp(cfg, kMinMultiTurnCfg, kMaxMultiTurnCfg);
-}
-
-bool isCfgInRange(int cfg)
-{
-    return cfg >= kMinMultiTurnCfg && cfg <= kMaxMultiTurnCfg;
-}
-
-double absJointDelta(double a, double b)
-{
-    return std::abs(a - b);
-}
-}
 
 // ====================================================================
 // 构造函数：解析线条序列并生成运动程序表格
@@ -495,302 +453,48 @@ void TaskProgramDialog::onStartClicked() {
         if (useUcs) RobotAPI::GetUserCoordinatePos2(currentPos, devId);
         else RobotAPI::GetBaseCoordinatePos2(currentPos, devId);
 
-        // ====================================================================
-        // 🌟 核心引擎：带有前瞻状态机的动态运动学求解器
-        // ====================================================================
-        auto simulateIK = [&](RobotAPI::RobotPos& inOutPos, RobotAPI::RobotJoint& inOutJoints, const PathPointData& data, bool isDebug = false, int rowIndex = -1) -> bool {
-            RobotAPI::RobotPos localP = currentPos;
-            if (data.posType == 2 && useUcs) {
-                localP.x = data.p[0]; localP.y = data.p[1]; localP.z = data.p[2];
-                localP.a = data.p[3]; localP.b = data.p[4]; localP.c = data.p[5];
+        // 线程内安全的局部求解器 (不涉及任何 UI 指针)
+        auto solveRow = [&](int row, RobotAPI::MultiMoveInfo2& targetMp, int arrayIndex) -> bool {
+            int posType = tableData[row].posType;
+            double* p = tableData[row].p;
 
-                if (data.moveType == 1) {
-                    localP.cfgx = 0; localP.cfg1 = 0; localP.cfg4 = 0; localP.cfg6 = 0;
-                } else {
-                    localP.cfgx = inOutPos.cfgx; localP.cfg1 = inOutPos.cfg1;
-                    localP.cfg4 = inOutPos.cfg4; localP.cfg6 = inOutPos.cfg6;
-                }
+            if (posType == 2 && useUcs) {
+                RobotAPI::RobotPos localP = currentPos;
+                localP.x = p[0]; localP.y = p[1]; localP.z = p[2];
+                localP.a = p[3]; localP.b = p[4]; localP.c = p[5];
 
-                RobotAPI::RobotJoint tJ; memset(&tJ, 0, sizeof(tJ));
-                if (RobotAPI::IkSolver(localP, tJ, selTool, motionWobj, devId) == 0) {
+                RobotAPI::RobotJoint tJoints; memset(&tJoints, 0, sizeof(tJoints));
 
-                    if (std::abs(tJ.j[4]) < 3.0) { // 规避奇异点
-                        localP.b += 3.0;
-                        RobotAPI::IkSolver(localP, tJ, selTool, motionWobj, devId);
+                if (RobotAPI::IkSolver(localP, tJoints, selTool, motionWobj, devId) == 0) {
+                    RobotAPI::RobotPos baseP; memset(&baseP, 0, sizeof(baseP));
+                    if (RobotAPI::FkSolver(tJoints, baseP, selTool, "wobj0", devId) == 0) {
+                        targetMp.cp[arrayIndex].x = baseP.x; targetMp.cp[arrayIndex].y = baseP.y; targetMp.cp[arrayIndex].z = baseP.z;
+                        targetMp.cp[arrayIndex].a = baseP.a; targetMp.cp[arrayIndex].b = baseP.b; targetMp.cp[arrayIndex].c = baseP.c;
+                        targetMp.cp[arrayIndex].cfgx = baseP.cfgx; targetMp.cp[arrayIndex].cfg1 = baseP.cfg1;
+                        targetMp.cp[arrayIndex].cfg4 = baseP.cfg4; targetMp.cp[arrayIndex].cfg6 = baseP.cfg6;
+                        return true;
                     }
-
-                    if (data.moveType != 1) { // 多圈 CFG 追踪与退绕
-                        double deltaJ6 = tJ.j[5] - inOutJoints.j[5];
-                        if (deltaJ6 < -180.0) { localP.cfg6 += 1; RobotAPI::IkSolver(localP, tJ, selTool, motionWobj, devId); }
-                        else if (deltaJ6 > 180.0) { localP.cfg6 -= 1; RobotAPI::IkSolver(localP, tJ, selTool, motionWobj, devId); }
-
-                        deltaJ6 = tJ.j[5] - inOutJoints.j[5];
-                        if (std::abs(deltaJ6) > 160.0) {
-                            if (deltaJ6 > 0) localP.a -= 360.0; else localP.a += 360.0;
-                            RobotAPI::IkSolver(localP, tJ, selTool, motionWobj, devId);
-                        }
-                    }
-
-                    RobotAPI::RobotPos baseP;
-                    RobotAPI::FkSolver(tJ, baseP, selTool, "wobj0", devId);
-
-                    auto calcCfg = [](double angle) -> int {
-                        if (angle > 180.0) return std::ceil((angle - 180.0) / 360.0);
-                        if (angle <= -180.0) return std::floor((angle + 180.0) / 360.0);
-                        return 0;
-                    };
-
-                    baseP.cfg1 = calcCfg(tJ.j[0]);
-                    baseP.cfg4 = calcCfg(tJ.j[3]);
-                    baseP.cfg6 = calcCfg(tJ.j[5]);
-
-                    inOutPos = baseP;
-                    inOutJoints = tJ;
-
-                    // 🌟 日志输出核心：如果开启 debug，则向控制台打印经过所有算法平滑后的最终底层物理角度
-                    if (isDebug) {
-                        qDebug().noquote() << QString("👉 [第%1行 UCS] J1:%2 J2:%3 J3:%4 | J4:%5 J5:%6 J6:%7 | cfg6:%8")
-                                                  .arg(rowIndex + 1, 3)
-                                                  .arg(tJ.j[0], 7, 'f', 2).arg(tJ.j[1], 7, 'f', 2).arg(tJ.j[2], 7, 'f', 2)
-                                                  .arg(tJ.j[3], 7, 'f', 2).arg(tJ.j[4], 7, 'f', 2).arg(tJ.j[5], 7, 'f', 2)
-                                                  .arg(baseP.cfg6);
-                    }
-                    return true;
                 }
                 return false;
             } else {
-                RobotAPI::RobotPos baseP;
-                baseP.x = data.p[0]; baseP.y = data.p[1]; baseP.z = data.p[2];
-                baseP.a = data.p[3]; baseP.b = data.p[4]; baseP.c = data.p[5];
-                if (data.moveType == 1) { baseP.cfgx = 0; baseP.cfg6 = 0; }
-                else { baseP.cfgx = inOutPos.cfgx; baseP.cfg6 = inOutPos.cfg6; }
-
-                RobotAPI::RobotJoint tJ; memset(&tJ, 0, sizeof(tJ));
-                if (RobotAPI::IkSolver(baseP, tJ, selTool, "wobj0", devId) == 0) {
-                    inOutPos = baseP; inOutJoints = tJ;
-                    if (isDebug) {
-                        qDebug().noquote() << QString("👉 [第%1行 WOBJ] J1:%2 J2:%3 J3:%4 | J4:%5 J5:%6 J6:%7 | cfg6:%8")
-                                                  .arg(rowIndex + 1, 3)
-                                                  .arg(tJ.j[0], 7, 'f', 2).arg(tJ.j[1], 7, 'f', 2).arg(tJ.j[2], 7, 'f', 2)
-                                                  .arg(tJ.j[3], 7, 'f', 2).arg(tJ.j[4], 7, 'f', 2).arg(tJ.j[5], 7, 'f', 2)
-                                                  .arg(baseP.cfg6);
-                    }
-                    return true;
-                }
-                return false;
+                targetMp.cp[arrayIndex].x = p[0]; targetMp.cp[arrayIndex].y = p[1]; targetMp.cp[arrayIndex].z = p[2];
+                targetMp.cp[arrayIndex].a = p[3]; targetMp.cp[arrayIndex].b = p[4]; targetMp.cp[arrayIndex].c = p[5];
+                targetMp.cp[arrayIndex].cfgx = currentPos.cfgx; targetMp.cp[arrayIndex].cfg1 = currentPos.cfg1;
+                targetMp.cp[arrayIndex].cfg4 = currentPos.cfg4; targetMp.cp[arrayIndex].cfg6 = currentPos.cfg6;
+                return true;
             }
         };
 
-        // ====================================================================
-        // 🌟 阶段一：全局前瞻预判与预卷绕 (Global Look-ahead Optimization)
-        // ====================================================================
-        struct PlannedPoint {
-            RobotAPI::RobotPos pos;
-            RobotAPI::RobotJoint joint;
-            bool valid = false;
-            double j6Delta = 0.0;
-            int cfg6 = 0;
-        };
-
-        auto planPointIK = [&](const RobotAPI::RobotPos& prevPos,
-                               const RobotAPI::RobotJoint& prevJoints,
-                               const PathPointData& data,
-                               PlannedPoint& out,
-                               QString& failReason,
-                               int rowIndex) -> bool {
-            RobotAPI::RobotPos seed = currentPos;
-            seed.x = data.p[0];
-            seed.y = data.p[1];
-            seed.z = data.p[2];
-            seed.a = normalizeAngle180(data.p[3]);
-            seed.b = normalizeAngle180(data.p[4]);
-            seed.c = normalizeAngle180(data.p[5]);
-
-            const int prevCfg1 = isCfgInRange(prevPos.cfg1) ? prevPos.cfg1 : clampMultiTurnCfg(calcMultiTurnCfg(prevJoints.j[0]));
-            const int prevCfg4 = isCfgInRange(prevPos.cfg4) ? prevPos.cfg4 : clampMultiTurnCfg(calcMultiTurnCfg(prevJoints.j[3]));
-            const int prevCfg6 = isCfgInRange(prevPos.cfg6) ? prevPos.cfg6 : clampMultiTurnCfg(calcMultiTurnCfg(prevJoints.j[5]));
-            seed.cfgx = prevPos.cfgx;
-            seed.cfg1 = prevCfg1;
-            seed.cfg4 = prevCfg4;
-
-            const double angleTurns[] = {0.0, -360.0, 360.0};
-            const double bOffsets[] = {0.0, 2.0, -2.0, 5.0, -5.0};
-            const int cfg6Candidates[] = {
-                prevCfg6,
-                clampMultiTurnCfg(calcMultiTurnCfg(prevJoints.j[5])),
-                clampMultiTurnCfg(prevCfg6 - 1),
-                clampMultiTurnCfg(prevCfg6 + 1)
-            };
-
-            bool hasBest = false;
-            double bestScore = std::numeric_limits<double>::max();
-            PlannedPoint best;
-            int lastIkRet = 0;
-
-            for (double aTurn : angleTurns) {
-                for (double cTurn : angleTurns) {
-                    for (double bOffset : bOffsets) {
-                        for (int cfg6Candidate : cfg6Candidates) {
-                            RobotAPI::RobotPos candidate = seed;
-                            candidate.a = seed.a + aTurn;
-                            candidate.b = seed.b + bOffset;
-                            candidate.c = seed.c + cTurn;
-                            candidate.cfg6 = cfg6Candidate;
-
-                            RobotAPI::RobotJoint joints;
-                            memset(&joints, 0, sizeof(joints));
-                            const int ikRet = RobotAPI::IkSolver(candidate, joints, selTool, motionWobj, devId);
-                            lastIkRet = ikRet;
-                            if (ikRet != 0) continue;
-
-                            const double j6Delta = joints.j[5] - prevJoints.j[5];
-                            const int solvedCfg6 = calcMultiTurnCfg(joints.j[5]);
-                            if (!isCfgInRange(solvedCfg6)) continue;
-                            if (std::abs(j6Delta) > kMaxContinuousJ6Delta) continue;
-                            if (std::abs(solvedCfg6 - prevCfg6) > 1) continue;
-                            if (std::abs(joints.j[4]) < kHardWristSingularityDeg) continue;
-
-                            RobotAPI::RobotPos basePos;
-                            memset(&basePos, 0, sizeof(basePos));
-                            const int fkRet = RobotAPI::FkSolver(joints, basePos, selTool, "wobj0", devId);
-                            if (fkRet != 0) continue;
-
-                            const int solvedCfg1 = calcMultiTurnCfg(joints.j[0]);
-                            const int solvedCfg4 = calcMultiTurnCfg(joints.j[3]);
-                            if (!isCfgInRange(solvedCfg1) || !isCfgInRange(solvedCfg4)) continue;
-                            basePos.cfg1 = solvedCfg1;
-                            basePos.cfg4 = solvedCfg4;
-                            basePos.cfg6 = solvedCfg6;
-
-                            double jointScore = 0.0;
-                            for (int i = 0; i < 6; ++i) {
-                                const double weight = (i == 5) ? 6.0 : 1.0;
-                                jointScore += weight * absJointDelta(joints.j[i], prevJoints.j[i]);
-                            }
-                            const double singularPenalty = std::max(0.0, kSoftWristSingularityDeg - std::abs(joints.j[4])) * 100.0;
-                            const double cfgPenalty = std::abs(solvedCfg6 - prevCfg6) * 500.0;
-                            const double posturePenalty = (std::abs(aTurn) + std::abs(cTurn) + std::abs(bOffset) * 20.0) * 0.05;
-                            const double score = jointScore + singularPenalty + cfgPenalty + posturePenalty;
-
-                            if (!hasBest || score < bestScore) {
-                                hasBest = true;
-                                bestScore = score;
-                                best.pos = basePos;
-                                best.joint = joints;
-                                best.valid = true;
-                                best.j6Delta = j6Delta;
-                                best.cfg6 = solvedCfg6;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (!hasBest) {
-                failReason = QString("第 %1 行姿态规划失败：IK不可达、J6跨圈或接近腕部奇异。上一点 J6=%2, cfg6=%3, 目标ABC=(%4,%5,%6), 最后IK返回=%7")
-                                 .arg(rowIndex + 1)
-                                 .arg(prevJoints.j[5], 0, 'f', 2)
-                                 .arg(prevCfg6)
-                                 .arg(data.p[3], 0, 'f', 2)
-                                 .arg(data.p[4], 0, 'f', 2)
-                                 .arg(data.p[5], 0, 'f', 2)
-                                 .arg(lastIkRet);
-                qWarning().noquote() << "[TaskProgram] IK plan failed:" << failReason;
-                return false;
-            }
-
-            out = best;
-            qDebug().noquote() << QString("[TaskProgram] IK plan row %1: J6=%2 dJ6=%3 cfg6=%4 J5=%5 baseABC=(%6,%7,%8)")
-                                      .arg(rowIndex + 1)
-                                      .arg(out.joint.j[5], 0, 'f', 2)
-                                      .arg(out.j6Delta, 0, 'f', 2)
-                                      .arg(out.cfg6)
-                                      .arg(out.joint.j[4], 0, 'f', 2)
-                                      .arg(out.pos.a, 0, 'f', 2)
-                                      .arg(out.pos.b, 0, 'f', 2)
-                                      .arg(out.pos.c, 0, 'f', 2);
-            return true;
-        };
-
-        RobotAPI::RobotPos simPos = currentPos;
-        RobotAPI::RobotJoint simJoints; memset(&simJoints, 0, sizeof(simJoints));
-        RobotAPI::IkSolver(currentPos, simJoints, selTool, motionWobj, devId);
-
-        int rows = tableData.size();
-        QVector<PlannedPoint> plannedRows(rows);
-        QString planError;
-        bool planOk = true;
-        for (int r = 0; r < rows; ++r) {
-            PlannedPoint planned;
-            if (!planPointIK(simPos, simJoints, tableData[r], planned, planError, r)) {
-                planOk = false;
-                break;
-            }
-            plannedRows[r] = planned;
-            simPos = planned.pos;
-            simJoints = planned.joint;
-        }
-
-        if (!planOk) {
-            QMetaObject::invokeMethod(this, [this, planError]() {
-                QMessageBox::warning(this, "轨迹规划失败", planError);
-                m_startBtn->setEnabled(true);
-                m_statusLabel->setText("姿态规划失败");
-            }, Qt::QueuedConnection);
-            return;
-        }
-
-        int r_idx = rows;
-        while (r_idx < rows) {
-            int start_r = r_idx;
-            int end_r = r_idx + 1;
-            // 扫描直到遇到下一个高空 Joint 动作，划定一个“原子块”
-            while (end_r < rows && tableData[end_r].moveType != 1) {
-                end_r++;
-            }
-
-            // 保存现场，用于回滚
-            RobotAPI::RobotPos backupPos = simPos;
-            RobotAPI::RobotJoint backupJoints = simJoints;
-            double min_j6 = 99999.0;
-            double max_j6 = -99999.0;
-            bool simSuccess = true;
-
-            // 首次预演：探明该原子块的 J6 自然物理行程边界
-            for (int i = start_r; i < end_r; ++i) {
-                if (!simulateIK(simPos, simJoints, tableData[i])) { simSuccess = false; break; }
-                if (simJoints.j[5] < min_j6) min_j6 = simJoints.j[5];
-                if (simJoints.j[5] > max_j6) max_j6 = simJoints.j[5];
-            }
-
-            if (simSuccess) {
-                double center_j6 = (min_j6 + max_j6) / 2.0;
-                // 计算需要反向退绕的圈数，使 J6 行程完美居中于 0 度附近，远离物理报警极限！
-                int K = std::round(-center_j6 / 360.0);
-
-                if (K != 0) {
-                    // 回滚状态，并向该块所有的工艺点注入预卷绕补偿
-                    simPos = backupPos;
-                    simJoints = backupJoints;
-                    for (int i = start_r; i < end_r; ++i) {
-                        tableData[i].p[3] += K * 360.0;
-                        simulateIK(simPos, simJoints, tableData[i]); // 重新推进真实状态机
-                    }
-                }
-            }
-            r_idx = end_r;
-        }
-
-        // ====================================================================
-        // 🌟 阶段二：正式生成底层指令栈 (此时全量轨迹已被优化为完美区间)
-        // ====================================================================
         std::vector<RobotAPI::MultiMoveInfo2> mps;
         QString errorMsg;
+        int rows = tableData.size();
 
+        // 后台大批量囤货：解算阶段
         for (int r = 0; r < rows; ++r) {
-            if (m_blockMoveStopRequested) { errorMsg = "用户已中止后台解算"; break; }
+            if (m_blockMoveStopRequested) { errorMsg = "用户已中止后台解算"; break; } // 中断拦截
 
             RobotAPI::MultiMoveInfo2 mp;
+            memset(&mp, 0, sizeof(mp));
 
             mp.moveType = tableData[r].moveType;
             mp.posType = tableData[r].posType;
@@ -804,20 +508,20 @@ void TaskProgramDialog::onStartClicked() {
             mp.flags = 0;
             mp.overlapping = tableData[r].overlapping;
 
-            if (mp.moveType == 3) { // 连续圆弧
+            if (mp.moveType == 3) {
                 if (r + 1 >= rows) { errorMsg = "发现不完整的圆弧指令（缺少终点）！"; break; }
-                mp.cp[0] = plannedRows[r].pos;
-                mp.cp[1] = plannedRows[r + 1].pos;
+                if (!solveRow(r, mp, 0) || !solveRow(r + 1, mp, 1)) {
+                    errorMsg = QString("第 %1 行圆弧点逆解不可达！").arg(r+1); break;
+                }
                 r++;
             } else if (mp.moveType == 4) {
                 if (r + 3 >= rows) { errorMsg = "发现不完整的整圆指令（缺少参数点）！"; break; }
-
-                for (int i = 0; i < 4; ++i) {
-                    // 🌟 激活打印
-                    mp.cp[i] = plannedRows[r + i].pos;
+                if (!solveRow(r, mp, 0) || !solveRow(r + 1, mp, 1) || !solveRow(r + 2, mp, 2) || !solveRow(r + 3, mp, 3)) {
+                    errorMsg = QString("第 %1 行整圆特征点逆解不可达！").arg(r+1); break;
                 }
-                if (!errorMsg.isEmpty()) break;
-
+                for (int i = 0; i < 4; ++i) {
+                    mp.cp[i].cfgx = 0; mp.cp[i].cfg1 = 0; mp.cp[i].cfg4 = 0; mp.cp[i].cfg6 = 0;
+                }
                 double x0 = mp.cp[0].x, y0 = mp.cp[0].y;
                 double x1 = mp.cp[1].x, y1 = mp.cp[1].y;
                 double x2 = mp.cp[2].x, y2 = mp.cp[2].y;
@@ -826,8 +530,9 @@ void TaskProgramDialog::onStartClicked() {
                 mp.overlapping = 0.0;
                 r += 3;
             } else {
-                // 🌟 激活打印
-                mp.cp[0] = plannedRows[r].pos;
+                if (!solveRow(r, mp, 0)) {
+                    errorMsg = QString("第 %1 行点位逆解不可达！").arg(r+1); break;
+                }
             }
             mps.push_back(mp);
         }
@@ -855,7 +560,7 @@ void TaskProgramDialog::onStartClicked() {
             setBlockMoveRunning(true);
             m_blockMoveStopRequested = false;
             m_resetAfterBlockStop = false;
-            m_statusLabel->setText(QString("后台前瞻解算完毕，已重构为最优姿态！共 %1 个动作...").arg(total));
+            m_statusLabel->setText(QString("后台解算完毕，共 %1 个动作，开启动态滑动窗口...").arg(total));
         }, Qt::QueuedConnection);
 
         // =========================================================
@@ -871,7 +576,7 @@ void TaskProgramDialog::onStartClicked() {
         RobotAPI::SetGlobalSpeed(startSpeedRatio, devId);
         QThread::msleep(50);
 
-        int totalPoints = static_cast<int>(mps.size());
+        int totalPoints = mps.size();
         int sentIndex = 0;
 
         while (sentIndex < totalPoints) {
@@ -903,7 +608,7 @@ void TaskProgramDialog::onStartClicked() {
                     m_statusLabel->setText(QString("滑动窗口持续喂点中: %1 / %2").arg(sentIndex).arg(totalPoints));
                 }, Qt::QueuedConnection);
 
-            } else if (ret == 40) {
+            } else if (ret == 40 || ret == 14) {
                 // 缓存打满，下次重试，不报错
             } else {
                 QString errMsg;
